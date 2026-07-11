@@ -1,0 +1,4 @@
+# UI build output
+dist/
+dist-electron/
+node_modules/

@@ -1,0 +1,14 @@
+# UI build output
+dist/
+dist-electron/
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

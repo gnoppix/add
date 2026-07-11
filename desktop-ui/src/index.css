@@ -1,0 +1,101 @@
+/**
+ *-------------------------------------------------------------------------------
+ * Name: Gnoppix Linux - Services
+ * Architecture: all
+ * Date: 2002-2026 by Gnoppix Linux
+ * Author: Andreas Mueller
+ * Website: https://www.gnoppix.com
+ * Licence: Business Source License (BSL / BUSL)
+ * You can use the code for free if your company or organisation doesn't have more than 2 people.
+ *-------------------------------------------------------------------------------
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-sans antialiased;
+  }
+  
+  /* Light mode (default) */
+  :root {
+    --color-background: #F2F2F7;
+    --color-sidebar: #FFFFFF;
+    --color-text: #000000;
+    --color-text-secondary: #6D6D70;
+    --color-border: #E5E5EA;
+    --color-hover: #F0F0F0;
+  }
+  
+  /* Dark mode */
+  .dark {
+    --color-background: #121212;
+    --color-sidebar: #1E1E1E;
+    --color-text: #FFFFFF;
+    --color-text-secondary: #AEAEB2;
+    --color-border: #333333;
+    --color-hover: #2A2A2A;
+  }
+}
+
+/* Apply theme colors via CSS variables */
+.bg-light-background {
+  background-color: var(--color-background);
+}
+
+.bg-dark-background {
+  background-color: var(--color-background);
+}
+
+.bg-white {
+  background-color: var(--color-sidebar);
+}
+
+.dark\:bg-dark-sidebar {
+  background-color: var(--color-sidebar);
+}
+
+.border-gray-200 {
+  border-color: var(--color-border);
+}
+
+.dark\:border-gray-700 {
+  border-color: var(--color-border);
+}
+
+.text-gray-600 {
+  color: var(--color-text-secondary);
+}
+
+.dark\:text-gray-400 {
+  color: var(--color-text-secondary);
+}
+
+/* Custom scrollbar - light */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a0a0a0;
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-thumb {
+  background: #404040;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #505050;
+}

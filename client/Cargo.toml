@@ -1,0 +1,56 @@
+[package]
+name = "add-client"
+version.workspace = true
+edition.workspace = true
+description = "Add CLI client and identity management"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+rand.workspace = true
+blake2.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+dirs.workspace = true
+sequoia-openpgp.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"
+aes-gcm = "0.10"
+hkdf = "0.12"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+rustls = { workspace = true }
+futures.workspace = true
+url.workspace = true
+
+add-protocol = { path = "../protocol" }
+add-dht-core = { path = "../dht-core" }
+add-p2p = { path = "../p2p" }
+add-crypto = { path = "../crypto" }
+add-crypto-pq = { path = "../crypto-pq" }
+ml-dsa = { version = "0.1", features = ["pkcs8"] }
+age = { workspace = true }
+rpassword = "7"
+zeroize = { workspace = true, features = ["derive"] }
+hickory-resolver = { workspace = true, features = ["system-config", "tokio"] }
+libc = "0.2"
+
+[[bin]]
+name = "add"
+path = "src/main.rs"
+
+# Debian package metadata
+[package.metadata.deb]
+name = "add"
+section = "net"
+priority = "optional"
+architecture = "amd64"
+maintainer = "Andreas Mueller <amu@gnoppix.com>"
+description = "Add P2P Messenger Client - Post-quantum encrypted messaging"
+depends = "libssl3, libsqlite3-0"

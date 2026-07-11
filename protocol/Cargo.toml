@@ -1,0 +1,21 @@
+[package]
+name = "add-protocol"
+version.workspace = true
+edition.workspace = true
+description = "Add protocol constants, wire envelope, and PoW"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+argon2.workspace = true
+blake2.workspace = true
+sequoia-openpgp.workspace = true
+
+[lib]
+name = "add_protocol"
+path = "src/lib.rs"

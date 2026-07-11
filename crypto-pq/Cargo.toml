@@ -1,0 +1,25 @@
+[package]
+name = "add-crypto-pq"
+version.workspace = true
+edition.workspace = true
+description = "Post-Quantum Cryptography for Add - ML-DSA-87 and ML-KEM-1024"
+
+[dependencies]
+ml-dsa = { version = "0.1", features = ["rand_core", "alloc", "getrandom", "pkcs8"] }
+ml-kem = { version = "0.3" }
+rand = { version = "0.8", features = ["std"] }
+zeroize = "1.8"
+thiserror = "1.0"
+base64 = "0.22"
+rand_core = "0.6"
+hex = "0.4"
+sha2 = "0.10"
+add-crypto = { path = "../crypto" }
+
+[[bin]]
+name = "gen_ml_dsa87_key"
+path = "examples/gen_ml_dsa87_key.rs"
+
+[features]
+default = ["std"]
+std = []

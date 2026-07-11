@@ -1,0 +1,17 @@
+Package: eva-relay
+Architecture: amd64
+Version: 0.3.12-1
+Maintainer: Andreas Mueller <amu@gnoppix.com>
+Description: Eva Relay Server - Store-and-forward message relay
+ Eva relay server for offline message delivery. Stores encrypted messages
+ until recipients come online.
+ .
+ Features:
+  - WebSocket protocol (ws/wss)
+  - SQLite message storage with AES-256-GCM encryption
+  - Federation with peer relays
+  - CBNP cover traffic (optional)
+  - Mix routing delays for metadata protection
+Depends: libssl3, libsqlite3-0
+Section: net
+Priority: optional

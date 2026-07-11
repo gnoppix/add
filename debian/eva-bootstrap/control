@@ -1,0 +1,15 @@
+Package: eva-bootstrap
+Architecture: amd64
+Version: 0.3.12-1
+Maintainer: Andreas Mueller <amu@gnoppix.com>
+Description: Eva Bootstrap Server - DHT seed for peer discovery
+ Eva bootstrap server acts as a DHT seed node for peer discovery.
+ Clients query this to find other peers and relay servers.
+ .
+ Features:
+  - DNS SRV service discovery
+  - Key ownership verification
+  - Rate limiting and anti-abuse
+Depends: libssl3
+Section: net
+Priority: optional
