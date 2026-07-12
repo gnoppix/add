@@ -7,8 +7,8 @@
 // Licence: Business Source License (BSL / BUSL)
 // You can use the code for free if your company or organisation doesn't have more than 2 people.
 //-------------------------------------------------------------------------------
+pub mod braid;
 pub mod constants;
 pub mod envelope;
 pub mod gpg;
 pub mod pow;
-pub mod braid;

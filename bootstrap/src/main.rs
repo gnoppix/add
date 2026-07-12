@@ -73,9 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::warn!("No GPG key found -- using random unstable ID (--allow-no-key)");
                 use rand::Rng;
                 let mut rng = rand::thread_rng();
-                add_dht_core::compute_null_id(&hex::encode(
-                    rng.r#gen::<[u8; 8]>(),
-                ))
+                add_dht_core::compute_null_id(&hex::encode(rng.r#gen::<[u8; 8]>()))
             } else if let Some(id) = load_or_generate_kyber_id() {
                 // Auto-generate Kyber keys for bootstrap identity (only when --allow-no-key NOT set)
                 id
@@ -102,7 +100,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db_path = args.db.unwrap_or_else(|| {
         dirs::home_dir()
-            .map(|p| p.join(".add/bootstrap_dht.db").to_string_lossy().to_string())
+            .map(|p| {
+                p.join(".add/bootstrap_dht.db")
+                    .to_string_lossy()
+                    .to_string()
+            })
             .unwrap_or_else(|| "bootstrap_dht.db".to_string())
     });
 
@@ -126,7 +128,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let key = kit.into_key();
         let (nonce, ct) = key.seal(b"add-bootstrap-ok").expect("seal");
         let _ = add_crypto::snapshot_defense::VolatileKey::open(&nonce, &ct, &key).expect("open");
-        tracing::info!("snapshot-defense: secure bootstrap kit ready (SSS 2-of-3, volatile AES-256)");
+        tracing::info!(
+            "snapshot-defense: secure bootstrap kit ready (SSS 2-of-3, volatile AES-256)"
+        );
     }
 
     let config = add_dht_core::NodeConfig {
@@ -161,10 +165,10 @@ fn load_or_generate_kyber_id() -> Option<String> {
     use ml_kem::KeyExport;
     let home = dirs::home_dir()?;
     let kx_path = home.join(".add").join("kyber_keypair.json");
-    
+
     // Ensure directory exists
     let _ = std::fs::create_dir_all(home.join(".add"));
-    
+
     match add_crypto::MlKem1024Keypair::load_or_generate_unencrypted(&kx_path) {
         Ok(kp) => {
             let enc_bytes = hex::encode(kp.enc.to_bytes());
@@ -181,7 +185,7 @@ fn load_or_generate_kyber_id() -> Option<String> {
 
 /// SECURITY FIX (H5): Get the server's GPG fingerprint from the local cert file.
 fn get_gpg_fingerprint(gpg_home: &str) -> Option<String> {
-    use sequoia_openpgp::parse::{Parse, PacketParserBuilder};
+    use sequoia_openpgp::parse::{PacketParserBuilder, Parse};
 
     let cert_path = std::path::Path::new(gpg_home).join("own_cert.asc");
     if !cert_path.exists() {

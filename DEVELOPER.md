@@ -525,9 +525,9 @@ cmd_status()              // Show DHT status
 cmd_register()            // Register identity with bootstrap DHT
 ```
 
-### `eva register` — DHT identity registration
+### `add register` — DHT identity registration
 
-When a client runs `eva init`, it should auto-register with the bootstrap DHT. If the bootstrap was unreachable during init, registration can be done explicitly:
+When a client runs `add init`, it should auto-register with the bootstrap DHT. If the bootstrap was unreachable during init, registration can be done explicitly:
 
 ```rust
 // dht_register() sends a dht-put message to the bootstrap:
@@ -537,7 +537,7 @@ When a client runs `eva init`, it should auto-register with the bootstrap DHT. I
 
 The bootstrap validates: PoW, signature, key==compute_null_id(publisher_fp), then stores in DHT.
 
-**Note:** Existing `~/.add/gnupg/own_cert.asc` files from before v0.3.7 may be corrupt (binary data written via `from_utf8_lossy`). Users must run `rm -rf ~/.add/gnupg && ./eva init` to recreate.
+**Note:** Existing `~/.add/gnupg/own_cert.asc` files from before v0.3.7 may be corrupt (binary data written via `from_utf8_lossy`). Users must run `rm -rf ~/.add/gnupg && ./add init` to recreate.
 
 **Alias resolution:**
 
@@ -705,7 +705,7 @@ Add implements the Architectural & Cryptographic Specification v2.6. This sectio
 9d. ~~**Memory zeroization**~~ ✅ Done — ZeroizeOnDrop on DoubleRatchetSession, DbEncryptionKey, VariantKeypair; graceful SIGINT/SIGTERM shutdown
 9e. ~~**P2P mutual authentication**~~ ✅ Done — GPG-signed hello + hello-ack, reject unsigned, relay federation auth enforcement
 9f. ~~**E2E delivery receipt**~~ ✅ Done — `p2p-receipt` signed after decrypt, with 10s timeout loop in sender
-9g. ~~**Relay purge/squelch**~~ ✅ Done — `relay-purge` authenticated deletion, wired into `eva read`
+9g. ~~**Relay purge/squelch**~~ ✅ Done — `relay-purge` authenticated deletion, wired into `add read`
 9h. ~~**Edge-core relay mode**~~ ✅ Done — `--allow-relay` flag (default: edge), rejects federation transit
 10. **Biometric access lifecycle** — Key scrubbing on app background/lock
 11. **Hardware-bound keys** — Argon2id user-derived keys, HSM integration
@@ -773,7 +773,7 @@ make man
 
 | Binary | Size | Description |
 |---|---|---|
-| `target/release/eva` | ~7 MB | CLI client |
+| `target/release/add` | ~7 MB | CLI client |
 | `target/release/add-relay` | ~5 MB | Relay server |
 | `target/release/add-bootstrap` | ~4 MB | Bootstrap DHT server |
 
@@ -845,7 +845,7 @@ If P2P fails (timeout, offline peer), the message falls back to relay-store.
 ### Relay mailbox flow (recipient side)
 
 ```
-eva read (client)
+add read (client)
   ├─ relay-fetch: signed request → relay returns encrypted entries
   ├─ relay_decrypt_message(): load DoubleRatchetSession from SQLite, decrypt
   ├─ Display plaintext to user
@@ -966,7 +966,7 @@ OnMessageReceived -> SendReadReceipt (Double Check ✔️✔️)
 
 **Default contact integration:**
 - Null ID: `NN-B0T-REFL`
-- Auto-added during `eva init` in client
+- Auto-added during `add init` in client
 - Auto-added in desktop-ui contact list
 - Use for latency testing: send any message, receive echo
 
@@ -1005,7 +1005,7 @@ desktop-ui/
 The desktop UI communicates with the Rust P2P layer through:
 
 1. **Planned**: Native Node.js bindings via `napi-rs` for direct Rust calls
-2. **Current**: CLI wrapper (`child_process` executing `eva` commands)
+2. **Current**: CLI wrapper (`child_process` executing `add` commands)
 
 ### State Management
 
@@ -1038,7 +1038,7 @@ The project supports building `.deb` packages for all components:
 
 | Package | Source | Build Command |
 |---------|--------|---------------|
-| `eva` | `client/` | `make deb` or `cargo deb -p add-client` |
+| `add` | `client/` | `make deb` or `cargo deb -p add-client` |
 | `add-relay` | `relay/` | `make deb-relay` or `cargo deb -p add-relay` |
 | `add-bootstrap` | `bootstrap/` | `make deb-bootstrap` or `cargo deb -p add-bootstrap` |
 | `add-desktop` | `desktop-ui/` | `make deb-desktop` (electron-builder) |

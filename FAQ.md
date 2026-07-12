@@ -73,8 +73,8 @@ add check-register
 
 **Auto-discovery via DNS SRV:**
 ```
-_eva-bootstrap._tcp.gnoppix.org
-_eva-relay._tcp.gnoppix.org
+_add-bootstrap._tcp.gnoppix.org
+_add-relay._tcp.gnoppix.org
 ```
 
 Both bootstrap and relay servers use the `/ws` WebSocket path consistently.

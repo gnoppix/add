@@ -56,7 +56,7 @@
 |------|--------|-------|
 | `pir` library (blind registries, cuckoo hashing) | ✅ | 417 lines, 7 tests |
 | Client-side `PirContactCache` for local blind lookups | ✅ | `PirContactCache::lookup()` provides privacy-preserving local contact discovery |
-| PIR-over-DHT (`/pir-query` endpoint) | ✅ | DHT server dispatches `pir-query` (dht_node.rs:351) → `handle_pir_query`; client `pir_dht_lookup()` (`eva send --pir`) issues PIR queries and processes responses |
+| PIR-over-DHT (`/pir-query` endpoint) | ✅ | DHT server dispatches `pir-query` (dht_node.rs:351) → `handle_pir_query`; client `pir_dht_lookup()` (`add send --pir`) issues PIR queries and processes responses |
 | **Priority** | 🟡 | Local cache sufficient for first app; PIR-over-DHT is a hardening pass |
 
 ---
@@ -131,7 +131,7 @@
 ### III.4 — Anti-Forensic Rollback
 | Item | Status | Notes |
 |------|--------|-------|
-| Snapshot-resistant key custody (SSS 2-of-3 + mlock + MADV_DONTDUMP) | ✅ **Done (v0.3.16b)** | `crypto/src/snapshot_defense.rs`: `VolatileKey`/`Shard`/`PinnedBytes` pin key+shards+identity to RAM, exclude from core dumps, zeroize on drop; `split_key`/`reconstruct` over GF(2^8); `verify_ephemeral_mount` + `enforce_ephemeral_storage` (panic on non-tmpfs when `EVA_REQUIRE_TMPFS=1`); `SecKit` wires generate→split→persist (3 OHT dirs, fetch-and-delete)→recover-from-any-2 at daemon boot. Wired into `bootstrap`/`relay` `main`. 9 tests pass (+ `seckit_bootstrap_then_recover_roundtrip`); live binary smoke-tested (3 shards written, restart + 1-shard-loss recover). |
+| Snapshot-resistant key custody (SSS 2-of-3 + mlock + MADV_DONTDUMP) | ✅ **Done (v0.3.16b)** | `crypto/src/snapshot_defense.rs`: `VolatileKey`/`Shard`/`PinnedBytes` pin key+shards+identity to RAM, exclude from core dumps, zeroize on drop; `split_key`/`reconstruct` over GF(2^8); `verify_ephemeral_mount` + `enforce_ephemeral_storage` (panic on non-tmpfs when `ADD_REQUIRE_TMPFS=1`); `SecKit` wires generate→split→persist (3 OHT dirs, fetch-and-delete)→recover-from-any-2 at daemon boot. Wired into `bootstrap`/`relay` `main`. 9 tests pass (+ `seckit_bootstrap_then_recover_roundtrip`); live binary smoke-tested (3 shards written, restart + 1-shard-loss recover). |
 | Lattice key blinding (secret sharing) | ❌ | No additive masking of ML-DSA keys (SSS here covers payload keys, not identity-key blinding) |
 | Hardware monotonic counter binding | ❌ | No hardware counter |
 | State-destruct on clone detection | ❌ | No clone detection (tmpfs enforcement mitigates offline disk clone) |
@@ -160,7 +160,7 @@
 ### IV.3 — Headless Daemon
 | Item | Status | Notes |
 |------|--------|-------|
-| CLI-native headless operation | ✅ | `eva` binary is CLI-only |
+| CLI-native headless operation | ✅ | `add` binary is CLI-only |
 | No GUI dependencies | ✅ | Rust CLI with clap |
 | **Priority** | ✅ | Already done |
 
@@ -270,7 +270,7 @@
 | 6 | **TOFU certificate-based admission** | ✅ Done | TOFU pinning in relay `RelayState` (I1); reject unknown fingerprints |
 | 7 | **Braid protocol integration** | ✅ Done (v0.3.16) | `p2p/src/braid_handshake.rs` wired into `send_message` + `handle_incoming_connection`; broken `crypto::BraidState` removed |
 | 8 | **Wire lifecycle memory hooks** | ✅ Done | SIGINT handler in client + relay (I2); graceful shutdown with clean exit |
-| 9 | **PIR-over-DHT endpoint** | ✅ Done | DHT `pir-query` dispatch + client `pir_dht_lookup()` wired; `eva send --pir` |
+| 9 | **PIR-over-DHT endpoint** | ✅ Done | DHT `pir-query` dispatch + client `pir_dht_lookup()` wired; `add send --pir` |
 | 10 | **Cross-relay delete propagation** | ✅ Done | `forward_delete_request` propagates read receipts across federation |
 
 ### 🟢 Can defer (v2.6 follow-up)

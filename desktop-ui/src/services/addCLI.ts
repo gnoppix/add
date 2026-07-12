@@ -16,7 +16,7 @@ import { promisify } from 'util'
 const execAsync = promisify(exec)
 
 // Path to the Add CLI binary
-const ADD_CLI = process.env.ADD_CLI_PATH || 'eva'
+const ADD_CLI = process.env.ADD_CLI_PATH || 'add'
 
 export interface NullId {
   id: string

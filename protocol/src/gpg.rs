@@ -17,9 +17,9 @@
 use sequoia_openpgp::cert::prelude::*;
 use sequoia_openpgp::crypto::KeyPair;
 use sequoia_openpgp::packet::prelude::*;
-use sequoia_openpgp::parse::{Parse, PacketParserBuilder};
-use sequoia_openpgp::serialize::stream::{Armorer, Message, Signer};
+use sequoia_openpgp::parse::{PacketParserBuilder, Parse};
 use sequoia_openpgp::serialize::Serialize;
+use sequoia_openpgp::serialize::stream::{Armorer, Message, Signer};
 use std::io::Write;
 use std::time::SystemTime;
 

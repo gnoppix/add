@@ -6,7 +6,7 @@ set -e
 # Configuration - project root is current working directory parent
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-CLI_BINARY="$PROJECT_ROOT/target/release/eva"
+CLI_BINARY="$PROJECT_ROOT/target/release/add"
 PID_FILE="/home/amu/.add/add.pid"
 
 # Cleanup stale PID lock
@@ -20,7 +20,7 @@ fi
 
 # Build CLI if not exists
 if [[ ! -f "$CLI_BINARY" ]]; then
-    echo "Building eva CLI..."
+    echo "Building add CLI..."
     cd "$PROJECT_ROOT"
     cargo build --release -p add-client
 fi

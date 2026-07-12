@@ -181,8 +181,8 @@ pub fn sha256_hex(data: &str) -> String {
 
 /// Compute BLAKE2b-8 hex digest.
 pub fn blake2b_8_hex(data: &str) -> String {
-    use blake2::digest::{Update, VariableOutput};
     use blake2::Blake2bVar;
+    use blake2::digest::{Update, VariableOutput};
 
     let mut hasher = Blake2bVar::new(8).expect("blake2b with 8 bytes is valid");
     Update::update(&mut hasher, data.as_bytes());
@@ -224,20 +224,32 @@ mod tests {
         // pow_solve should reject difficulty < 8
         let result = pow_solve("test", 0, 10000, node_secret);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PowError::DifficultyTooLow(0, 8)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PowError::DifficultyTooLow(0, 8)
+        ));
 
         let result = pow_solve("test", 7, 10000, node_secret);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PowError::DifficultyTooLow(7, 8)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PowError::DifficultyTooLow(7, 8)
+        ));
 
         // pow_check should reject difficulty < 8
         let result = pow_check("test", 0, 0, node_secret);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PowError::DifficultyTooLow(0, 8)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PowError::DifficultyTooLow(0, 8)
+        ));
 
         let result = pow_check("test", 0, 5, node_secret);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PowError::DifficultyTooLow(5, 8)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PowError::DifficultyTooLow(5, 8)
+        ));
 
         // Exactly MIN_POW_DIFFICULTY should be accepted (not rejected)
         // Note: we don't actually solve, just verify the check doesn't reject it.

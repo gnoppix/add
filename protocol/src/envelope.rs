@@ -105,10 +105,7 @@ impl WireEnvelope {
     pub fn signing_data(&self) -> String {
         format!(
             "{}|{}|{}|{}",
-            self.msg_type,
-            self.payload,
-            self.msg_id,
-            self.ts
+            self.msg_type, self.payload, self.msg_id, self.ts
         )
     }
 

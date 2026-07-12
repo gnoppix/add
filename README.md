@@ -265,7 +265,7 @@ Clients connect to this relay to store and fetch messages when the other party i
 ./target/release/add-bootstrap --host 0.0.0.0 --port 9001
 ```
 
-Clients use this to discover peers and find relay servers. The default `EVA_DHT_BOOTSTRAP` env var points to built-in seeds — you only need to run your own if you want to operate independent infrastructure.
+Clients use this to discover peers and find relay servers. The default `ADD_DHT_BOOTSTRAP` env var points to built-in seeds — you only need to run your own if you want to operate independent infrastructure.
 
 ### Behind nginx (TLS on :443)
 
@@ -363,7 +363,7 @@ Or use the build script:
 ### Install packages
 
 ```bash
-sudo dpkg -i target/release/eva_*.deb
+sudo dpkg -i target/release/add_*.deb
 sudo dpkg -i target/release/add-relay_*.deb
 sudo dpkg -i target/release/add-bootstrap_*.deb
 sudo dpkg -i target/release/add-bot_*.deb

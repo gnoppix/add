@@ -1,6 +1,6 @@
-# Dockerfile for Eva P2P Messenger
-# Build: docker build -t eva:latest .
-# Run:   docker run --rm -it eva:latest init
+# Dockerfile for Add P2P Messenger
+# Build: docker build -t add:latest .
+# Run:   docker run --rm -it add:latest init
 
 # ---- Build stage ----
 FROM rust:1.96-bookworm AS builder
@@ -46,7 +46,7 @@ RUN mkdir -p protocol/src crypto/src crypto-utils/src dht-core/src p2p/src clien
 # Copy actual source and build
 COPY . .
 RUN cargo build --release --workspace \
-    && strip target/release/eva target/release/eva-relay target/release/eva-bootstrap
+    && strip target/release/add target/release/add-relay target/release/add-bootstrap
 
 # ---- Runtime stage ----
 FROM debian:bookworm-slim
@@ -61,23 +61,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -s /bin/bash eva \
-    && mkdir -p /home/eva/.eva \
-    && chown -R eva:eva /home/eva
+RUN useradd -m -s /bin/bash add \
+    && mkdir -p /home/add/.add \
+    && chown -R add:add /home/add
 
-COPY --from=builder /app/target/release/eva /usr/local/bin/
-COPY --from=builder /app/target/release/eva-relay /usr/local/bin/
-COPY --from=builder /app/target/release/eva-bootstrap /usr/local/bin/
+COPY --from=builder /app/target/release/add /usr/local/bin/
+COPY --from=builder /app/target/release/add-relay /usr/local/bin/
+COPY --from=builder /app/target/release/add-bootstrap /usr/local/bin/
 
-RUN chmod 755 /usr/local/bin/eva /usr/local/bin/eva-relay /usr/local/bin/eva-bootstrap
+RUN chmod 755 /usr/local/bin/add /usr/local/bin/add-relay /usr/local/bin/add-bootstrap
 
-USER eva
-WORKDIR /home/eva
-VOLUME ["/home/eva/.eva"]
+USER add
+WORKDIR /home/add
+VOLUME ["/home/add/.add"]
 
 COPY docker-entrypoint.sh /usr/local/bin/entrypoint.sh
 USER root
 RUN chmod 755 /usr/local/bin/entrypoint.sh
-USER eva
+USER add
 ENTRYPOINT ["sh", "/usr/local/bin/entrypoint.sh"]
-CMD ["eva", "--help"]
+CMD ["add", "--help"]

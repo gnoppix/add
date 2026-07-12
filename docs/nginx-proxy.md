@@ -26,7 +26,7 @@ add-bootstrap (listening on 127.0.0.1:9001)
 limit_req_zone $binary_remote_addr zone=ws:10m rate=10r/s;
 
 # Upstream for the Add bootstrap daemon
-upstream eva_bootstrap {
+upstream add_bootstrap {
     server 127.0.0.1:9001;
     keepalive 32;
 }
@@ -62,7 +62,7 @@ server {
     location /ws {
         limit_req zone=ws burst=20 nodelay;
 
-        proxy_pass http://eva_bootstrap;
+        proxy_pass http://add_bootstrap;
         proxy_http_version 1.1;
 
         # WebSocket upgrade headers
@@ -135,8 +135,8 @@ Clients connect through the nginx proxy automatically when using the public URL:
 
 ```bash
 # The client uses wss:// automatically when the URL starts with https://
-eva init
-eva id
+add init
+add id
 ```
 
 ## Security Considerations

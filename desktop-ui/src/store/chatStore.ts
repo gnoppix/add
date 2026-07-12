@@ -155,7 +155,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       
       // Add Reflector Bot as default contact for testing
       const reflectorBot = {
-        nullId: 'NN-B0T-REFL',
+        nullId: 'NN-UFtv-8fHu',
         fingerprint: '3957378550B111F2678DC1B4A58C27B22091D5CF',
         alias: '🤖 Reflector Bot'
       }

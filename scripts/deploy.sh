@@ -66,7 +66,7 @@ EOF
   sleep 4
   ssh -o ConnectTimeout=15 "$host" bash <<'EOF' 2>&1 | sed 's/^/   /'
     echo "   procs:"
-    ps -eo pid,cmd | grep -E '[e]va-(bootstrap|relay|reflector)|nullnode-(bootstrap|relay|reflector)' | grep -v grep || echo "   (none running)"
+    ps -eo pid,cmd | grep -E '[a]dd-(bootstrap|relay|reflector)' | grep -v grep || echo "   (none running)"
 EOF
 done
 

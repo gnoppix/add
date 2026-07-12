@@ -40,12 +40,12 @@
         "export PATH=/usr/lib/sdk/node18/bin:$PATH && cd /app && npm run build:react",
         "cat > /app/bin/add-desktop << 'EOF'\n#!/bin/bash\nexport PATH=/usr/lib/sdk/node18/bin:$PATH\ncd /app\nELECTRON_RUN_AS_NODE=1 exec electron . \"$@\"\nEOF",
         "chmod +x /app/bin/add-desktop",
-        "cat > /app/share/applications/org.add.desktop.desktop << 'EOF'\n[Desktop Entry]\nName=Add Desktop\nComment=Cross-platform decentralized messaging application with E2E encryption\nExec=add-desktop\nIcon=org.add.desktop\nTerminal=false\nType=Application\nCategories=Network;InstantMessaging;\nStartupWMClass=Add Desktop\nEOF"
+        "cat > /app/share/applications/org.add.desktop.desktop << 'EOF'\n[Desktop Entry]\nName=Gnoppix - Add Messenger\nComment=Cross-platform decentralized messaging application with E2E encryption\nExec=add-desktop\nIcon=org.add.desktop\nTerminal=false\nType=Application\nCategories=Network;InstantMessaging;\nStartupWMClass=Gnoppix - Add Messenger\nEOF"
       ],
       "sources": [
         {
           "type": "dir",
-          "path": "/home/amu/gnoppix/messages/Eva/desktop-ui"
+          "path": "/home/amu/Gnoppix/messenger/Add/desktop-ui"
         }
       ]
     }

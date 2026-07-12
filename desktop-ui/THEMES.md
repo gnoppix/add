@@ -4,7 +4,7 @@ This guide explains how to create and distribute custom themes for the Add deskt
 
 ## Overview
 
-Eva's theme system uses CSS custom properties (variables) applied to `:root`. Themes can be created by:
+Add's theme system uses CSS custom properties (variables) applied to `:root`. Themes can be created by:
 1. Defining a set of CSS variables
 2. Applying them via the `setCustomColors()` API
 3. Distributing as a simple JSON file

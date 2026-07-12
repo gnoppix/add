@@ -115,7 +115,7 @@ impl Default for BraidHandshake {
     }
 }
 
-use sha2::{Sha512, Digest};
+use sha2::{Digest, Sha512};
 
 /// Split a key into braid chunks for streaming exchange.
 pub fn split_key_to_chunks(key: &[u8]) -> Vec<BraidChunk> {
@@ -199,8 +199,8 @@ fn now_unix() -> f64 {
         .as_secs_f64()
 }
 
-use crate::envelope::WireEnvelope;
 use crate::constants::MSG_P2P_BRAID_CHUNK;
+use crate::envelope::WireEnvelope;
 
 #[cfg(test)]
 mod tests {

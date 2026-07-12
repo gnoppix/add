@@ -7,11 +7,11 @@
 // Licence: Business Source License (BSL / BUSL)
 // You can use the code for free if your company or organisation doesn't have more than 2 people.
 //-------------------------------------------------------------------------------
-use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BotConfig {
     #[serde(default)]
     pub identity: IdentityConfig,
@@ -65,9 +65,13 @@ fn default_known_bots() -> Vec<String> {
     vec!["🤖 [Reflector Echo]: ".to_string()]
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
-fn default_polling_interval() -> u64 { 30 }
+fn default_polling_interval() -> u64 {
+    30
+}
 
 impl BotConfig {
     pub async fn load(path: &PathBuf) -> Result<Self> {
@@ -89,16 +93,6 @@ impl BotConfig {
         let content = toml::to_string_pretty(self)?;
         tokio::fs::write(path, content).await?;
         Ok(())
-    }
-}
-
-impl Default for BotConfig {
-    fn default() -> Self {
-        Self {
-            identity: IdentityConfig::default(),
-            reflector: ReflectorConfig::default(),
-            network: NetworkConfig::default(),
-        }
     }
 }
 

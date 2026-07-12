@@ -45,7 +45,7 @@ const ADD_CLI = getAddCliPath()
 
 // PID file paths
 const PID_DIR = path.join(os.homedir(), '.add')
-const LISTEN_PID_FILE = path.join(PID_DIR, 'eva_listen.pid')
+const LISTEN_PID_FILE = path.join(PID_DIR, 'add_listen.pid')
 const APP_PID_FILE = path.join(PID_DIR, 'add.pid')
 
 // Ensure PID directory exists
@@ -207,6 +207,7 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    title: 'Gnoppix - Add Messenger 0.2',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -231,22 +232,34 @@ function createWindow() {
 // IPC Handlers
 ipcMain.handle('add-init', async () => {
   const output = await queuedCommand('init')
-  const idMatch = output.match(/Null ID:\s*(NN-[A-Z0-9-]+)/)
-  const fpMatch = output.match(/Fingerprint:\s*([A-Z0-9]+)/)
+  const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
+  const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
   return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
 })
 
 ipcMain.handle('add-id', async () => {
   const output = await queuedCommand('id')
-  const idMatch = output.match(/Null ID:\s*(NN-[A-Z0-9-]+)/)
-  const fpMatch = output.match(/Fingerprint:\s*([A-Z0-9]+)/)
+  const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
+  const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
   return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
 })
 
 ipcMain.handle('add-register', async () => queuedCommand('register'))
 ipcMain.handle('add-register-all-bootstraps', async () => queuedCommand('register-all-bootstraps'))
 ipcMain.handle('add-check-register', async () => queuedCommand('check-register'))
-ipcMain.handle('add-check-contact-status', async () => queuedCommand('contact-status'))
+ipcMain.handle('add-check-contact-status', async () => {
+  const output = await queuedCommand('contact-status')
+  // CLI prints one line per contact:
+  //   "  ✓ <fp8> (NN-xxxx-xxxx) - ONLINE at <addr>"
+  //   "  ✗ <fp8> (NN-xxxx-xxxx) - OFFLINE"
+  // Parse into [{ nullId, isOnline }] for the renderer's status store.
+  const statuses = []
+  for (const line of output.split('\n')) {
+    const m = line.match(/(NN-[A-Za-z0-9-]+)\)\s*-\s*(ONLINE|OFFLINE)/)
+    if (m) statuses.push({ nullId: m[1], isOnline: m[2] === 'ONLINE' })
+  }
+  return statuses
+})
 
 ipcMain.handle('add-add-contact', async (_, nullId, fingerprint) =>
   queuedCommand(`add-contact ${nullId} --fingerprint ${fingerprint}`))
@@ -255,7 +268,7 @@ ipcMain.handle('add-contacts', async () => {
   const output = await queuedCommand('contacts')
   const contacts = []
   for (const line of output.split('\n')) {
-    const match = line.match(/(NN-[A-Z0-9-]+)\s+([A-Z0-9]+)/)
+    const match = line.match(/(NN-[A-Za-z0-9-]+)\s+([A-Fa-f0-9]+)/)
     if (match) contacts.push({ nullId: match[1], fingerprint: match[2] })
   }
   return contacts

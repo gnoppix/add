@@ -74,7 +74,7 @@ OnMessageReceived
 
 ## Integration
 
-- **CLI client**: `NN-B0T-REFL` auto-added during `eva init`
+- **CLI client**: `NN-B0T-REFL` auto-added during `add init`
 - **Desktop UI**: "🤖 Reflector Bot" appears in contact list automatically
 
 ## Development
