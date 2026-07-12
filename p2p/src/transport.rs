@@ -65,11 +65,7 @@ impl TransportManager {
     }
 
     /// Connect a WebSocket, routing through Tor SOCKS5 if enabled.
-    pub async fn connect(
-        &self,
-        uri: &str,
-        timeout_secs: u64,
-    ) -> Result<WebSocketConn, P2pError> {
+    pub async fn connect(&self, uri: &str, timeout_secs: u64) -> Result<WebSocketConn, P2pError> {
         if self.config.use_tor {
             self.connect_through_tor(uri, timeout_secs).await
         } else {
@@ -161,13 +157,18 @@ impl TransportManager {
             .map_err(|e| P2pError::Connection(format!("SOCKS5 write greeting: {}", e)))?;
 
         let mut resp = [0u8; 2];
-        tokio::time::timeout(Duration::from_secs(timeout_secs), stream.read_exact(&mut resp))
-            .await
-            .map_err(|_| P2pError::Timeout)?
-            .map_err(|e| P2pError::Connection(format!("SOCKS5 read greeting: {}", e)))?;
+        tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            stream.read_exact(&mut resp),
+        )
+        .await
+        .map_err(|_| P2pError::Timeout)?
+        .map_err(|e| P2pError::Connection(format!("SOCKS5 read greeting: {}", e)))?;
 
         if resp[0] != 0x05 || resp[1] != 0x00 {
-            return Err(P2pError::Connection("SOCKS5 auth method rejected".to_string()));
+            return Err(P2pError::Connection(
+                "SOCKS5 auth method rejected".to_string(),
+            ));
         }
 
         // Phase 2: CONNECT request (ATYP=0x03 domain)
@@ -183,13 +184,10 @@ impl TransportManager {
             .map_err(|e| P2pError::Connection(format!("SOCKS5 write request: {}", e)))?;
 
         let mut buf = [0u8; 256];
-        let n = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            stream.read(&mut buf),
-        )
-        .await
-        .map_err(|_| P2pError::Timeout)?
-        .map_err(|e| P2pError::Connection(format!("SOCKS5 read response: {}", e)))?;
+        let n = tokio::time::timeout(Duration::from_secs(timeout_secs), stream.read(&mut buf))
+            .await
+            .map_err(|_| P2pError::Timeout)?
+            .map_err(|e| P2pError::Connection(format!("SOCKS5 read response: {}", e)))?;
 
         if n < 10 || buf[1] != 0x00 {
             return Err(P2pError::Connection(format!(
@@ -202,12 +200,14 @@ impl TransportManager {
         let tls_stream = MaybeTlsStream::Plain(stream);
 
         // WebSocket handshake over the established tunnel
-        let ws = tokio_tungstenite::client_async(uri_dummy(host, port), tls_stream)
-            .await;
+        let ws = tokio_tungstenite::client_async(uri_dummy(host, port), tls_stream).await;
 
         match ws {
             Ok((ws_stream, _)) => Ok(ws_stream),
-            Err(e) => Err(P2pError::Connection(format!("WebSocket handshake failed: {}", e))),
+            Err(e) => Err(P2pError::Connection(format!(
+                "WebSocket handshake failed: {}",
+                e
+            ))),
         }
     }
 
@@ -243,11 +243,10 @@ pub fn normalize_peer_address(addr: &str) -> String {
 }
 
 /// Send an envelope over a WebSocket connection.
-pub async fn send_envelope(
-    ws: &mut WebSocketConn,
-    env: &WireEnvelope,
-) -> Result<(), P2pError> {
-    let json = env.to_json().map_err(|e| P2pError::Serialization(e.to_string()))?;
+pub async fn send_envelope(ws: &mut WebSocketConn, env: &WireEnvelope) -> Result<(), P2pError> {
+    let json = env
+        .to_json()
+        .map_err(|e| P2pError::Serialization(e.to_string()))?;
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
         tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
     ))
@@ -261,13 +260,10 @@ pub async fn recv_envelope(
     ws: &mut WebSocketConn,
     timeout_secs: u64,
 ) -> Result<WireEnvelope, P2pError> {
-    let msg = tokio::time::timeout(
-        Duration::from_secs(timeout_secs),
-        ws.next(),
-    )
-    .await
-    .map_err(|_| P2pError::Timeout)?
-    .ok_or_else(|| P2pError::Connection("connection closed".to_string()))?;
+    let msg = tokio::time::timeout(Duration::from_secs(timeout_secs), ws.next())
+        .await
+        .map_err(|_| P2pError::Timeout)?
+        .ok_or_else(|| P2pError::Connection("connection closed".to_string()))?;
 
     match msg {
         Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {

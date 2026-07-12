@@ -26,12 +26,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt as _, StreamExt as _};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
 
 use add_protocol::braid::{
-    build_braid_chunk_msg, parse_braid_chunk, split_key_to_chunks, BraidHandshake,
-    MLKEM1024_EK_LEN,
+    BraidHandshake, MLKEM1024_EK_LEN, build_braid_chunk_msg, parse_braid_chunk, split_key_to_chunks,
 };
 use add_protocol::envelope::WireEnvelope;
 
@@ -43,10 +42,7 @@ const CHUNK_TIMEOUT: u64 = 30;
 /// Stream our encapsulation key to the peer as braid chunks.
 ///
 /// `ek_bytes` MUST be the raw 1568-byte ML-KEM-1024 encapsulation key.
-pub async fn send_ek_braid<S>(
-    ws: &mut WebSocketStream<S>,
-    ek_bytes: &[u8],
-) -> Result<(), P2pError>
+pub async fn send_ek_braid<S>(ws: &mut WebSocketStream<S>, ek_bytes: &[u8]) -> Result<(), P2pError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -82,13 +78,13 @@ where
         let text = match msg {
             tokio_tungstenite::tungstenite::Message::Text(t) => t,
             tokio_tungstenite::tungstenite::Message::Close(_) => {
-                return Err(P2pError::Connection("closed during braid".into()))
+                return Err(P2pError::Connection("closed during braid".into()));
             }
             _ => continue,
         };
 
-        let env = WireEnvelope::from_json(&text)
-            .map_err(|e| P2pError::Serialization(e.to_string()))?;
+        let env =
+            WireEnvelope::from_json(&text).map_err(|e| P2pError::Serialization(e.to_string()))?;
         let chunk = parse_braid_chunk(&env).ok_or_else(|| {
             P2pError::Handshake(format!("expected braid chunk, got {}", env.msg_type))
         })?;
@@ -127,7 +123,14 @@ pub async fn exchange_ek_braid_split<S>(
     mut sink: SplitSink<WebSocketStream<S>, Message>,
     mut rx: SplitStream<WebSocketStream<S>>,
     our_ek_bytes: &[u8],
-) -> Result<(SplitSink<WebSocketStream<S>, Message>, SplitStream<WebSocketStream<S>>, Vec<u8>), P2pError>
+) -> Result<
+    (
+        SplitSink<WebSocketStream<S>, Message>,
+        SplitStream<WebSocketStream<S>>,
+        Vec<u8>,
+    ),
+    P2pError,
+>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -176,8 +179,8 @@ where
             Message::Close(_) => return Err(P2pError::Connection("closed during braid".into())),
             _ => continue,
         };
-        let env = WireEnvelope::from_json(&text)
-            .map_err(|e| P2pError::Serialization(e.to_string()))?;
+        let env =
+            WireEnvelope::from_json(&text).map_err(|e| P2pError::Serialization(e.to_string()))?;
         let chunk = parse_braid_chunk(&env).ok_or_else(|| {
             P2pError::Handshake(format!("expected braid chunk, got {}", env.msg_type))
         })?;
@@ -235,8 +238,9 @@ mod tests {
             let ct = base64::engine::general_purpose::STANDARD
                 .decode(ct_b64.as_bytes())
                 .unwrap();
+            #[allow(deprecated)]
             let ct = kyber::MlKem1024Ciphertext::from_slice(&ct);
-            let ss = resp_kp.decapsulate(&ct).unwrap();
+            let ss = resp_kp.decapsulate(ct).unwrap();
             (peer_ek, ss.as_slice().to_vec())
         });
 
@@ -249,10 +253,9 @@ mod tests {
         assert_eq!(peer_ek, resp_ek_bytes, "reassembled responder EK mismatch");
 
         // Encapsulate against the reassembled EK -> (ct, ss_init).
-        let peer_enc = kyber::decode_enc_key(
-            &base64::engine::general_purpose::STANDARD.encode(&peer_ek),
-        )
-        .unwrap();
+        let peer_enc =
+            kyber::decode_enc_key(&base64::engine::general_purpose::STANDARD.encode(&peer_ek))
+                .unwrap();
         let (ct, ss_init) = kyber::KyberKeypair::encapsulate(&peer_enc).unwrap();
         let ct_b64 = base64::engine::general_purpose::STANDARD.encode(ct.as_slice());
         ws.send(tokio_tungstenite::tungstenite::Message::Text(ct_b64.into()))
@@ -262,9 +265,16 @@ mod tests {
         let (resp_got_init_ek, ss_resp) = server.await.unwrap();
 
         // Responder must have reassembled the initiator's EK correctly.
-        assert_eq!(resp_got_init_ek, init_ek_bytes, "reassembled initiator EK mismatch");
+        assert_eq!(
+            resp_got_init_ek, init_ek_bytes,
+            "reassembled initiator EK mismatch"
+        );
         // And both sides must agree on the KEM shared secret.
-        assert_eq!(ss_init.as_slice(), ss_resp.as_slice(), "KEM shared secret mismatch");
+        assert_eq!(
+            ss_init.as_slice(),
+            ss_resp.as_slice(),
+            "KEM shared secret mismatch"
+        );
     }
 
     /// Mirror the exact client wiring: build a signed p2p-hello with `braid:true`,
@@ -297,12 +307,21 @@ mod tests {
             };
             let hello: serde_json::Value = serde_json::from_str(&hello_text).unwrap();
             assert_eq!(hello["type"], "p2p-hello");
-            assert_eq!(hello["payload"]["braid"], true, "client must advertise braid");
+            assert_eq!(
+                hello["payload"]["braid"], true,
+                "client must advertise braid"
+            );
 
             // Respond with a signed ack advertising braid.
             let ack_sig = "SIG";
             let ack = build_p2p_hello_ack_signed(
-                resp_fp, 1, 16, "challenge", &base64::engine::general_purpose::STANDARD.encode(&resp_ek_for_task), &ack_sig, "",
+                resp_fp,
+                1,
+                16,
+                "challenge",
+                &base64::engine::general_purpose::STANDARD.encode(&resp_ek_for_task),
+                ack_sig,
+                "",
             );
             ws_tx
                 .send(tokio_tungstenite::tungstenite::Message::Text(
@@ -313,7 +332,9 @@ mod tests {
 
             // Run the same split-path braid exchange the client uses.
             let (mut _ws_tx, mut ws_rx, peer_ek_bytes) =
-                exchange_ek_braid_split(ws_tx, ws_rx, &resp_ek_for_task).await.unwrap();
+                exchange_ek_braid_split(ws_tx, ws_rx, &resp_ek_for_task)
+                    .await
+                    .unwrap();
 
             // Receive the initiator's ciphertext and decapsulate.
             let ct_b64 = loop {
@@ -322,9 +343,12 @@ mod tests {
                     _ => continue,
                 }
             };
-            let ct = base64::engine::general_purpose::STANDARD.decode(ct_b64.as_bytes()).unwrap();
+            let ct = base64::engine::general_purpose::STANDARD
+                .decode(ct_b64.as_bytes())
+                .unwrap();
+            #[allow(deprecated)]
             let ct = kyber::MlKem1024Ciphertext::from_slice(&ct);
-            let ss = resp_kp.decapsulate(&ct).unwrap();
+            let ss = resp_kp.decapsulate(ct).unwrap();
             (peer_ek_bytes, ss.as_slice().to_vec())
         });
 
@@ -337,7 +361,13 @@ mod tests {
 
         let hello_sig = "SIG";
         let hello = build_p2p_hello_signed(
-            "INITIATORFP", 1, 16, &base64::engine::general_purpose::STANDARD.encode(&init_ek_bytes), "", &hello_sig, "",
+            "INITIATORFP",
+            1,
+            16,
+            &base64::engine::general_purpose::STANDARD.encode(&init_ek_bytes),
+            "",
+            hello_sig,
+            "",
         );
         ws.send(tokio_tungstenite::tungstenite::Message::Text(
             serde_json::to_string(&hello).unwrap().into(),
@@ -352,11 +382,17 @@ mod tests {
         };
         let ack: serde_json::Value = serde_json::from_str(&ack_text).unwrap();
         assert_eq!(ack["type"], "p2p-hello-ack");
-        assert_eq!(ack["payload"]["braid"], true, "responder must advertise braid");
+        assert_eq!(
+            ack["payload"]["braid"], true,
+            "responder must advertise braid"
+        );
 
         // Full-stream braid exchange (initiator path).
         let peer_ek_bytes = exchange_ek_braid(&mut ws, &init_ek_bytes).await.unwrap();
-        assert_eq!(peer_ek_bytes, resp_ek_bytes, "reassembled responder EK mismatch");
+        assert_eq!(
+            peer_ek_bytes, resp_ek_bytes,
+            "reassembled responder EK mismatch"
+        );
 
         // Encapsulate against reassembled responder EK and send ciphertext.
         let peer_enc = kyber::decode_enc_key(
@@ -370,7 +406,14 @@ mod tests {
             .unwrap();
 
         let (resp_got_init_ek, ss_resp) = server.await.unwrap();
-        assert_eq!(resp_got_init_ek, init_ek_bytes, "reassembled initiator EK mismatch");
-        assert_eq!(ss_init.as_slice(), ss_resp.as_slice(), "KEM shared secret mismatch");
+        assert_eq!(
+            resp_got_init_ek, init_ek_bytes,
+            "reassembled initiator EK mismatch"
+        );
+        assert_eq!(
+            ss_init.as_slice(),
+            ss_resp.as_slice(),
+            "KEM shared secret mismatch"
+        );
     }
 }

@@ -28,8 +28,8 @@
 use rand::Rng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::CryptoError;
@@ -96,7 +96,7 @@ impl CbnpSession {
         // Derive a "public key" from the secret (just a hash, not real ML-KEM)
         let mut hasher = Sha256::new();
         hasher.update(b"cbnp-cover-pk-v1");
-        hasher.update(&cover_secret);
+        hasher.update(cover_secret);
         cover_public_key.copy_from_slice(&hasher.finalize());
 
         Self {
@@ -119,16 +119,16 @@ impl CbnpSession {
         // Fill with deterministic-but-unpredictable content derived from secret
         let mut hasher = Sha256::new();
         hasher.update(b"cbnp-cover-packet-v1");
-        hasher.update(&self.cover_secret);
+        hasher.update(self.cover_secret);
         let count = self.cover_count.load(Ordering::Relaxed);
-        hasher.update(&count.to_be_bytes());
+        hasher.update(count.to_be_bytes());
         let seed_hash = hasher.finalize();
 
         // Use first 32 bytes of hash as seed for pseudo-random fill
         let mut fill_seed = seed_hash;
         for chunk in packet[1..].chunks_mut(32) {
             let mut h = Sha256::new();
-            h.update(&fill_seed);
+            h.update(fill_seed);
             h.update(b"cbnp-fill");
             let out = h.finalize();
             let len = chunk.len().min(32);
@@ -200,64 +200,69 @@ impl CbnpSession {
         // Calculate time since global epoch
         let epoch = self.config.global_epoch as f64;
         let elapsed = now - epoch;
-        
+
         // Slot duration based on lambda (average interval)
         let slot_duration = self.config.lambda_seconds;
-        
+
         // Current slot index
         let current_slot = (elapsed / slot_duration).floor() as u64;
-        
+
         // Next slot boundary
         let next_slot_time = epoch + ((current_slot + 1) as f64) * slot_duration;
         let delay_to_next_slot = next_slot_time - now;
-        
+
         // Add small random jitter within the slot (±10% of slot duration)
         let jitter_range = slot_duration * 0.1;
         let jitter: f64 = rand::thread_rng().gen_range(-jitter_range..jitter_range);
-        let delay = (delay_to_next_slot + jitter).max(0.0).min(slot_duration * 2.0);
-        
+        let delay = (delay_to_next_slot + jitter)
+            .max(0.0)
+            .min(slot_duration * 2.0);
+
         // Coordinator nodes always send at slot boundaries
         let is_coordinated_slot = self.config.is_coordinator;
-        
+
         (Duration::from_secs_f64(delay), is_coordinated_slot)
     }
 
     /// Generate a coordinated cover packet with timing metadata
     pub fn generate_coordinated_packet(&self, slot: u64) -> Result<Vec<u8>, CryptoError> {
         let mut packet = vec![0u8; COVER_PACKET_SIZE];
-        
+
         // First byte: tag prefix (cover traffic indicator)
         packet[0] = COVER_TAG_PREFIX;
-        
+
         // Bytes 1-8: slot number (big-endian u64) for coordination verification
         packet[1..9].copy_from_slice(&slot.to_be_bytes());
-        
+
         // Bytes 9-40: deterministic content from secret + slot
         let mut hasher = Sha256::new();
         hasher.update(b"cbnp-coordinated-v1");
-        hasher.update(&self.cover_secret);
-        hasher.update(&slot.to_be_bytes());
+        hasher.update(self.cover_secret);
+        hasher.update(slot.to_be_bytes());
         let seed_hash = hasher.finalize();
-        
+
         // Fill remaining with chained hash
         let mut fill_seed = seed_hash;
         for chunk in packet[9..].chunks_mut(32) {
             let mut h = Sha256::new();
-            h.update(&fill_seed);
+            h.update(fill_seed);
             h.update(b"cbnp-fill");
             let out = h.finalize();
             let len = chunk.len().min(32);
             chunk[..len].copy_from_slice(&out[..len]);
             fill_seed = out;
         }
-        
+
         self.cover_count.fetch_add(1, Ordering::Relaxed);
         Ok(packet)
     }
 }
 
 /// Generate a batch of cover packets (for burst mode)
-pub fn generate_cover_burst(session: &CbnpSession, count: usize) -> Result<Vec<Vec<u8>>, CryptoError> {
+pub fn generate_cover_burst(
+    session: &CbnpSession,
+    count: usize,
+) -> Result<Vec<Vec<u8>>, CryptoError> {
     let mut packets = Vec::with_capacity(count);
     for _ in 0..count {
         packets.push(session.generate_cover_packet()?);

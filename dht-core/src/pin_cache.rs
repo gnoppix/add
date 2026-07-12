@@ -77,12 +77,15 @@ pub fn pin_update(null_id: &str, address: &str, fingerprint: &str) {
 
     if existing.is_none() {
         // Trust on first use
-        cache.insert(null_id.to_string(), serde_json::json!({
-            "address": address,
-            "fp": fingerprint,
-            "first_seen": now,
-            "last_verified": now,
-        }));
+        cache.insert(
+            null_id.to_string(),
+            serde_json::json!({
+                "address": address,
+                "fp": fingerprint,
+                "first_seen": now,
+                "last_verified": now,
+            }),
+        );
         tracing::info!("TOFU pin: {} -> {} (first seen)", null_id, address);
     } else if let Some(ref obj) = existing {
         if obj.get("address").and_then(|v| v.as_str()) == Some(address) {
@@ -97,7 +100,9 @@ pub fn pin_update(null_id: &str, address: &str, fingerprint: &str) {
             let pinned = obj.get("address").and_then(|v| v.as_str()).unwrap_or("?");
             tracing::warn!(
                 "TOFU pin MISMATCH for {}: pinned={} new={} (keeping old)",
-                null_id, pinned, address
+                null_id,
+                pinned,
+                address
             );
             return; // do not overwrite
         }
@@ -111,6 +116,7 @@ pub fn pin_update(null_id: &str, address: &str, fingerprint: &str) {
 /// Returns true if:
 /// - No pin exists yet (first use, will be pinned)
 /// - Address matches the pin
+///
 /// Returns false if address differs from pin (possible MITM).
 pub fn pin_verify_address(null_id: &str, address: &str) -> bool {
     match pin_get(null_id) {
@@ -131,11 +137,17 @@ fn pin_cache_path() -> PathBuf {
 /// Returns true if:
 /// - No pin exists yet (TOFU — first seen)
 /// - Fingerprint matches the stored pin
+///
 /// Logs a warning on mismatch.
 ///
 /// SECURITY FIX (G4): Emits a prominent warning when trusting a new bootstrap
 /// server certificate for the first time, alerting the user to verify it.
-pub fn bootstrap_pin_check(seed_url: &str, cert_fp: &str, not_before: &str, not_after: &str) -> bool {
+pub fn bootstrap_pin_check(
+    seed_url: &str,
+    cert_fp: &str,
+    not_before: &str,
+    not_after: &str,
+) -> bool {
     let mut pin_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     pin_path.push(".add");
     pin_path.push("bootstrap_pin_cache.json");
@@ -157,7 +169,9 @@ pub fn bootstrap_pin_check(seed_url: &str, cert_fp: &str, not_before: &str, not_
         } else {
             tracing::warn!(
                 "bootstrap pin MISMATCH for {}: pinned={} current={} (rejecting)",
-                seed_url, pinned_fp, cert_fp
+                seed_url,
+                pinned_fp,
+                cert_fp
             );
             false
         }
@@ -168,20 +182,24 @@ pub fn bootstrap_pin_check(seed_url: &str, cert_fp: &str, not_before: &str, not_
         tracing::warn!(
             "SECURITY NOTICE: First contact with bootstrap server '{}'. No prior pin found. \
              Fingerprint {} is being trusted. If compromised, your identity could be hijacked.",
-            seed_url, cert_fp
+            seed_url,
+            cert_fp
         );
         let mut new_cache = cache;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs_f64();
-        new_cache.insert(seed_url.to_string(), serde_json::json!({
-            "fp": cert_fp,
-            "not_before": not_before,
-            "not_after": not_after,
-            "first_seen": now,
-            "last_verified": now,
-        }));
+        new_cache.insert(
+            seed_url.to_string(),
+            serde_json::json!({
+                "fp": cert_fp,
+                "not_before": not_before,
+                "not_after": not_after,
+                "first_seen": now,
+                "last_verified": now,
+            }),
+        );
         // SECURITY FIX (H1): Write with restrictive permissions
         if let Ok(json) = serde_json::to_string_pretty(&new_cache) {
             use std::os::unix::fs::OpenOptionsExt;

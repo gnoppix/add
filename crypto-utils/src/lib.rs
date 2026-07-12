@@ -47,7 +47,7 @@ pub type CryptoUtilsResult<T> = Result<T, CryptoUtilsError>;
 /// Consider using tmpfs or encrypted storage for highly sensitive temp files.
 pub fn secure_delete(path: &str) -> CryptoUtilsResult<()> {
     let p = Path::new(path);
-    
+
     // SECURITY FIX (H1): Get metadata first, then open. This prevents a race
     // where an attacker replaces the file between check and open.
     // However, note that symlinks are still followed - there's no perfect solution
@@ -56,12 +56,10 @@ pub fn secure_delete(path: &str) -> CryptoUtilsResult<()> {
         Ok(m) => m.len() as usize,
         Err(_) => return Ok(()), // File doesn't exist
     };
-    
+
     if size > 0 {
         // Open the file for writing (follows symlinks, but we have the size)
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .open(p)?;
+        let mut file = fs::OpenOptions::new().write(true).open(p)?;
         // SECURITY FIX (H1): Advisory write lock via flock on Unix
         #[cfg(unix)]
         {
@@ -124,9 +122,12 @@ fn parse_cert_armored(armored: &str) -> CryptoUtilsResult<sequoia_openpgp::Cert>
 pub fn get_own_fingerprint() -> CryptoUtilsResult<String> {
     let path = dirs::home_dir()
         .map(|h| h.join(".add/gnupg/own_cert.asc"))
-        .ok_or_else(|| CryptoUtilsError::Io(
-            std::io::Error::new(std::io::ErrorKind::NotFound, "home dir not found")
-        ))?;
+        .ok_or_else(|| {
+            CryptoUtilsError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "home dir not found",
+            ))
+        })?;
 
     let armored = std::fs::read_to_string(&path)?;
 
@@ -138,9 +139,12 @@ pub fn get_own_fingerprint() -> CryptoUtilsResult<String> {
 pub fn export_pubkey() -> CryptoUtilsResult<String> {
     let path = dirs::home_dir()
         .map(|h| h.join(".add/gnupg/own_cert.asc"))
-        .ok_or_else(|| CryptoUtilsError::Io(
-            std::io::Error::new(std::io::ErrorKind::NotFound, "home dir not found")
-        ))?;
+        .ok_or_else(|| {
+            CryptoUtilsError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "home dir not found",
+            ))
+        })?;
 
     std::fs::read_to_string(&path).map_err(CryptoUtilsError::Io)
 }
@@ -162,14 +166,20 @@ pub fn import_pubkey(armored: &str) -> CryptoUtilsResult<String> {
 
     // SECURITY FIX (G7): Sanitize fingerprint for safe filename use
     // Only allow hex characters to prevent path traversal
-    let safe_fp = fp.chars().filter(|c| c.is_ascii_hexdigit()).collect::<String>();
+    let safe_fp = fp
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>();
 
     // Store the cert for later use
     let cert_dir = dirs::home_dir()
         .map(|h| h.join(".add/gnupg"))
-        .ok_or_else(|| CryptoUtilsError::Io(
-            std::io::Error::new(std::io::ErrorKind::NotFound, "home dir not found")
-        ))?;
+        .ok_or_else(|| {
+            CryptoUtilsError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "home dir not found",
+            ))
+        })?;
     let _ = std::fs::create_dir_all(&cert_dir);
     let cert_path = cert_dir.join(format!("{}.asc", safe_fp));
     std::fs::write(&cert_path, armored).map_err(CryptoUtilsError::Io)?;
@@ -223,9 +233,12 @@ pub fn set_key_trust(fingerprint: &str, trust_level: &str) -> CryptoUtilsResult<
     // Store trust in local file
     let trust_path = dirs::home_dir()
         .map(|h| h.join(".add/gnupg/trust_map.txt"))
-        .ok_or_else(|| CryptoUtilsError::Io(
-            std::io::Error::new(std::io::ErrorKind::NotFound, "home dir not found")
-        ))?;
+        .ok_or_else(|| {
+            CryptoUtilsError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "home dir not found",
+            ))
+        })?;
 
     let _ = std::fs::create_dir_all(trust_path.parent().unwrap());
     let entry = format!("{}: {}\n", fingerprint.to_uppercase(), trust_level);
@@ -264,13 +277,19 @@ mod tests {
     #[test]
     fn test_validate_fingerprint() {
         // 40-char v4 fingerprint
-        assert!(validate_fingerprint("AABBCCDDEEFF00112233445566778899AABBCCDD"));
-        assert!(validate_fingerprint("AABB CCDD EEFF 0011 2233 4455 6677 8899 AABB CCDD"));
+        assert!(validate_fingerprint(
+            "AABBCCDDEEFF00112233445566778899AABBCCDD"
+        ));
+        assert!(validate_fingerprint(
+            "AABB CCDD EEFF 0011 2233 4455 6677 8899 AABB CCDD"
+        ));
         // 32-char v3 fingerprint (SECURITY FIX L6)
         assert!(validate_fingerprint("AABBCCDDEEFF00112233445566778899"));
         assert!(!validate_fingerprint("TOOSHORT"));
         assert!(!validate_fingerprint(""));
-        assert!(!validate_fingerprint("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"));
+        assert!(!validate_fingerprint(
+            "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+        ));
     }
 
     #[test]

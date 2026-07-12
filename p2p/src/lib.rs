@@ -10,12 +10,12 @@
 // Add P2P client node (handshake, NAT traversal, transport).
 //-------------------------------------------------------------------------------
 
+pub mod braid_handshake;
+pub mod handshake;
+pub mod nat;
+pub mod peer;
 pub mod protocol;
 pub mod transport;
-pub mod handshake;
-pub mod braid_handshake;
-pub mod peer;
-pub mod nat;
 pub mod upnp;
 pub mod util;
 

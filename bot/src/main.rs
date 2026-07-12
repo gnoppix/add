@@ -7,22 +7,15 @@
 // Licence: Business Source License (BSL / BUSL)
 // You can use the code for free if your company or organisation doesn't have more than 2 people.
 //-------------------------------------------------------------------------------
-use anyhow::{anyhow, Result};
-use base64::engine::general_purpose::STANDARD as base64_standard;
+use anyhow::{Result, anyhow};
 use base64::engine::Engine as _;
+use base64::engine::general_purpose::STANDARD as base64_standard;
 use clap::Parser;
 use futures::{SinkExt as _, StreamExt as _};
-use ml_dsa::{MlDsa44, MlDsa87, SigningKey as MlDsaSigningKey};
-use ml_dsa::pkcs8::DecodePrivateKey;
-use pem::parse as parse_pem;
-use rand::rngs::OsRng;
 use rustls::crypto::CryptoProvider;
 use rustls::crypto::ring::default_provider;
 use std::path::PathBuf;
-use std::time::Duration;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -120,19 +113,24 @@ async fn main() -> Result<()> {
 
     // Start P2P listener
     let listen_addr = format!("0.0.0.0:{}", args.port);
-    let listener = tokio::net::TcpListener::bind(&listen_addr).await
+    let listener = tokio::net::TcpListener::bind(&listen_addr)
+        .await
         .map_err(|e| anyhow!("Failed to bind listener on {}: {}", listen_addr, e))?;
     let local_addr = listener.local_addr()?;
 
     // Advertise a connectable address: the primary non-loopback IPv4 if available,
     // falling back to the bound address. 0.0.0.0 is not reachable by peers.
     let advertise_ip = std::net::IpAddr::V4(
-        local_addr.ip().is_unspecified()
+        local_addr
+            .ip()
+            .is_unspecified()
             .then(primary_ipv4)
             .flatten()
             .unwrap_or_else(|| match local_addr.ip() {
                 std::net::IpAddr::V4(v4) => v4,
-                std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().unwrap_or(std::net::Ipv4Addr::LOCALHOST),
+                std::net::IpAddr::V6(v6) => {
+                    v6.to_ipv4_mapped().unwrap_or(std::net::Ipv4Addr::LOCALHOST)
+                }
             }),
     );
     let listen_address = format!("ws://{}:{}", advertise_ip, local_addr.port());
@@ -192,7 +190,7 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
 
     // Calculate key for addr_record: "addr:{null_id}"
     let addr_key = format!("addr:{}", REFLECTOR_NULL_ID);
-    let value_b64 = base64_standard.encode(listen_address.to_string());
+    let value_b64 = base64_standard.encode(listen_address);
     let salt = uuid_hex();
     // Monotonic seq (timestamp) so re-registration after a restart updates the
     // record instead of being rejected as a stale (duplicate) seq=0 put.
@@ -203,27 +201,34 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
         // SECURITY FIX (M11): salt PoW with the publisher's own fingerprint so
         // the server (which validates with the same publisher_fp) reproduces
         // the identical Argon2id salt.
-        let pow_data = format!("{}|{}|{}|{}", &addr_key, &value_b64, &salt, seq);
+        let pow_data = format!("{}|{}|{}|{}", addr_key, value_b64, salt, seq);
         tokio::task::spawn_blocking(move || {
-            add_dht_core::pow_solve(&pow_data, add_protocol::constants::ADDR_POW_DIFFICULTY, 10_000_000, REFLECTOR_FINGERPRINT.as_bytes())
-        }).await.map_err(|e| anyhow!("PoW task error: {}", e))?
-            .map_err(|e| anyhow!("PoW solve error: {}", e))?
-            .ok_or_else(|| anyhow!("Could not solve PoW in time"))?
+            add_dht_core::pow_solve(
+                &pow_data,
+                add_protocol::constants::ADDR_POW_DIFFICULTY,
+                10_000_000,
+                REFLECTOR_FINGERPRINT.as_bytes(),
+            )
+        })
+        .await
+        .map_err(|e| anyhow!("PoW task error: {}", e))?
+        .map_err(|e| anyhow!("PoW solve error: {}", e))?
+        .ok_or_else(|| anyhow!("Could not solve PoW in time"))?
     };
 
     // Sign the DHT put request with ML-DSA-87
-    let mut reflector_vk_b64: Option<String> = None;
+    let mut reflector_vk_b64: Option<String>;
     let sign_data = format!("{}|{}|{}|{}|{}", addr_key, value_b64, salt, seq, pow_nonce);
     let sig = {
-        use add_crypto_pq::{sign_ml_dsa87, MlDsa87SigningKey};
+        use add_crypto_pq::{MlDsa87SigningKey, sign_ml_dsa87};
         use base64::Engine as _;
         use base64::engine::general_purpose::STANDARD as base64_standard;
-        use ml_dsa::KeyInit;
         use ml_dsa::KeyExport;
-        use ml_dsa::Keypair as _;
+        use ml_dsa::KeyInit;
 
         // Load ML-DSA-87 private key for DHT registration
-        let sk_bytes = base64_standard.decode(REFLECTOR_PRIVATE_KEY)
+        let sk_bytes = base64_standard
+            .decode(REFLECTOR_PRIVATE_KEY)
             .map_err(|e| anyhow!("Failed to decode private key: {}", e))?;
         let sk = MlDsa87SigningKey::new_from_slice(&sk_bytes)
             .map_err(|e| anyhow!("Failed to load ML-DSA-87 private key: {}", e))?;
@@ -232,9 +237,9 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
         // Expose the verifying key so the bootstrap can verify without a
         // pre-populated key cache (mirrors the client's dht_register).
         reflector_vk_b64 = Some(vk_b64);
-        let sig = sign_ml_dsa87(sign_data.as_bytes(), &sk)
-            .map_err(|e| anyhow!("ML-DSA-87 sign failed: {}", e))?;
-        sig
+
+        sign_ml_dsa87(sign_data.as_bytes(), &sk)
+            .map_err(|e| anyhow!("ML-DSA-87 sign failed: {}", e))?
     };
 
     // Create dht-put message with proper publisher_fp for signature verification
@@ -249,26 +254,36 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
             m.insert("value".to_string(), serde_json::Value::String(value_b64));
             m.insert("salt".to_string(), serde_json::Value::String(salt));
             m.insert("seq".to_string(), serde_json::Value::Number(seq.into()));
-            m.insert("nonce".to_string(), serde_json::Value::Number(pow_nonce.into()));
-            m.insert("publisher_fp".to_string(), serde_json::Value::String(REFLECTOR_FINGERPRINT.to_string()));
+            m.insert(
+                "nonce".to_string(),
+                serde_json::Value::Number(pow_nonce.into()),
+            );
+            m.insert(
+                "publisher_fp".to_string(),
+                serde_json::Value::String(REFLECTOR_FINGERPRINT.to_string()),
+            );
             if let Some(vk) = reflector_vk_b64.take() {
-                m.insert("publisher_verifying_key".to_string(), serde_json::Value::String(vk));
+                m.insert(
+                    "publisher_verifying_key".to_string(),
+                    serde_json::Value::String(vk),
+                );
             }
             serde_json::Value::Object(m)
         },
     };
 
-    ws_tx.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&req)?.into())).await?;
+    ws_tx
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::to_string(&req)?.into(),
+        ))
+        .await?;
     info!("Sent dht-put registration to {}", bootstrap_url);
 
     Ok(())
 }
 
 /// Handle incoming P2P connection - echo messages back
-async fn handle_connection(
-    stream: tokio::net::TcpStream,
-    config: BotConfig,
-) -> Result<()> {
+async fn handle_connection(stream: tokio::net::TcpStream, config: BotConfig) -> Result<()> {
     use tokio_tungstenite::tungstenite::Message;
 
     let ws_stream = tokio_tungstenite::accept_async(stream).await?;
@@ -282,17 +297,62 @@ async fn handle_connection(
             return Err(anyhow!("expected p2p-hello"));
         }
 
-        let peer_fp = hello.get("public_key").and_then(|k| k.as_str()).unwrap_or("unknown");
+        let peer_fp = hello
+            .get("public_key")
+            .and_then(|k| k.as_str())
+            .unwrap_or("unknown");
         debug!("P2P hello from {}", peer_fp);
 
-        // Send hello-ack
-        let ack = serde_json::json!({
-            "type": "p2p-hello-ack",
-            "public_key": REFLECTOR_FINGERPRINT,
-            "nonce": 1,
-            "pow_bits": 16,
-        });
-        ws_tx.send(Message::Text(ack.to_string().into())).await?;
+        // Send hello-ack (signed, mirroring the client handshake C3 fix).
+        // The client requires a non-empty `sig` over `p2p-hello-ack:{payload}`
+        // verified against the verifying key published in `sender_verifying_key`.
+        let mut ack = add_protocol::envelope::WireEnvelope {
+            msg_type: "p2p-hello-ack".to_string(),
+            payload: serde_json::json!({
+                "public_key": REFLECTOR_FINGERPRINT,
+                "nonce": 1,
+                "pow_bits": 16,
+                "server_challenge": uuid_hex(),
+                "kyber_enc_key": "",
+                "braid": false,
+            }),
+            msg_id: uuid_hex(),
+            ts: chrono::Utc::now().timestamp() as f64,
+            sig: String::new(),
+        };
+        // Generate an ephemeral ML-KEM-1024 keypair so the client can do a real
+        // KEM encapsulation (the reflector is an echo bot: it never decapsulates;
+        // it simply bounces the sealed ciphertext back for a latency/loopback test).
+        let kyber_enc_b64 = {
+            let kp = add_crypto::kyber::KyberKeypair::generate()
+                .map_err(|e| anyhow!("reflector kyber gen failed: {}", e))?;
+            add_crypto::kyber::encode_enc_key(&kp.enc)
+        };
+        ack.payload["kyber_enc_key"] = serde_json::Value::String(kyber_enc_b64);
+        let ack_sig_data = format!("p2p-hello-ack:{}\n", ack.payload);
+        let sig = {
+            use add_crypto_pq::MlDsa87SigningKey;
+            use base64::Engine as _;
+            use base64::engine::general_purpose::STANDARD as base64_standard;
+            use ml_dsa::KeyExport;
+            use ml_dsa::KeyInit;
+
+            let vk_bytes = base64_standard
+                .decode(REFLECTOR_PRIVATE_KEY)
+                .map_err(|e| anyhow!("Failed to decode private key: {}", e))?;
+            let sk = MlDsa87SigningKey::new_from_slice(&vk_bytes)
+                .map_err(|e| anyhow!("Failed to load ML-DSA-87 private key: {}", e))?;
+            let vk = ml_dsa::Keypair::verifying_key(&sk).clone();
+            let vk_b64 = base64_standard.encode(vk.to_bytes());
+            ack.payload["sender_verifying_key"] = serde_json::Value::String(vk_b64.clone());
+            add_dht_core::crypto_helpers::cache_verifying_key(REFLECTOR_FINGERPRINT, &vk);
+            add_dht_core::crypto_helpers::sign_data(&ack_sig_data, &sk)
+                .map_err(|e| anyhow!("hello-ack sign failed: {}", e))?
+        };
+        ack.sig = sig;
+        ws_tx
+            .send(Message::Text(serde_json::to_string(&ack)?.into()))
+            .await?;
 
         // Read message and echo back
         if let Some(Ok(Message::Text(msg_text))) = ws_rx.next().await {
@@ -309,14 +369,18 @@ async fn handle_connection(
                     "ciphertext": echoed,
                     "recipient": peer_fp,
                 });
-                ws_tx.send(Message::Text(echo_msg.to_string().into())).await?;
+                ws_tx
+                    .send(Message::Text(echo_msg.to_string().into()))
+                    .await?;
 
                 // Send ack
                 let ack_msg = serde_json::json!({
                     "type": "p2p-ack",
                     "seq": 1,
                 });
-                ws_tx.send(Message::Text(ack_msg.to_string().into())).await?;
+                ws_tx
+                    .send(Message::Text(ack_msg.to_string().into()))
+                    .await?;
 
                 // Send read receipt
                 let receipt_msg = serde_json::json!({
@@ -325,7 +389,9 @@ async fn handle_connection(
                     "received_at": chrono::Utc::now().timestamp() as f64,
                     "seq": 1,
                 });
-                ws_tx.send(Message::Text(receipt_msg.to_string().into())).await?;
+                ws_tx
+                    .send(Message::Text(receipt_msg.to_string().into()))
+                    .await?;
             }
         }
     }
@@ -347,7 +413,6 @@ fn uuid_hex() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::{SinkExt as _, StreamExt as _};
     use tokio_tungstenite::tungstenite::Message;
 
     /// End-to-end echo test against handle_connection over a real TCP socket.
@@ -384,9 +449,9 @@ mod tests {
         let ack = ws.next().await.unwrap().unwrap();
         let ack: serde_json::Value = serde_json::from_str(ack.to_text().unwrap()).unwrap();
         assert_eq!(ack["type"], "p2p-hello-ack");
-        assert_eq!(ack["public_key"], REFLECTOR_FINGERPRINT);
-        assert_eq!(ack["nonce"], 1);
-        assert_eq!(ack["pow_bits"], 16);
+        assert_eq!(ack["payload"]["public_key"], REFLECTOR_FINGERPRINT);
+        assert_eq!(ack["payload"]["nonce"], 1);
+        assert_eq!(ack["payload"]["pow_bits"], 16);
 
         // 3) send a message
         let plaintext = "hello-world";
@@ -409,15 +474,13 @@ mod tests {
 
         // 5) p2p-ack
         let p2p_ack = ws.next().await.unwrap().unwrap();
-        let p2p_ack: serde_json::Value =
-            serde_json::from_str(p2p_ack.to_text().unwrap()).unwrap();
+        let p2p_ack: serde_json::Value = serde_json::from_str(p2p_ack.to_text().unwrap()).unwrap();
         assert_eq!(p2p_ack["type"], "p2p-ack");
         assert_eq!(p2p_ack["seq"], 1);
 
         // 6) p2p-receipt
         let receipt = ws.next().await.unwrap().unwrap();
-        let receipt: serde_json::Value =
-            serde_json::from_str(receipt.to_text().unwrap()).unwrap();
+        let receipt: serde_json::Value = serde_json::from_str(receipt.to_text().unwrap()).unwrap();
         assert_eq!(receipt["type"], "p2p-receipt");
         assert_eq!(receipt["msg_hash"], sha256_hex(plaintext));
         assert_eq!(receipt["seq"], 1);

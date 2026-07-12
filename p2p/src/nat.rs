@@ -13,7 +13,7 @@
 use std::net::SocketAddr;
 
 use rand::Rng;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 use crate::P2pError;
 
@@ -92,9 +92,7 @@ impl NatManager {
                 }
             }
         }
-        Err(P2pError::Nat(
-            "All STUN servers unreachable".to_string(),
-        ))
+        Err(P2pError::Nat("All STUN servers unreachable".to_string()))
     }
 
     /// Query a single STUN server.
@@ -114,9 +112,7 @@ impl NatManager {
         // is dropped before any .await below (keeps the future Send for spawn).
         {
             let mut rng = rand::thread_rng();
-            for i in 8..20 {
-                request[i] = rng.r#gen();
-            }
+            request[8..20].iter_mut().for_each(|b| *b = rng.r#gen());
         }
 
         // Send via UDP
@@ -157,7 +153,8 @@ impl NatManager {
         let mut offset = 20;
         while offset + 4 <= response.len() {
             let attr_type = u16::from_be_bytes([response[offset], response[offset + 1]]);
-            let attr_len = u16::from_be_bytes([response[offset + 2], response[offset + 3]]) as usize;
+            let attr_len =
+                u16::from_be_bytes([response[offset + 2], response[offset + 3]]) as usize;
 
             if attr_type == 0x0020 {
                 // XOR-MAPPED-ADDRESS
@@ -194,7 +191,9 @@ impl NatManager {
             offset += 4 + padded_len;
         }
 
-        Err(P2pError::Nat("No XOR-MAPPED-ADDRESS in STUN response".to_string()))
+        Err(P2pError::Nat(
+            "No XOR-MAPPED-ADDRESS in STUN response".to_string(),
+        ))
     }
 
     /// Detect NAT type by querying multiple STUN servers.
@@ -214,7 +213,9 @@ impl NatManager {
         } else {
             // Check if we get the same mapping from different servers
             let first = &results[0];
-            let same_mapping = results.iter().all(|r| r.public_ip == first.public_ip && r.public_port == first.public_port);
+            let same_mapping = results
+                .iter()
+                .all(|r| r.public_ip == first.public_ip && r.public_port == first.public_port);
 
             self.nat_type = if same_mapping {
                 NatType::FullCone

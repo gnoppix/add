@@ -8,11 +8,12 @@
 // You can use the code for free if your company or organisation doesn't have more than 2 people.
 //-------------------------------------------------------------------------------
 
+use add_crypto_pq::{
+    MlDsa87Signature, MlDsa87VerifyingKey, sign as sign_ml_dsa87, verify as verify_ml_dsa87,
+};
 use base64::Engine;
 use hmac::Hmac;
 use ml_dsa;
-use add_crypto_pq::{MlDsa87VerifyingKey, verify as verify_ml_dsa87, sign as sign_ml_dsa87, MlDsa87Signature, PqError, MlDsa87SigningKey};
-use ml_dsa::SignatureEncoding;
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -26,16 +27,23 @@ const CERT_CACHE_MAX_ENTRIES: usize = 1000;
 
 /// In-memory verifying key cache: fingerprint -> (verifying key, last access time).
 /// Populated on first sight (TOFU) when publishers include their verifying key.
-static VERIFYING_KEY_CACHE: RwLock<Option<HashMap<String, (MlDsa87VerifyingKey, Instant)>>> = RwLock::new(None);
+static VERIFYING_KEY_CACHE: RwLock<Option<HashMap<String, (MlDsa87VerifyingKey, Instant)>>> =
+    RwLock::new(None);
 
 /// Get or initialize the verifying key cache (read guard).
-fn verifying_key_cache_read() -> std::sync::RwLockReadGuard<'static, Option<HashMap<String, (MlDsa87VerifyingKey, Instant)>>> {
-    VERIFYING_KEY_CACHE.read().expect("verifying key cache lock poisoned")
+fn verifying_key_cache_read()
+-> std::sync::RwLockReadGuard<'static, Option<HashMap<String, (MlDsa87VerifyingKey, Instant)>>> {
+    VERIFYING_KEY_CACHE
+        .read()
+        .expect("verifying key cache lock poisoned")
 }
 
 /// Get or initialize the verifying key cache (write guard).
-fn verifying_key_cache_write() -> std::sync::RwLockWriteGuard<'static, Option<HashMap<String, (MlDsa87VerifyingKey, Instant)>>> {
-    VERIFYING_KEY_CACHE.write().expect("verifying key cache lock poisoned")
+fn verifying_key_cache_write()
+-> std::sync::RwLockWriteGuard<'static, Option<HashMap<String, (MlDsa87VerifyingKey, Instant)>>> {
+    VERIFYING_KEY_CACHE
+        .write()
+        .expect("verifying key cache lock poisoned")
 }
 
 /// Store an ML-DSA-87 verifying key in the cache for the given fingerprint.
@@ -52,10 +60,13 @@ pub fn cache_verifying_key(fingerprint: &str, vk: &MlDsa87VerifyingKey) {
     cache.insert(key.clone(), (vk.clone(), Instant::now()));
 
     // SECURITY FIX (H10): Evict LRU entry if over capacity
-    if cache.len() > CERT_CACHE_MAX_ENTRIES {
-        if let Some(lru_key) = cache.iter().min_by_key(|(_, (_, ts))| *ts).map(|(k, _)| k.clone()) {
-            cache.remove(&lru_key);
-        }
+    if cache.len() > CERT_CACHE_MAX_ENTRIES
+        && let Some(lru_key) = cache
+            .iter()
+            .min_by_key(|(_, (_, ts))| *ts)
+            .map(|(k, _)| k.clone())
+    {
+        cache.remove(&lru_key);
     }
 }
 
@@ -66,21 +77,21 @@ pub fn get_cached_verifying_key(fingerprint: &str) -> Option<MlDsa87VerifyingKey
     // First try read lock for lookup
     {
         let guard = verifying_key_cache_read();
-        if let Some(ref cache) = *guard {
-            if let Some((vk, _)) = cache.get(&fingerprint.to_uppercase()) {
-                let vk = vk.clone();
-                drop(guard);
-                // Update access time with write lock
+        if let Some(ref cache) = *guard
+            && let Some((vk, _)) = cache.get(&fingerprint.to_uppercase())
+        {
+            let vk = vk.clone();
+            drop(guard);
+            // Update access time with write lock
+            {
+                let mut write_guard = verifying_key_cache_write();
+                if let Some(ref mut cache) = *write_guard
+                    && let Some(entry) = cache.get_mut(&fingerprint.to_uppercase())
                 {
-                    let mut write_guard = verifying_key_cache_write();
-                    if let Some(ref mut cache) = *write_guard {
-                        if let Some(entry) = cache.get_mut(&fingerprint.to_uppercase()) {
-                            entry.1 = Instant::now();
-                        }
-                    }
+                    entry.1 = Instant::now();
                 }
-                return Some(vk);
             }
+            return Some(vk);
         }
     }
     None
@@ -124,15 +135,15 @@ pub fn validate_null_id_strict(nid: &str, fingerprint: &str) -> bool {
 ///
 /// This is a one-way mapping. The fingerprint cannot be recovered from the Null ID.
 pub fn compute_null_id(fingerprint: &str) -> String {
-    use blake2::digest::{Update, VariableOutput};
     use blake2::Blake2bVar;
+    use blake2::digest::{Update, VariableOutput};
 
     let mut hasher = Blake2bVar::new(8).expect("blake2b with 8 bytes is valid");
     Update::update(&mut hasher, fingerprint.as_bytes());
     let mut result = [0u8; 8];
     let _ = hasher.finalize_variable(&mut result);
 
-    let b32 = base64::engine::general_purpose::STANDARD.encode(&result);
+    let b32 = base64::engine::general_purpose::STANDARD.encode(result);
     let b32 = b32.trim_end_matches('=');
     let b32: String = b32.chars().take(8).collect();
     // base32 uses A-Z 2-7, which is fine for our format
@@ -151,7 +162,10 @@ pub fn constant_time_compare(a: &str, b: &str) -> bool {
 
 /// Create a base64-encoded ML-DSA-87 signature over `data` using the signing key.
 /// SECURITY: Uses post-quantum ML-DSA-87 (FIPS 204) signatures.
-pub fn sign_data(data: &str, signing_key: &add_crypto_pq::MlDsa87SigningKey) -> Result<String, String> {
+pub fn sign_data(
+    data: &str,
+    signing_key: &add_crypto_pq::MlDsa87SigningKey,
+) -> Result<String, String> {
     let sig = sign_ml_dsa87(data.as_bytes(), signing_key).map_err(|e| e.to_string())?;
     // Encode as EncodedSignature (RTF) so it round-trips through
     // verify_signature's `EncodedSignature::try_from` (matches crypto-pq convention).
@@ -182,7 +196,8 @@ pub fn verify_signature(data: &str, b64_sig: &str, fingerprint: &str) -> bool {
     };
 
     // Decode signature from bytes
-    let enc_sig = match ml_dsa::EncodedSignature::<ml_dsa::MlDsa87>::try_from(sig_bytes.as_slice()) {
+    let enc_sig = match ml_dsa::EncodedSignature::<ml_dsa::MlDsa87>::try_from(sig_bytes.as_slice())
+    {
         Ok(enc) => enc,
         Err(_) => return false,
     };
@@ -209,7 +224,8 @@ pub fn verify_signature_with_verifying_key(
     };
 
     // Decode signature from bytes
-    let enc_sig = match ml_dsa::EncodedSignature::<ml_dsa::MlDsa87>::try_from(sig_bytes.as_slice()) {
+    let enc_sig = match ml_dsa::EncodedSignature::<ml_dsa::MlDsa87>::try_from(sig_bytes.as_slice())
+    {
         Ok(enc) => enc,
         Err(_) => return false,
     };
@@ -227,7 +243,9 @@ mod tests {
 
     #[test]
     fn test_validate_fingerprint() {
-        assert!(validate_fingerprint("AABBCCDDEEFF00112233445566778899AABBCCDD"));
+        assert!(validate_fingerprint(
+            "AABBCCDDEEFF00112233445566778899AABBCCDD"
+        ));
         assert!(validate_fingerprint("AABBCCDDEEFF00112233445566778899"));
         assert!(!validate_fingerprint("not-hex"));
         assert!(!validate_fingerprint("AABB"));

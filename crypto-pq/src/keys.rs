@@ -9,19 +9,12 @@
 //-------------------------------------------------------------------------------
 //! Post-quantum key pair management
 
-use add_crypto::kyber::{
-    MlKem1024EncapsulationKey,
-    MlKem1024DecapsulationKey,
-    MlKem1024Keypair,
-    MlKem1024Ciphertext,
-    MlKem1024SharedSecret,
-};
+use add_crypto::kyber::{MlKem1024DecapsulationKey, MlKem1024EncapsulationKey, MlKem1024Keypair};
 
-use ml_dsa::{MlDsa87, SigningKey as MlDsaSigningKey, VerifyingKey as MlDsaVerifyingKey, 
-             Signature as MlDsaSignature, Signer, Verifier, KeyExport, Keypair, Generate};
-use ml_kem::MlKem1024;
-use rand::rngs::OsRng;
-use rand_core::CryptoRng;
+use ml_dsa::{
+    Generate, KeyExport, Keypair, MlDsa87, Signature as MlDsaSignature,
+    SigningKey as MlDsaSigningKey, VerifyingKey as MlDsaVerifyingKey,
+};
 pub type MlDsa87SigningKey = MlDsaSigningKey<MlDsa87>;
 pub type MlDsa87VerifyingKey = MlDsaVerifyingKey<MlDsa87>;
 pub type MlDsa87Signature = MlDsaSignature<MlDsa87>;
@@ -39,7 +32,7 @@ impl MlDsa87KeyPair {
         let vk = sk.verifying_key().clone();
         Ok(Self { sk, vk })
     }
-    
+
     pub fn from_seed(seed: &[u8; 32]) -> Result<Self, crate::error::PqError> {
         use ml_dsa::Seed;
         let seed = Seed::from(*seed);
@@ -47,15 +40,15 @@ impl MlDsa87KeyPair {
         let vk = sk.verifying_key().clone();
         Ok(Self { sk, vk })
     }
-    
+
     pub fn signing_key(&self) -> &MlDsaSigningKey<MlDsa87> {
         &self.sk
     }
-    
+
     pub fn verifying_key(&self) -> &MlDsaVerifyingKey<MlDsa87> {
         &self.vk
     }
-    
+
     pub fn to_bytes(&self) -> ([u8; 32], Vec<u8>) {
         let sk_seed = self.sk.to_seed();
         let vk_bytes = self.vk.to_bytes().to_vec();
@@ -73,17 +66,20 @@ pub struct MlKem1024KeyPair {
 impl MlKem1024KeyPair {
     pub fn generate() -> Result<Self, crate::error::PqError> {
         let kp = MlKem1024Keypair::generate()?;
-        Ok(Self { sk: kp.dec, pk: kp.enc })
+        Ok(Self {
+            sk: kp.dec,
+            pk: kp.enc,
+        })
     }
-    
+
     pub fn public_key(&self) -> &MlKem1024EncapsulationKey {
         &self.pk
     }
-    
+
     pub fn secret_key(&self) -> &MlKem1024DecapsulationKey {
         &self.sk
     }
-    
+
     pub fn to_bytes(&self) -> (Vec<u8>, Vec<u8>) {
         (self.sk.to_bytes().to_vec(), self.pk.to_bytes().to_vec())
     }

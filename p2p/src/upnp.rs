@@ -45,8 +45,12 @@ pub struct Igd {
 impl Igd {
     /// Discover the first reachable IGD via SSDP and locate its WAN connection service.
     pub async fn discover(internal_ip: Ipv4Addr) -> Result<Self, P2pError> {
-        let sock = UdpSocket::bind("0.0.0.0:0").await.map_err(|e| P2pError::Nat(format!("ssdp bind: {e}")))?;
-        sock.send_to(SSDP_MSEARCH.as_bytes(), SSDP_ADDR).await.map_err(|e| P2pError::Nat(format!("ssdp send: {e}")))?;
+        let sock = UdpSocket::bind("0.0.0.0:0")
+            .await
+            .map_err(|e| P2pError::Nat(format!("ssdp bind: {e}")))?;
+        sock.send_to(SSDP_MSEARCH.as_bytes(), SSDP_ADDR)
+            .await
+            .map_err(|e| P2pError::Nat(format!("ssdp send: {e}")))?;
 
         let mut buf = [0u8; 4096];
         let mut location: Option<String> = None;
@@ -77,7 +81,10 @@ impl Igd {
         let control_url = resolve_url(&location, &control_url);
 
         info!("UPnP: found IGD WAN control at {control_url}");
-        Ok(Self { control_url, internal_ip })
+        Ok(Self {
+            control_url,
+            internal_ip,
+        })
     }
 
     /// Map an external TCP port to our internal listener port. Tries the same port
@@ -97,9 +104,15 @@ impl Igd {
         };
         let mut last_err = None;
         for ext in candidates {
-            match self.soap_add_port_mapping("TCP", ext, self.internal_ip, internal_port, lease_secs).await {
+            match self
+                .soap_add_port_mapping("TCP", ext, self.internal_ip, internal_port, lease_secs)
+                .await
+            {
                 Ok(()) => {
-                    info!("UPnP: mapped external {}:{} -> {}:{}", "?", ext, self.internal_ip, internal_port);
+                    info!(
+                        "UPnP: mapped external {}:{} -> {}:{}",
+                        "?", ext, self.internal_ip, internal_port
+                    );
                     return Ok(ext);
                 }
                 Err(e) => {
@@ -199,7 +212,10 @@ impl Igd {
 fn soap_action(body: &str) -> &str {
     // The action name is the first <u:Name ...> tag.
     let start = body.find("<u:").map(|i| i + 3).unwrap_or(0);
-    let end = body[start..].find(' ').map(|i| start + i).unwrap_or(body.len());
+    let end = body[start..]
+        .find(' ')
+        .map(|i| start + i)
+        .unwrap_or(body.len());
     &body[start..end]
 }
 
@@ -257,12 +273,23 @@ async fn http_request(url: &str, req: &str) -> Result<String, P2pError> {
 }
 
 fn url_host(url: &str) -> String {
-    let without_scheme = url.trim_start_matches("http://").trim_start_matches("https://");
-    without_scheme.split('/').next().unwrap_or("").split(':').next().unwrap_or("").to_string()
+    let without_scheme = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+    without_scheme
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_string()
 }
 
 fn url_port(url: &str) -> u16 {
-    let without_scheme = url.trim_start_matches("http://").trim_start_matches("https://");
+    let without_scheme = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
     let authority = without_scheme.split('/').next().unwrap_or("");
     if let Some(idx) = authority.rfind(':') {
         authority[idx + 1..].parse().unwrap_or(80)
@@ -272,10 +299,16 @@ fn url_port(url: &str) -> u16 {
 }
 
 fn url_path(url: &str) -> String {
-    let without_scheme = url.trim_start_matches("http://").trim_start_matches("https://");
+    let without_scheme = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
     let authority = without_scheme.split('/').next().unwrap_or("");
     let path = &without_scheme[authority.len()..];
-    if path.is_empty() { "/".to_string() } else { path.to_string() }
+    if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
+    }
 }
 
 fn resolve_url(base: &str, relative: &str) -> String {
@@ -283,9 +316,18 @@ fn resolve_url(base: &str, relative: &str) -> String {
         return relative.to_string();
     }
     // Resolve against base authority.
-    let base_no_scheme = base.trim_start_matches("http://").trim_start_matches("https://");
+    let base_no_scheme = base
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
     let authority = base_no_scheme.split('/').next().unwrap_or("");
-    format!("http://{authority}{}", if relative.starts_with('/') { relative.to_string() } else { format!("/{relative}") })
+    format!(
+        "http://{authority}{}",
+        if relative.starts_with('/') {
+            relative.to_string()
+        } else {
+            format!("/{relative}")
+        }
+    )
 }
 
 /// Extract the first WANIPConnection / WANPPPConnection controlURL from a device

@@ -11,16 +11,12 @@
 //! Re-export from add-crypto
 
 pub use add_crypto::kyber::{
-    MlKem1024EncapsulationKey,
-    MlKem1024DecapsulationKey,
-    MlKem1024Keypair,
-    MlKem1024Ciphertext,
+    MlKem1024Ciphertext, MlKem1024DecapsulationKey, MlKem1024EncapsulationKey, MlKem1024Keypair,
     MlKem1024SharedSecret,
 };
 
-use ml_kem::Encapsulate;
 use ml_kem::Decapsulate;
-use ml_kem::MlKem1024;
+use ml_kem::Encapsulate;
 
 /// Encapsulate with ML-KEM-1024 (for post-quantum key exchange)
 pub fn encapsulate(

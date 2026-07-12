@@ -132,7 +132,7 @@ impl PirClient {
         // authentication in this PIR scheme)
         let mut hasher = Sha256::new();
         hasher.update(b"pir-ephemeral-pk-v1");
-        hasher.update(&secret);
+        hasher.update(secret);
         public.copy_from_slice(&hasher.finalize());
 
         Self {
@@ -172,7 +172,7 @@ impl PirClient {
     /// the desired entry, then scan for the fingerprint.
     pub fn process_response(
         &self,
-        response: & PirResponse,
+        response: &PirResponse,
         xor_mask: &[u8],
         target_hash: &[u8; 32],
     ) -> Result<Option<PirContactEntry>, CryptoError> {
@@ -186,9 +186,7 @@ impl PirClient {
             let mut entry_hash = [0u8; 32];
             entry_hash.copy_from_slice(&entry_bytes[..32]);
             if entry_hash == *target_hash {
-                let entry = PirContactEntry::from_bytes(
-                    entry_bytes.as_ref().try_into().unwrap(),
-                );
+                let entry = PirContactEntry::from_bytes(entry_bytes.as_ref().try_into().unwrap());
                 return Ok(Some(entry));
             }
         }
@@ -244,14 +242,18 @@ impl PirRegistry {
     }
 
     /// Add an entry to a bin
-    pub fn add_entry(&mut self, bin_index: u32, entry: &PirContactEntry) -> Result<(), CryptoError> {
+    pub fn add_entry(
+        &mut self,
+        bin_index: u32,
+        entry: &PirContactEntry,
+    ) -> Result<(), CryptoError> {
         let bin = self
             .bins
             .entry(bin_index)
             .or_insert_with(|| vec![0u8; PIR_BIN_SIZE]);
 
         // Find an empty slot
-        for (_slot_idx, slot) in bin.chunks_mut(PIR_ENTRY_SIZE).enumerate() {
+        for slot in bin.chunks_mut(PIR_ENTRY_SIZE) {
             if slot.iter().all(|&b| b == 0) {
                 slot.copy_from_slice(entry.to_bytes());
                 return Ok(());
@@ -303,7 +305,7 @@ pub fn cuckoo_hash_bins(fingerprint_hash: &[u8; 32], fanout: usize) -> Vec<u32> 
         let mut hasher = Sha256::new();
         hasher.update(b"pir-cuckoo-v1");
         hasher.update(fingerprint_hash);
-        hasher.update(&(i as u32).to_be_bytes());
+        hasher.update((i as u32).to_be_bytes());
         let hash = hasher.finalize();
         let bin_idx = u32::from_be_bytes(hash[0..4].try_into().unwrap());
         bins.push(bin_idx);

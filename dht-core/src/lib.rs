@@ -8,8 +8,8 @@
 // You can use the code for free if your company or organisation doesn't have more than 2 people.
 //-------------------------------------------------------------------------------
 
-pub mod bot_log;
 pub mod bootstrap_verify;
+pub mod bot_log;
 pub mod crypto_helpers;
 pub mod dht_node;
 pub mod pin_cache;
@@ -19,14 +19,19 @@ pub mod types;
 pub mod util;
 
 // Re-exports for convenience
-pub use crypto_helpers::{compute_null_id, verify_signature, verify_signature_with_verifying_key, sign_data, validate_fingerprint, validate_null_id};
-pub use pin_cache::{pin_get, pin_update, pin_verify_address, bootstrap_pin_check};
-pub use bootstrap_verify::{domain_matches, cert_has_trusted_domain, cert_issuer_is_trusted, cert_issuer_name_is_trusted};
+pub use bootstrap_verify::{
+    cert_has_trusted_domain, cert_issuer_is_trusted, cert_issuer_name_is_trusted, domain_matches,
+};
+pub use crypto_helpers::{
+    compute_null_id, sign_data, validate_fingerprint, validate_null_id, verify_signature,
+    verify_signature_with_verifying_key,
+};
+pub use dht_node::DhtNodeRuntime;
 pub use dht_node::get_peer_address;
+pub use pin_cache::{bootstrap_pin_check, pin_get, pin_update, pin_verify_address};
+pub use ratelimit::RateLimiter;
 pub use sqlite_store::DhtStore;
 pub use types::{DhtNode, NodeConfig};
-pub use dht_node::DhtNodeRuntime;
-pub use ratelimit::RateLimiter;
 
 // Re-export constants from add-protocol
 pub use add_protocol::constants;
@@ -36,10 +41,14 @@ pub use add_protocol::pow::{pow_check, pow_solve};
 
 // Re-export envelope types from add-protocol
 pub use add_protocol::envelope::{
-    WireEnvelope, parse_dht_put, parse_dht_get, parse_dht_addr_record, build_dht_found, build_dht_error,
+    WireEnvelope, build_dht_error, build_dht_found, parse_dht_addr_record, parse_dht_get,
+    parse_dht_put,
 };
 
-pub use add_crypto::pir::{PirClient, PirRegistry, PirQueryToken, PirResponse, PirContactEntry, PIR_BIN_SIZE, PIR_ENTRY_SIZE, PIR_CUCKOO_FANOUT};
+pub use add_crypto::pir::{
+    PIR_BIN_SIZE, PIR_CUCKOO_FANOUT, PIR_ENTRY_SIZE, PirClient, PirContactEntry, PirQueryToken,
+    PirRegistry, PirResponse,
+};
 
 use thiserror::Error;
 

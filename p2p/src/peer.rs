@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 use add_protocol::envelope::WireEnvelope;
 
@@ -154,7 +154,11 @@ impl PeerManager {
     /// List all connected peers.
     pub async fn list_peers(&self) -> Vec<PeerInfo> {
         let peers = self.peers.lock().await;
-        peers.values().filter(|p| p.state == PeerState::Connected).cloned().collect()
+        peers
+            .values()
+            .filter(|p| p.state == PeerState::Connected)
+            .cloned()
+            .collect()
     }
 
     /// Queue a message for delivery to a peer.
@@ -182,7 +186,10 @@ impl PeerManager {
     /// Get pending messages for a peer.
     pub async fn drain_pending(&self, peer_id: &str) -> Vec<PendingMessage> {
         let mut pending = self.pending.lock().await;
-        pending.get_mut(peer_id).map(|q| q.drain(..).collect()).unwrap_or_default()
+        pending
+            .get_mut(peer_id)
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// Check if a peer is connected.
@@ -197,7 +204,10 @@ impl PeerManager {
     /// Get count of connected peers.
     pub async fn connected_count(&self) -> usize {
         let peers = self.peers.lock().await;
-        peers.values().filter(|p| p.state == PeerState::Connected).count()
+        peers
+            .values()
+            .filter(|p| p.state == PeerState::Connected)
+            .count()
     }
 
     /// Remove idle peers.

@@ -114,9 +114,16 @@ pub fn build_p2p_hello_signed(
     signature: &str,
     sender_verifying_key: &str,
 ) -> add_protocol::envelope::WireEnvelope {
-    let mut env = build_p2p_hello(public_key_b64, nonce, pow_bits, kyber_enc_key_b64, sealed_identity);
+    let mut env = build_p2p_hello(
+        public_key_b64,
+        nonce,
+        pow_bits,
+        kyber_enc_key_b64,
+        sealed_identity,
+    );
     if !sender_verifying_key.is_empty() {
-        env.payload["sender_verifying_key"] = serde_json::Value::String(sender_verifying_key.to_string());
+        env.payload["sender_verifying_key"] =
+            serde_json::Value::String(sender_verifying_key.to_string());
     }
     env.sig = signature.to_string();
     env
@@ -166,9 +173,16 @@ pub fn build_p2p_hello_ack_signed(
     signature: &str,
     sender_verifying_key: &str,
 ) -> add_protocol::envelope::WireEnvelope {
-    let mut env = build_p2p_hello_ack(public_key_b64, nonce, pow_bits, server_challenge, kyber_enc_key_b64);
+    let mut env = build_p2p_hello_ack(
+        public_key_b64,
+        nonce,
+        pow_bits,
+        server_challenge,
+        kyber_enc_key_b64,
+    );
     if !sender_verifying_key.is_empty() {
-        env.payload["sender_verifying_key"] = serde_json::Value::String(sender_verifying_key.to_string());
+        env.payload["sender_verifying_key"] =
+            serde_json::Value::String(sender_verifying_key.to_string());
     }
     env.sig = signature.to_string();
     env

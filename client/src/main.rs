@@ -21,22 +21,21 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use base64::Engine;
 use clap::Parser;
 use futures::{SinkExt as _, StreamExt as _};
-use hickory_resolver::proto::rr::domain::IntoName;
-use hickory_resolver::TokioResolver;
 use hickory_resolver::Resolver;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+use hickory_resolver::TokioResolver;
+use hickory_resolver::config::ResolverConfig;
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::proto::rr::domain::IntoName;
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Pool;
+use sqlx::sqlite::SqlitePoolOptions;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 use tracing_subscriber::EnvFilter;
-use base64::Engine;
 use zeroize::ZeroizeOnDrop;
-use sha2::Digest;
 
 // ------------------------------------------------------------------ //
 //  Configuration                                                     //
@@ -54,12 +53,12 @@ const DB_KEY_PATH: &str = ".add/db_key.json";
 /// Read receipt sent to relays for cross-relay sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RelayReadReceipt {
-    message_id: String,           // SHA-256 hash of the message payload
-    recipient_nid: String,        // The recipient who read the message
-    recipient_fp: String,         // Fingerprint of the recipient
-    signature: String,            // GPG signature over message_id + recipient_nid + timestamp
-    timestamp: f64,               // Unix timestamp
-    nonce: String,                // Unique nonce for replay protection
+    message_id: String,    // SHA-256 hash of the message payload
+    recipient_nid: String, // The recipient who read the message
+    recipient_fp: String,  // Fingerprint of the recipient
+    signature: String,     // GPG signature over message_id + recipient_nid + timestamp
+    timestamp: f64,        // Unix timestamp
+    nonce: String,         // Unique nonce for replay protection
     /// Recipient's ML-DSA-87 verifying key (base64) — required by the relay to
     /// verify the read-receipt signature (TOFU). Without it the receipt is
     /// rejected and the message stays undelivered (re-fetched → echo loop).
@@ -176,30 +175,30 @@ pub async fn discover_all_servers() -> (String, Vec<String>, Vec<String>) {
         });
 
     // ALL bootstrap servers from SRV (for multi-bootstrap registration) - ADD /ws path
-        let bootstraps_raw = query_all_srv(&resolver, BOOTSTRAP_SRV)
-            .await
-            .unwrap_or_else(|| {
-                tracing::warn!(
-                    "SRV lookup for {} failed, using default bootstrap list",
-                    BOOTSTRAP_SRV
-                );
-                vec![BOOTSTRAP_US, BOOTSTRAP_EU, BOOTSTRAP_ASIA]
-                    .into_iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            });
+    let bootstraps_raw = query_all_srv(&resolver, BOOTSTRAP_SRV)
+        .await
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "SRV lookup for {} failed, using default bootstrap list",
+                BOOTSTRAP_SRV
+            );
+            vec![BOOTSTRAP_US, BOOTSTRAP_EU, BOOTSTRAP_ASIA]
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect()
+        });
 
-        // Add /ws suffix to bootstrap URLs if not present
-        let bootstraps = bootstraps_raw
-            .into_iter()
-            .map(|url| {
-                if url.ends_with("/ws") {
-                    url
-                } else {
-                    format!("{}/ws", url.trim_end_matches('/'))
-                }
-            })
-            .collect();
+    // Add /ws suffix to bootstrap URLs if not present
+    let bootstraps = bootstraps_raw
+        .into_iter()
+        .map(|url| {
+            if url.ends_with("/ws") {
+                url
+            } else {
+                format!("{}/ws", url.trim_end_matches('/'))
+            }
+        })
+        .collect();
 
     // ALL relays from SRV - ADD /ws suffix
     let relays_raw = query_all_srv(&resolver, RELAY_SRV)
@@ -232,33 +231,31 @@ pub async fn discover_all_servers() -> (String, Vec<String>, Vec<String>) {
 
 /// Query ALL SRV records (not just the first) and return URLs.
 /// Returns all discovered URLs (sorted by priority/weight).
-async fn query_all_srv<N: IntoName>(
-    resolver: &TokioResolver,
-    name: N,
-) -> Option<Vec<String>> {
+async fn query_all_srv<N: IntoName>(resolver: &TokioResolver, name: N) -> Option<Vec<String>> {
     let response = resolver.srv_lookup(name).await.ok()?;
-    
+
     let records = response.answers();
     if records.is_empty() {
         return None;
     }
-    
+
     let mut srv_records: Vec<_> = records
         .iter()
         .filter_map(|r| r.try_borrow::<hickory_resolver::proto::rr::rdata::SRV>())
         .collect();
-    
+
     if srv_records.is_empty() {
         return None;
     }
-    
+
     // Sort by priority (lower = preferred), then weight (higher = preferred)
     srv_records.sort_by(|a, b| {
-        a.data().priority
+        a.data()
+            .priority
             .cmp(&b.data().priority)
             .then_with(|| b.data().weight.cmp(&a.data().weight))
     });
-    
+
     Some(
         srv_records
             .into_iter()
@@ -275,33 +272,31 @@ async fn query_all_srv<N: IntoName>(
 ///
 /// Records are sorted by priority (ascending), then by weight (descending)
 /// within the same priority group. The first record is selected.
-async fn query_srv<N: IntoName>(
-    resolver: &TokioResolver,
-    name: N,
-) -> Option<String> {
+async fn query_srv<N: IntoName>(resolver: &TokioResolver, name: N) -> Option<String> {
     let response = resolver.srv_lookup(name).await.ok()?;
-    
+
     let records = response.answers();
     if records.is_empty() {
         return None;
     }
-    
+
     let mut srv_records: Vec<_> = records
         .iter()
         .filter_map(|r| r.try_borrow::<hickory_resolver::proto::rr::rdata::SRV>())
         .collect();
-    
+
     if srv_records.is_empty() {
         return None;
     }
-    
+
     // Sort by priority (lower = preferred), then weight (higher = preferred)
     srv_records.sort_by(|a, b| {
-        a.data().priority
+        a.data()
+            .priority
             .cmp(&b.data().priority)
             .then_with(|| b.data().weight.cmp(&a.data().weight))
     });
-    
+
     let r = srv_records.first()?;
     let target = r.data().target.to_string();
     let target = target.trim_end_matches('.');
@@ -413,7 +408,8 @@ impl DbEncryptionKey {
         let nonce_bytes: [u8; 12] = rand::random();
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_bytes())
             .map_err(|e| format!("encryption failed: {}", e))?;
 
         // Prepend nonce to ciphertext
@@ -443,7 +439,8 @@ impl DbEncryptionKey {
         let key = Key::<Aes256Gcm>::from_slice(&self.key);
         let cipher = Aes256Gcm::new(key);
 
-        let plaintext = cipher.decrypt(nonce, ciphertext)
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
             .map_err(|e| format!("decryption failed: {}", e))?;
 
         Ok(String::from_utf8(plaintext)?)
@@ -505,7 +502,9 @@ fn load_cert() -> Result<sequoia_openpgp::Cert, Box<dyn std::error::Error>> {
     let armored = std::fs::read_to_string(&plain_path)?;
     // Detect corrupt binary data (old bug: serialize wrote binary to .asc file)
     let bytes = armored.as_bytes();
-    if bytes.len() > 0 && (bytes[0] == 0xEF && bytes.get(1..3) == Some(&[0xBF, 0xBD]) || bytes[0] == 0x00) {
+    if !bytes.is_empty()
+        && (bytes[0] == 0xEF && bytes.get(1..3) == Some(&[0xBF, 0xBD]) || bytes[0] == 0x00)
+    {
         return Err(
             "corrupt identity file detected — run 'rm -rf ~/.add/gnupg && add init' to recreate"
                 .into(),
@@ -517,7 +516,10 @@ fn load_cert() -> Result<sequoia_openpgp::Cert, Box<dyn std::error::Error>> {
 
 /// Encrypt the GPG secret key cert using age passphrase encryption.
 /// Output format: age ASCII-armored (-----BEGIN AGE ENCRYPTED FILE-----).
-fn encrypt_cert_armored(plaintext: &str, password: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn encrypt_cert_armored(
+    plaintext: &str,
+    password: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     use age::secrecy::SecretString;
     use std::io::Write;
 
@@ -525,45 +527,51 @@ fn encrypt_cert_armored(plaintext: &str, password: &str) -> Result<String, Box<d
     let encryptor = age::Encryptor::with_user_passphrase(passphrase);
     let mut buf = Vec::new();
     {
-        let mut armored_writer = age::armor::ArmoredWriter::wrap_output(&mut buf, age::armor::Format::AsciiArmor)
-            .map_err(|e| format!("age armor wrap: {}", e))?;
-        let mut writer = encryptor.wrap_output(&mut armored_writer)
+        let mut armored_writer =
+            age::armor::ArmoredWriter::wrap_output(&mut buf, age::armor::Format::AsciiArmor)
+                .map_err(|e| format!("age armor wrap: {}", e))?;
+        let mut writer = encryptor
+            .wrap_output(&mut armored_writer)
             .map_err(|e| format!("age encrypt: {}", e))?;
-        writer.write_all(plaintext.as_bytes())
+        writer
+            .write_all(plaintext.as_bytes())
             .map_err(|e| format!("age write: {}", e))?;
-        writer.finish()
-            .map_err(|e| format!("age finish: {}", e))?;
-        armored_writer.finish()
+        writer.finish().map_err(|e| format!("age finish: {}", e))?;
+        armored_writer
+            .finish()
             .map_err(|e| format!("age armor finish: {}", e))?;
     }
     String::from_utf8(buf).map_err(|e| format!("age output utf8: {}", e).into())
 }
 
 /// Decrypt an age-encrypted cert.
-fn decrypt_cert_armored(armored: &str, password: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn decrypt_cert_armored(
+    armored: &str,
+    password: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     use age::secrecy::SecretString;
 
     let passphrase = SecretString::from(password.to_string());
     let identity = age::scrypt::Identity::new(passphrase);
-    let plaintext = age::decrypt(&identity, armored.as_bytes())
-        .map_err(|e| format!("age decrypt: {}", e))?;
-    String::from_utf8(plaintext)
-        .map_err(|e| format!("decrypted cert utf8: {}", e).into())
+    let plaintext =
+        age::decrypt(&identity, armored.as_bytes()).map_err(|e| format!("age decrypt: {}", e))?;
+    String::from_utf8(plaintext).map_err(|e| format!("decrypted cert utf8: {}", e).into())
 }
 
 /// Sign data with our ML-DSA-87 key for P2P/relay authentication.
 fn sign_for_transport(data: &str) -> Result<String, String> {
-    let identity = Identity::load()
-        .map_err(|e| format!("Failed to load identity: {}", e))?;
-    let sk_b64 = identity.ml_dsa87_signing_key.ok_or("ML-DSA-87 signing key not found - re-run 'add init'")?;
-    let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)
+    let identity = Identity::load().map_err(|e| format!("Failed to load identity: {}", e))?;
+    let sk_b64 = identity
+        .ml_dsa87_signing_key
+        .ok_or("ML-DSA-87 signing key not found - re-run 'add init'")?;
+    let sk_bytes = base64::engine::general_purpose::STANDARD
+        .decode(sk_b64)
         .map_err(|e| format!("Failed to decode signing key: {}", e))?;
     // Reconstruct the signing key from bytes
     use ml_dsa::KeyInit;
     let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
         .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
-    add_dht_core::sign_data(data, &sk)
-        .map_err(|e| format!("sign failed: {}", e))
+    add_dht_core::sign_data(data, &sk).map_err(|e| format!("sign failed: {}", e))
 }
 
 /// Return this identity's ML-DSA-87 verifying key as base64, for embedding in
@@ -571,23 +579,30 @@ fn sign_for_transport(data: &str) -> Result<String, String> {
 /// round-trip (the bootstrap `dht-found` response is sanitized and omits it).
 fn my_verifying_key_b64() -> Result<String, String> {
     let identity = Identity::load().map_err(|e| format!("load identity: {}", e))?;
-    let sk_b64 = identity.ml_dsa87_signing_key.ok_or("ML-DSA-87 signing key not found")?;
-    let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64).map_err(|e| format!("decode: {}", e))?;
-    use ml_dsa::{KeyInit, Keypair, KeyExport};
-    let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes).map_err(|e| format!("recon: {}", e))?;
+    let sk_b64 = identity
+        .ml_dsa87_signing_key
+        .ok_or("ML-DSA-87 signing key not found")?;
+    let sk_bytes = base64::engine::general_purpose::STANDARD
+        .decode(sk_b64)
+        .map_err(|e| format!("decode: {}", e))?;
+    use ml_dsa::{KeyExport, KeyInit, Keypair};
+    let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
+        .map_err(|e| format!("recon: {}", e))?;
     let vk = Keypair::verifying_key(&sk).clone();
     Ok(base64::engine::general_purpose::STANDARD.encode(vk.to_bytes()))
 }
 
 /// Load armored cert string for TOFU verification at relay.
+#[allow(dead_code)]
 fn load_armored_cert() -> Result<String, Box<dyn std::error::Error>> {
     use sequoia_openpgp::serialize::Serialize;
     let cert = load_cert()?;
     let mut buf = Vec::new();
-    cert.as_tsk().armored().serialize(&mut buf)
+    cert.as_tsk()
+        .armored()
+        .serialize(&mut buf)
         .map_err(|e| format!("cert armored serialize failed: {}", e))?;
-    String::from_utf8(buf)
-        .map_err(|e| format!("cert armored utf8 error: {}", e).into())
+    String::from_utf8(buf).map_err(|e| format!("cert armored utf8 error: {}", e).into())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -621,7 +636,7 @@ impl Identity {
         }
         Ok(())
     }
-    
+
     /// Get the stored certificate for signing
     fn cert(&self) -> Result<sequoia_openpgp::Cert, Box<dyn std::error::Error>> {
         load_cert()
@@ -691,7 +706,10 @@ fn save_aliases(aliases: &Aliases) -> Result<(), Box<dyn std::error::Error>> {
 /// If the input matches a known alias, return the mapped null_id.
 /// Otherwise return the input unchanged (assumed to be a raw null_id).
 fn resolve_recipient(input: &str, aliases: &Aliases) -> String {
-    aliases.get(input).cloned().unwrap_or_else(|| input.to_string())
+    aliases
+        .get(input)
+        .cloned()
+        .unwrap_or_else(|| input.to_string())
 }
 
 // ------------------------------------------------------------------ //
@@ -730,7 +748,9 @@ fn load_delivery_secrets() -> HashMap<String, String> {
     serde_json::from_str(&content).unwrap_or_default()
 }
 
-fn save_delivery_secrets(secrets: &HashMap<String, String>) -> Result<(), Box<dyn std::error::Error>> {
+fn save_delivery_secrets(
+    secrets: &HashMap<String, String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let path = home_dir().join(DELIVERY_SECRETS_PATH);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -747,7 +767,9 @@ fn save_delivery_secrets(secrets: &HashMap<String, String>) -> Result<(), Box<dy
 /// Get or create a delivery master secret for a contact.
 /// The secret is stored as hex on disk; in production it should be derived
 /// from the Kyber shared secret during contact initialization.
-fn get_or_create_delivery_secret(contact_nid: &str) -> Result<add_crypto::delivery_tokens::DeliveryMasterSecret, Box<dyn std::error::Error>> {
+fn get_or_create_delivery_secret(
+    contact_nid: &str,
+) -> Result<add_crypto::delivery_tokens::DeliveryMasterSecret, Box<dyn std::error::Error>> {
     let mut secrets = load_delivery_secrets();
 
     if let Some(hex) = secrets.get(contact_nid) {
@@ -762,7 +784,7 @@ fn get_or_create_delivery_secret(contact_nid: &str) -> Result<add_crypto::delive
     } else {
         let master = add_crypto::delivery_tokens::DeliveryMasterSecret::generate();
         let bytes = *master.as_bytes();
-        secrets.insert(contact_nid.to_string(), hex::encode(&bytes));
+        secrets.insert(contact_nid.to_string(), hex::encode(bytes));
         save_delivery_secrets(&secrets)?;
         Ok(master)
     }
@@ -842,7 +864,9 @@ impl PirContactCache {
                 if let Some(entry) = client.process_response(&response, &token.xor_mask, &hash)? {
                     // Extract NID from metadata (bytes 32.. of the entry)
                     let raw = entry.to_bytes();
-                    let nid = String::from_utf8_lossy(&raw[32..]).trim_end_matches('\0').to_string();
+                    let nid = String::from_utf8_lossy(&raw[32..])
+                        .trim_end_matches('\0')
+                        .to_string();
                     if !nid.is_empty() {
                         return Ok(Some(nid));
                     }
@@ -894,7 +918,7 @@ impl MessageStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        
+
         // SECURITY FIX (HIGH-4): Set restrictive file permissions on database
         // Note: SQLite doesn't respect permissions on newly-created DB, so we set them after connect
         let url = format!("sqlite://{}?mode=rwc", path.display());
@@ -918,16 +942,14 @@ impl MessageStore {
                 status_updated_at TEXT NOT NULL,
                 read_receipt_at TEXT,
                 message_id TEXT NOT NULL
-            )"
+            )",
         )
         .execute(&pool)
         .await?;
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_nid)"
-        )
-        .execute(&pool)
-        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_nid)")
+            .execute(&pool)
+            .await?;
 
         // Message State History Ledger - tracks all state transitions for audit trail
         sqlx::query(
@@ -941,7 +963,7 @@ impl MessageStore {
                 status_updated_at TEXT NOT NULL,
                 transition_reason TEXT,
                 created_at TEXT NOT NULL
-            )"
+            )",
         )
         .execute(&pool)
         .await?;
@@ -962,7 +984,7 @@ impl MessageStore {
                 peer_nid TEXT NOT NULL UNIQUE,
                 session_data TEXT NOT NULL,
                 updated_at TEXT NOT NULL
-            )"
+            )",
         )
         .execute(&pool)
         .await?;
@@ -989,7 +1011,7 @@ impl MessageStore {
                 session_key BLOB NOT NULL,
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL
-            )"
+            )",
         )
         .execute(&pool)
         .await?;
@@ -1030,7 +1052,10 @@ impl MessageStore {
         Ok(result.last_insert_rowid())
     }
 
-    async fn get_messages(&self, limit: i64) -> Result<Vec<StoredMessage>, Box<dyn std::error::Error>> {
+    async fn get_messages(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<StoredMessage>, Box<dyn std::error::Error>> {
         let rows = sqlx::query_as::<_, MessageRow>(
             "SELECT id, from_nid, to_nid, ciphertext, timestamp, delivered, status, status_updated_at, read_receipt_at, message_id
              FROM messages ORDER BY id DESC LIMIT ?"
@@ -1040,12 +1065,15 @@ impl MessageStore {
         .await?;
 
         // Decrypt ciphertext on read
-        Ok(rows.into_iter().filter_map(|r| {
-            match self.db_key.decrypt(&r.ciphertext) {
-                Ok(pt) => Some(StoredMessage::from(r)),
-                Err(_) => None, // Skip corrupted/undecryptable entries
-            }
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                match self.db_key.decrypt(&r.ciphertext) {
+                    Ok(_pt) => Some(StoredMessage::from(r)),
+                    Err(_) => None, // Skip corrupted/undecryptable entries
+                }
+            })
+            .collect())
     }
 
     /// Save or update a DoubleRatchet session for a peer.
@@ -1062,7 +1090,7 @@ impl MessageStore {
              VALUES (?, ?, ?)
              ON CONFLICT(peer_nid) DO UPDATE SET
                 session_data = excluded.session_data,
-                updated_at = excluded.updated_at"
+                updated_at = excluded.updated_at",
         )
         .bind(peer_nid)
         .bind(&encrypted_data)
@@ -1078,23 +1106,19 @@ impl MessageStore {
         &self,
         peer_nid: &str,
     ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT session_data FROM ratchet_sessions WHERE peer_nid = ?"
-        )
-        .bind(peer_nid)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT session_data FROM ratchet_sessions WHERE peer_nid = ?")
+                .bind(peer_nid)
+                .fetch_optional(&self.pool)
+                .await?;
 
-        Ok(row.map(|(data,)| self.db_key.decrypt(&data)).transpose()?)
+        row.map(|(data,)| self.db_key.decrypt(&data)).transpose()
     }
 
     /// Delete a DoubleRatchet session for a peer (so the next send re-bootstraps
     /// via a fresh Kyber encapsulation). Used by the reflector so every bounce is
     /// an independent first-message and the recipient never desyncs.
-    async fn delete_session(
-        &self,
-        peer_nid: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn delete_session(&self, peer_nid: &str) -> Result<(), Box<dyn std::error::Error>> {
         sqlx::query("DELETE FROM ratchet_sessions WHERE peer_nid = ?")
             .bind(peer_nid)
             .execute(&self.pool)
@@ -1103,23 +1127,30 @@ impl MessageStore {
     }
 
     #[allow(dead_code)]
-    async fn get_messages_from(&self, from_nid: &str, limit: i64) -> Result<Vec<StoredMessage>, Box<dyn std::error::Error>> {
+    async fn get_messages_from(
+        &self,
+        from_nid: &str,
+        limit: i64,
+    ) -> Result<Vec<StoredMessage>, Box<dyn std::error::Error>> {
         let rows = sqlx::query_as::<_, MessageRow>(
             "SELECT id, from_nid, to_nid, ciphertext, timestamp, delivered
-             FROM messages WHERE from_nid = ? ORDER BY id DESC LIMIT ?"
+             FROM messages WHERE from_nid = ? ORDER BY id DESC LIMIT ?",
         )
         .bind(from_nid)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().filter_map(|r| {
-                    match self.db_key.decrypt(&r.ciphertext) {
-                        Ok(pt) => Some(StoredMessage::from(r)),
-                        Err(_) => None, // Skip corrupted/undecryptable entries
-                    }
-                }).collect())
-            }
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                match self.db_key.decrypt(&r.ciphertext) {
+                    Ok(_pt) => Some(StoredMessage::from(r)),
+                    Err(_) => None, // Skip corrupted/undecryptable entries
+                }
+            })
+            .collect())
+    }
 
     /// Delete a message by its database ID.
     /// Returns true if a message was found and deleted, false otherwise.
@@ -1130,19 +1161,19 @@ impl MessageStore {
             .await?;
 
         Ok(result.rows_affected() > 0)
-            }
+    }
 
-            /// Update message delivery status by message_id.
-            async fn update_message_status(
-                &self,
-                message_id: &str,
-                status: u8,
-            ) -> Result<bool, Box<dyn std::error::Error>> {
-                let timestamp = chrono::Utc::now().to_rfc3339();
-                let delivered = if status >= 2 { 1 } else { 0 };
+    /// Update message delivery status by message_id.
+    async fn update_message_status(
+        &self,
+        message_id: &str,
+        status: u8,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let delivered = if status >= 2 { 1 } else { 0 };
 
-                // First get the current message info for history
-                let current = sqlx::query_as::<_, MessageRow>(
+        // First get the current message info for history
+        let current = sqlx::query_as::<_, MessageRow>(
                     "SELECT id, from_nid, to_nid, ciphertext, timestamp, delivered, status, status_updated_at, read_receipt_at, message_id
                      FROM messages WHERE message_id = ?"
                 )
@@ -1150,13 +1181,13 @@ impl MessageStore {
                 .fetch_optional(&self.pool)
                 .await?;
 
-                let (from_nid, to_nid, old_status) = if let Some(ref msg) = current {
-                    (msg.from_nid.clone(), msg.to_nid.clone(), msg.status as u8)
-                } else {
-                    return Ok(false);
-                };
+        let (from_nid, to_nid, old_status) = if let Some(ref msg) = current {
+            (msg.from_nid.clone(), msg.to_nid.clone(), msg.status as u8)
+        } else {
+            return Ok(false);
+        };
 
-                let result = sqlx::query(
+        let result = sqlx::query(
                     "UPDATE messages SET status = ?, status_updated_at = ?, delivered = ? WHERE message_id = ?"
                 )
                 .bind(status as i64)
@@ -1166,15 +1197,15 @@ impl MessageStore {
                 .execute(&self.pool)
                 .await?;
 
-                // Record in history ledger
-                if result.rows_affected() > 0 {
-                    let reason = match status {
-                        1 => "relay_ack",
-                        2 => "delivered",
-                        3 => "read_receipt",
-                        _ => "status_change",
-                    };
-                    sqlx::query(
+        // Record in history ledger
+        if result.rows_affected() > 0 {
+            let reason = match status {
+                1 => "relay_ack",
+                2 => "delivered",
+                3 => "read_receipt",
+                _ => "status_change",
+            };
+            sqlx::query(
                         "INSERT INTO message_history (message_id, from_nid, to_nid, old_status, new_status, status_updated_at, transition_reason, created_at)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                     )
@@ -1188,11 +1219,11 @@ impl MessageStore {
                     .bind(&timestamp)
                     .execute(&self.pool)
                     .await?;
-                }
-
-                Ok(result.rows_affected() > 0)
-            }
         }
+
+        Ok(result.rows_affected() > 0)
+    }
+}
 
 #[derive(sqlx::FromRow)]
 struct MessageRow {
@@ -1262,10 +1293,11 @@ fn generate_identity() -> Result<Identity, Box<dyn std::error::Error>> {
     let armored = {
         use sequoia_openpgp::serialize::Serialize;
         let mut buf = Vec::new();
-        cert.as_tsk().armored().serialize(&mut buf)
+        cert.as_tsk()
+            .armored()
+            .serialize(&mut buf)
             .map_err(|e| format!("serialize armored cert: {}", e))?;
-        String::from_utf8(buf)
-            .map_err(|e| format!("armored cert contains invalid UTF-8: {}", e))?
+        String::from_utf8(buf).map_err(|e| format!("armored cert contains invalid UTF-8: {}", e))?
     };
 
     // Prompt for passphrase to protect the GPG secret key
@@ -1310,12 +1342,13 @@ fn generate_identity() -> Result<Identity, Box<dyn std::error::Error>> {
     let hk = hkdf::Hkdf::<Sha256>::new(None, &hash);
     let mut seed = [0u8; 64];
     hk.expand(b"add-sealed-sender-kyber-seed", &mut seed)
-        .map_err(|_| format!("HKDF expand failed"))?;
+        .map_err(|_| "HKDF expand failed".to_string())?;
     let kyber_kp = add_crypto::kyber::KyberKeypair::from_seed(&seed)
         .map_err(|e| format!("kyber keypair from seed: {}", e))?;
     // Load or create encryption key, then encrypt+save the Kyber secret key
     let db_key = DbEncryptionKey::load_or_create_sync();
-    kyber_kp.save(&kyber_path, db_key.key())
+    kyber_kp
+        .save(&kyber_path, db_key.key())
         .map_err(|e| format!("kyber keypair save failed: {}", e))?;
 
     // Print Kyber public key for debugging (can be removed later)
@@ -1325,12 +1358,12 @@ fn generate_identity() -> Result<Identity, Box<dyn std::error::Error>> {
     // Generate ML-DSA-87 keypair for post-quantum signatures
     let (ml_dsa87_sk, ml_dsa87_vk) = add_crypto_pq::generate_keypair()
         .map_err(|e| format!("ML-DSA-87 keypair generation failed: {}", e))?;
-    
+
     // Serialize the signing key
     use ml_dsa::KeyExport;
     let ml_dsa87_sk_bytes = ml_dsa87_sk.to_bytes();
     let ml_dsa87_sk_b64 = base64::engine::general_purpose::STANDARD.encode(ml_dsa87_sk_bytes);
-    
+
     // Also save the verifying key fingerprint for DHT registration
     let ml_dsa87_fp = add_crypto_pq::fingerprint_from_verifying_key(&ml_dsa87_vk);
     println!("ML-DSA-87 fingerprint: {}", ml_dsa87_fp);
@@ -1351,7 +1384,11 @@ fn generate_identity() -> Result<Identity, Box<dyn std::error::Error>> {
 
 /// Connect to the seed DHT node and look up a recipient's address.
 /// This uses the centralized seed DHT model (G4: no Kademlia routing).
-async fn dht_lookup(seed_url: &str, null_id: &str, use_addr_key: bool) -> Result<String, Box<dyn std::error::Error>> {
+async fn dht_lookup(
+    seed_url: &str,
+    null_id: &str,
+    use_addr_key: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
     use add_protocol::envelope::WireEnvelope;
 
     // Address records (P2P listener endpoints for contacts/reflector) are stored
@@ -1368,7 +1405,8 @@ async fn dht_lookup(seed_url: &str, null_id: &str, use_addr_key: bool) -> Result
         .replace("http://", "ws://")
         .replace("https://", "wss://");
 
-    let mut ws = ws_connect(&ws_url).await
+    let mut ws = ws_connect(&ws_url)
+        .await
         .map_err(|e| format!("DHT connect failed: {}", e))?;
 
     // SECURITY FIX (C2): Sign the dht-get request with ML-DSA-87
@@ -1383,7 +1421,10 @@ async fn dht_lookup(seed_url: &str, null_id: &str, use_addr_key: bool) -> Result
         sig: sig.clone(),
         payload: {
             let mut m = serde_json::Map::new();
-            m.insert("key".to_string(), serde_json::Value::String(dht_key.to_string()));
+            m.insert(
+                "key".to_string(),
+                serde_json::Value::String(dht_key.to_string()),
+            );
             serde_json::Value::Object(m)
         },
     };
@@ -1409,10 +1450,7 @@ async fn dht_lookup(seed_url: &str, null_id: &str, use_addr_key: bool) -> Result
 /// Fetch a peer's ML-DSA-87 verifying key from the DHT and cache it for
 /// signature verification. The bootstrap `dht-found` response carries the
 /// publisher's verifying key alongside the value. Returns true if cached.
-async fn fetch_peer_verifying_key(
-    seed_url: &str,
-    peer_fp: &str,
-) -> bool {
+async fn fetch_peer_verifying_key(seed_url: &str, peer_fp: &str) -> bool {
     use add_protocol::envelope::WireEnvelope;
     let null_id = null_id_from_fingerprint(peer_fp);
     let ws_url = seed_url
@@ -1438,21 +1476,21 @@ async fn fetch_peer_verifying_key(
             serde_json::Value::Object(m)
         },
     };
-    if ws.send(Message::Text(serde_json::to_string(&req).unwrap().into())).await.is_err() {
+    if ws
+        .send(Message::Text(serde_json::to_string(&req).unwrap().into()))
+        .await
+        .is_err()
+    {
         return false;
     }
-    if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
-        if let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text) {
-            if let Some(vk_b64) = resp.payload_str("publisher_verifying_key") {
-                if let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(vk_b64) {
-                    if let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes) {
-                        add_dht_core::crypto_helpers::cache_verifying_key(peer_fp, &vk);
-                        return true;
-                    }
-                }
-            } else {
-            }
-        }
+    if let Some(Ok(Message::Text(resp_text))) = ws.next().await
+        && let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text)
+        && let Some(vk_b64) = resp.payload_str("publisher_verifying_key")
+        && let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(vk_b64)
+        && let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes)
+    {
+        add_dht_core::crypto_helpers::cache_verifying_key(peer_fp, &vk);
+        return true;
     }
     false
 }
@@ -1466,7 +1504,8 @@ async fn dht_get(
     // Bootstrap servers use root path, not /ws
     let ws_url = seed_url;
 
-    let mut ws = ws_connect(&ws_url).await
+    let mut ws = ws_connect(ws_url)
+        .await
         .map_err(|e| format!("DHT connect failed: {}", e))?;
 
     // Send dht-get request (no signature needed for query)
@@ -1477,12 +1516,16 @@ async fn dht_get(
         sig: String::new(),
         payload: {
             let mut m = serde_json::Map::new();
-            m.insert("key".to_string(), serde_json::Value::String(null_id.to_string()));
+            m.insert(
+                "key".to_string(),
+                serde_json::Value::String(null_id.to_string()),
+            );
             serde_json::Value::Object(m)
         },
     };
     let req_json = serde_json::to_string(&req)?;
-    ws.send(Message::Text(req_json.into())).await
+    ws.send(Message::Text(req_json.into()))
+        .await
         .map_err(|e| format!("DHT send failed: {}", e))?;
 
     // Read response
@@ -1528,23 +1571,28 @@ async fn dht_register(
             sig: String::new(),
             payload: {
                 let mut m = serde_json::Map::new();
-                m.insert("key".to_string(), serde_json::Value::String(identity.null_id.clone()));
+                m.insert(
+                    "key".to_string(),
+                    serde_json::Value::String(identity.null_id.clone()),
+                );
                 serde_json::Value::Object(m)
             },
         };
-        ws.send(Message::Text(serde_json::to_string(&check_req).unwrap_or_default().into()))
-            .await
-            .map_err(|e| format!("DHT check send failed: {}", e))?;
+        ws.send(Message::Text(
+            serde_json::to_string(&check_req).unwrap_or_default().into(),
+        ))
+        .await
+        .map_err(|e| format!("DHT check send failed: {}", e))?;
         // Loop past Ping/Pong frames to find the Text response
         let mut found = false;
         for _ in 0..10 {
             if let Some(Ok(msg)) = ws.next().await {
                 match msg {
                     Message::Text(resp_text) => {
-                        if let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text) {
-                            if resp.msg_type == "dht-found" {
-                                found = true;
-                            }
+                        if let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text)
+                            && resp.msg_type == "dht-found"
+                        {
+                            found = true;
                         }
                         break;
                     }
@@ -1560,77 +1608,117 @@ async fn dht_register(
     };
 
     if already_registered {
-        tracing::info!("Identity {} already registered — updating with higher seq", identity.null_id);
+        tracing::info!(
+            "Identity {} already registered — updating with higher seq",
+            identity.null_id
+        );
     }
-    let seq: i64 = if already_registered { chrono::Utc::now().timestamp() } else { 0 };
-        let pow_difficulty: u32 = if seq == 0 { 8 } else { add_protocol::constants::DHT_POW_DIFFICULTY };
-        tracing::info!("Solving PoW (difficulty {}, this may take {})...", pow_difficulty,
-            if pow_difficulty <= 8 { "~2-10s" } else { "~1-2 min" });
-
-        let salt = uuid_hex();
-        let value_b64 = identity.fingerprint.clone();
-        // SECURITY FIX (M11): salt PoW with the publisher's own fingerprint so
-        // the server (which validates with the same publisher_fp) can reproduce
-        // the identical Argon2id salt. Must match dht-core/handle_put.
-        let pow_data = format!("{}|{}|{}|{}", identity.null_id, value_b64, salt, seq);
-        // Owned copy of the per-node secret for the spawned blocking task
-        // (spawn_blocking requires 'static; `identity` is only borrowed here).
-        let publisher_fp_secret = identity.fingerprint.clone();
-        let start = std::time::Instant::now();
-        let pow_nonce = match tokio::task::spawn_blocking(move || {
-            add_dht_core::pow_solve(&pow_data, pow_difficulty, 10_000_000, publisher_fp_secret.as_bytes())
-        }).await {
-            Ok(Ok(Some(n))) => {
-                tracing::info!("PoW solved in {}s", start.elapsed().as_secs());
-                n
-            }
-            Ok(Ok(None)) => {
-                return Err("DHT register: could not solve PoW in time (exhausted attempts)".into());
-            }
-            Ok(Err(e)) => {
-                return Err(format!("DHT register: PoW error: {}", e).into());
-            }
-            Err(e) => {
-                return Err(format!("DHT register: task join error: {}", e).into());
-            }
-        };
-
-        // Sign the put request with ML-DSA-87
-        let sign_data = format!("{}|{}|{}|{}|{}", identity.null_id, value_b64, salt, seq, pow_nonce);
-        let sig = sign_for_transport(&sign_data)?;
-
-        // Include ML-DSA-87 verifying key in the payload for the DHT to verify
-        let identity = Identity::load()?;
-        let vk_b64 = if let Some(sk_b64) = identity.ml_dsa87_signing_key {
-            let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
-            use ml_dsa::{KeyInit, Keypair};
-            let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
-                .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
-            let vk = Keypair::verifying_key(&sk).clone();
-            use ml_dsa::KeyExport;
-            let vk_bytes = vk.to_bytes();
-            base64::engine::general_purpose::STANDARD.encode(vk_bytes)
+    let seq: i64 = if already_registered {
+        chrono::Utc::now().timestamp()
+    } else {
+        0
+    };
+    let pow_difficulty: u32 = if seq == 0 {
+        8
+    } else {
+        add_protocol::constants::DHT_POW_DIFFICULTY
+    };
+    tracing::info!(
+        "Solving PoW (difficulty {}, this may take {})...",
+        pow_difficulty,
+        if pow_difficulty <= 8 {
+            "~2-10s"
         } else {
-            String::new()
-        };
+            "~1-2 min"
+        }
+    );
 
-        let req = WireEnvelope {
-            msg_type: "dht-put".to_string(),
-            msg_id: uuid_hex(),
-            ts: chrono::Utc::now().timestamp() as f64,
-            sig,
-            payload: {
-                let mut m = serde_json::Map::new();
-                m.insert("key".to_string(), serde_json::Value::String(identity.null_id.clone()));
-                m.insert("value".to_string(), serde_json::Value::String(value_b64));
-                m.insert("salt".to_string(), serde_json::Value::String(salt));
-                m.insert("seq".to_string(), serde_json::Value::Number(seq.into()));
-                m.insert("nonce".to_string(), serde_json::Value::Number(pow_nonce.into()));
-                m.insert("publisher_fp".to_string(), serde_json::Value::String(identity.fingerprint.clone()));
-                m.insert("publisher_verifying_key".to_string(), serde_json::Value::String(vk_b64));
-                serde_json::Value::Object(m)
-            },
-        };
+    let salt = uuid_hex();
+    let value_b64 = identity.fingerprint.clone();
+    // SECURITY FIX (M11): salt PoW with the publisher's own fingerprint so
+    // the server (which validates with the same publisher_fp) can reproduce
+    // the identical Argon2id salt. Must match dht-core/handle_put.
+    let pow_data = format!("{}|{}|{}|{}", identity.null_id, value_b64, salt, seq);
+    // Owned copy of the per-node secret for the spawned blocking task
+    // (spawn_blocking requires 'static; `identity` is only borrowed here).
+    let publisher_fp_secret = identity.fingerprint.clone();
+    let start = std::time::Instant::now();
+    let pow_nonce = match tokio::task::spawn_blocking(move || {
+        add_dht_core::pow_solve(
+            &pow_data,
+            pow_difficulty,
+            10_000_000,
+            publisher_fp_secret.as_bytes(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(Some(n))) => {
+            tracing::info!("PoW solved in {}s", start.elapsed().as_secs());
+            n
+        }
+        Ok(Ok(None)) => {
+            return Err("DHT register: could not solve PoW in time (exhausted attempts)".into());
+        }
+        Ok(Err(e)) => {
+            return Err(format!("DHT register: PoW error: {}", e).into());
+        }
+        Err(e) => {
+            return Err(format!("DHT register: task join error: {}", e).into());
+        }
+    };
+
+    // Sign the put request with ML-DSA-87
+    let sign_data = format!(
+        "{}|{}|{}|{}|{}",
+        identity.null_id, value_b64, salt, seq, pow_nonce
+    );
+    let sig = sign_for_transport(&sign_data)?;
+
+    // Include ML-DSA-87 verifying key in the payload for the DHT to verify
+    let identity = Identity::load()?;
+    let vk_b64 = if let Some(sk_b64) = identity.ml_dsa87_signing_key {
+        let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
+        use ml_dsa::{KeyInit, Keypair};
+        let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
+            .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
+        let vk = Keypair::verifying_key(&sk).clone();
+        use ml_dsa::KeyExport;
+        let vk_bytes = vk.to_bytes();
+        base64::engine::general_purpose::STANDARD.encode(vk_bytes)
+    } else {
+        String::new()
+    };
+
+    let req = WireEnvelope {
+        msg_type: "dht-put".to_string(),
+        msg_id: uuid_hex(),
+        ts: chrono::Utc::now().timestamp() as f64,
+        sig,
+        payload: {
+            let mut m = serde_json::Map::new();
+            m.insert(
+                "key".to_string(),
+                serde_json::Value::String(identity.null_id.clone()),
+            );
+            m.insert("value".to_string(), serde_json::Value::String(value_b64));
+            m.insert("salt".to_string(), serde_json::Value::String(salt));
+            m.insert("seq".to_string(), serde_json::Value::Number(seq.into()));
+            m.insert(
+                "nonce".to_string(),
+                serde_json::Value::Number(pow_nonce.into()),
+            );
+            m.insert(
+                "publisher_fp".to_string(),
+                serde_json::Value::String(identity.fingerprint.clone()),
+            );
+            m.insert(
+                "publisher_verifying_key".to_string(),
+                serde_json::Value::String(vk_b64),
+            );
+            serde_json::Value::Object(m)
+        },
+    };
     let req_json = serde_json::to_string(&req)?;
     ws.send(Message::Text(req_json.into()))
         .await
@@ -1658,8 +1746,8 @@ async fn dht_register_addr_record(
     identity: &Identity,
     address: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use add_protocol::envelope::WireEnvelope;
     use add_protocol::constants::ADDR_POW_DIFFICULTY;
+    use add_protocol::envelope::WireEnvelope;
 
     let ws_url = seed_url
         .replace("http://", "ws://")
@@ -1680,13 +1768,23 @@ async fn dht_register_addr_record(
     // Owned copy of the per-node secret for the spawned blocking task
     // (spawn_blocking requires 'static; `identity` is only borrowed here).
     let publisher_fp_secret = identity.fingerprint.clone();
-    tracing::info!("Solving PoW for addr-record (difficulty {})...", ADDR_POW_DIFFICULTY);
+    tracing::info!(
+        "Solving PoW for addr-record (difficulty {})...",
+        ADDR_POW_DIFFICULTY
+    );
     let pow_nonce = match tokio::task::spawn_blocking(move || {
         // SECURITY FIX (M11): salt with the publisher's own fingerprint so the
         // server (which validates with the same publisher_fp) reproduces the
         // identical Argon2id salt. Must match dht-core/handle_put addr path.
-        add_dht_core::pow_solve(&pow_data, ADDR_POW_DIFFICULTY, 10_000_000, publisher_fp_secret.as_bytes())
-    }).await {
+        add_dht_core::pow_solve(
+            &pow_data,
+            ADDR_POW_DIFFICULTY,
+            10_000_000,
+            publisher_fp_secret.as_bytes(),
+        )
+    })
+    .await
+    {
         Ok(Ok(Some(n))) => {
             tracing::info!("PoW solved for addr-record");
             n
@@ -1723,13 +1821,25 @@ async fn dht_register_addr_record(
         sig,
         payload: {
             let mut m = serde_json::Map::new();
-            m.insert("key".to_string(), serde_json::Value::String(addr_key.clone()));
+            m.insert(
+                "key".to_string(),
+                serde_json::Value::String(addr_key.clone()),
+            );
             m.insert("value".to_string(), serde_json::Value::String(value_b64));
             m.insert("salt".to_string(), serde_json::Value::String(salt));
             m.insert("seq".to_string(), serde_json::Value::Number(seq.into()));
-            m.insert("nonce".to_string(), serde_json::Value::Number(pow_nonce.into()));
-            m.insert("publisher_fp".to_string(), serde_json::Value::String(identity.fingerprint.clone()));
-            m.insert("publisher_verifying_key".to_string(), serde_json::Value::String(vk_b64));
+            m.insert(
+                "nonce".to_string(),
+                serde_json::Value::Number(pow_nonce.into()),
+            );
+            m.insert(
+                "publisher_fp".to_string(),
+                serde_json::Value::String(identity.fingerprint.clone()),
+            );
+            m.insert(
+                "publisher_verifying_key".to_string(),
+                serde_json::Value::String(vk_b64),
+            );
             serde_json::Value::Object(m)
         },
     };
@@ -1743,7 +1853,11 @@ async fn dht_register_addr_record(
         let resp: WireEnvelope = serde_json::from_str(&resp_text)
             .map_err(|e| format!("DHT addr_record: bad response: {}", e))?;
         if resp.msg_type == "dht-found" {
-            tracing::info!("Address record registered for {} at {}", identity.null_id, address);
+            tracing::info!(
+                "Address record registered for {} at {}",
+                identity.null_id,
+                address
+            );
             return Ok(());
         } else {
             let payload = resp.payload.to_string();
@@ -1764,10 +1878,10 @@ async fn dht_register_addr_record_all(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Discover all bootstrap servers
     let (_, bootstraps, _) = discover_all_servers().await;
-    
+
     let mut last_error = None;
     let mut success_count = 0;
-    
+
     // Try each bootstrap server
     for seed_url in &bootstraps {
         match dht_register_addr_record(seed_url.clone(), identity, address).await {
@@ -1781,9 +1895,13 @@ async fn dht_register_addr_record_all(
             }
         }
     }
-    
+
     if success_count > 0 {
-        tracing::info!("Address record registered on {}/{} bootstrap servers", success_count, bootstraps.len());
+        tracing::info!(
+            "Address record registered on {}/{} bootstrap servers",
+            success_count,
+            bootstraps.len()
+        );
         Ok(())
     } else {
         Err(last_error.unwrap_or_else(|| "No bootstrap servers available".into()))
@@ -1819,7 +1937,8 @@ async fn pir_dht_lookup(
         .replace("http://", "ws://")
         .replace("https://", "wss://");
 
-    let mut ws = ws_connect(&ws_url).await
+    let mut ws = ws_connect(&ws_url)
+        .await
         .map_err(|e| format!("PIR DHT connect failed: {}", e))?;
 
     // Send PIR queries (one per cuckoo bin candidate)
@@ -1831,11 +1950,14 @@ async fn pir_dht_lookup(
             "ephemeral_pk": base64::engine::general_purpose::STANDARD.encode(query.client_ephemeral_pk),
             "nonce": uuid_hex(),
         });
-        ws.send(Message::Text(req_json.to_string().into())).await
+        ws.send(Message::Text(req_json.to_string().into()))
+            .await
             .map_err(|e| format!("PIR query send failed: {}", e))?;
 
         // Read PIR response
-        let resp_msg = ws.next().await
+        let resp_msg = ws
+            .next()
+            .await
             .ok_or("PIR DHT connection closed")?
             .map_err(|e| format!("PIR DHT read failed: {}", e))?;
         let resp_text = match resp_msg {
@@ -1849,7 +1971,8 @@ async fn pir_dht_lookup(
         let bin_data_b64 = resp_json["bin_data"]
             .as_str()
             .ok_or("missing bin_data in PIR response")?;
-        let bin_data = base64::engine::general_purpose::STANDARD.decode(bin_data_b64)
+        let bin_data = base64::engine::general_purpose::STANDARD
+            .decode(bin_data_b64)
             .map_err(|e| format!("PIR bin_data decode: {}", e))?;
 
         let pir_resp = add_crypto::pir::PirResponse {
@@ -1895,12 +2018,16 @@ async fn pir_dht_lookup(
 /// Load or generate the Kyber keypair deterministically from null_id.
 /// Both sender and recipient derive the SAME keypair from the recipient's null_id,
 /// so Kyber encapsulation on sender side can be decapsulated on recipient side.
-fn load_or_generate_kyber(null_id: &str, store: &MessageStore) -> Result<add_crypto::kyber::KyberKeypair, Box<dyn std::error::Error>> {
+fn load_or_generate_kyber(
+    null_id: &str,
+    store: &MessageStore,
+) -> Result<add_crypto::kyber::KyberKeypair, Box<dyn std::error::Error>> {
     let kyber_path = home_dir().join(KYBER_KEY_PATH);
     // Try loading existing keypair first
     if kyber_path.exists() {
         return add_crypto::kyber::KyberKeypair::load(&kyber_path, store.db_key())
-            .map_err(|e| format!("kyber keypair load failed: {}", e)).map_err(|e| e.into());
+            .map_err(|e| format!("kyber keypair load failed: {}", e))
+            .map_err(|e| e.into());
     }
     // Derive deterministically from null_id (same on all machine with same identity)
     use sha2::{Digest, Sha256};
@@ -1908,7 +2035,7 @@ fn load_or_generate_kyber(null_id: &str, store: &MessageStore) -> Result<add_cry
     let hk = hkdf::Hkdf::<Sha256>::new(None, &hash);
     let mut seed = [0u8; 64];
     hk.expand(b"add-sealed-sender-kyber-seed", &mut seed)
-        .map_err(|_| format!("HKDF expand failed"))?;
+        .map_err(|_| "HKDF expand failed".to_string())?;
     let kp = add_crypto::kyber::KyberKeypair::from_seed(&seed)
         .map_err(|e| format!("kyber keypair from seed: {}", e))?;
     std::fs::create_dir_all(kyber_path.parent().unwrap())?;
@@ -1923,8 +2050,11 @@ async fn relay_fetch(
     null_id: &str,
     store: &MessageStore,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let ws_url = relay_url.replace("http://", "ws://").replace("https://", "wss://");
-    let mut ws = ws_connect(&ws_url).await
+    let ws_url = relay_url
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
+    let mut ws = ws_connect(&ws_url)
+        .await
         .map_err(|e| format!("Relay connect failed: {}", e))?;
 
     // Load identity to get fingerprint for signing and cert for TOFU
@@ -1935,10 +2065,11 @@ async fn relay_fetch(
     let cert_armored = {
         use sequoia_openpgp::serialize::Serialize;
         let mut buf = Vec::new();
-        cert.as_tsk().armored().serialize(&mut buf)
+        cert.as_tsk()
+            .armored()
+            .serialize(&mut buf)
             .map_err(|e| format!("serialize armored cert: {}", e))?;
-        String::from_utf8(buf)
-            .map_err(|e| format!("armored cert utf8: {}", e))?
+        String::from_utf8(buf).map_err(|e| format!("armored cert utf8: {}", e))?
     };
 
     // SECURITY FIX (C2): Sign the fetch request with our PGP key
@@ -1986,46 +2117,51 @@ async fn relay_fetch(
     };
     let resp: serde_json::Value = serde_json::from_str(&resp_text)?;
 
-        // Check for error response
-        if let Some(error) = resp.get("error").and_then(|e| e.as_str()) {
-            return Err(format!("Relay error: {}", error).into());
-        }
+    // Check for error response
+    if let Some(error) = resp.get("error").and_then(|e| e.as_str()) {
+        return Err(format!("Relay error: {}", error).into());
+    }
 
-        // Parse entries from relay-fetch response and decrypt
-        let data = resp.get("data").and_then(|d| d.as_object());
-        if let Some(entries) = data.and_then(|d| d.get("entries")).and_then(|m| m.as_array()) {
-            let mut result = Vec::new();
-            for entry in entries {
-                if let Some(signed_blob) = entry.get("signed_blob").and_then(|b| b.as_str()) {
-                    // Extract sender info from the relay entry (not the blob)
-                    let entry_sender_nid = entry
-                        .get("sender_nid")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let entry_sender_fp = entry
-                        .get("sender_fp")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+    // Parse entries from relay-fetch response and decrypt
+    let data = resp.get("data").and_then(|d| d.as_object());
+    if let Some(entries) = data
+        .and_then(|d| d.get("entries"))
+        .and_then(|m| m.as_array())
+    {
+        let mut result = Vec::new();
+        for entry in entries {
+            if let Some(signed_blob) = entry.get("signed_blob").and_then(|b| b.as_str()) {
+                // Extract sender info from the relay entry (not the blob)
+                let entry_sender_nid = entry
+                    .get("sender_nid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let entry_sender_fp = entry
+                    .get("sender_fp")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
-                    let decrypted = match relay_decrypt_message(
-                        signed_blob,
-                        entry_sender_nid,
-                        entry_sender_fp,
-                        &identity.fingerprint,
-                        store,
-                        &our_kyber,
-                    ).await {
-                        Ok(plaintext) => plaintext,
-                        Err(e) => {
-                            println!("Warning: failed to decrypt relay message: {}", e);
-                            continue;
-                        }
-                    };
-                    result.push(decrypted);
-                }
+                let decrypted = match relay_decrypt_message(
+                    signed_blob,
+                    entry_sender_nid,
+                    entry_sender_fp,
+                    &identity.fingerprint,
+                    store,
+                    &our_kyber,
+                )
+                .await
+                {
+                    Ok(plaintext) => plaintext,
+                    Err(e) => {
+                        println!("Warning: failed to decrypt relay message: {}", e);
+                        continue;
+                    }
+                };
+                result.push(decrypted);
             }
-            return Ok(result);
         }
+        return Ok(result);
+    }
 
     Ok(Vec::new())
 }
@@ -2033,14 +2169,16 @@ async fn relay_fetch(
 /// Select the fastest responding relay from a list.
 /// Tries all relays in parallel with timeouts, returns the first to respond.
 async fn select_fastest_relay(relay_urls: &[String]) -> Option<String> {
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     let mut tasks = Vec::new();
 
     for url in relay_urls {
         let url = url.clone();
         tasks.push(tokio::spawn(async move {
-            let ws_url = url.replace("http://", "ws://").replace("https://", "wss://");
+            let ws_url = url
+                .replace("http://", "ws://")
+                .replace("https://", "wss://");
             match timeout(Duration::from_secs(5), ws_connect(&ws_url)).await {
                 Ok(Ok(_)) => Some(url),
                 _ => None,
@@ -2058,7 +2196,9 @@ async fn select_fastest_relay(relay_urls: &[String]) -> Option<String> {
 
     // If none responded, try them sequentially
     for url in relay_urls {
-        let ws_url = url.replace("http://", "ws://").replace("https://", "wss://");
+        let ws_url = url
+            .replace("http://", "ws://")
+            .replace("https://", "wss://");
         if ws_connect(&ws_url).await.is_ok() {
             return Some(url.clone());
         }
@@ -2073,24 +2213,34 @@ async fn relay_fetch_all(
     relay_urls: &[String],
     null_id: &str,
 ) -> Result<Vec<(String, String, String, String)>, Box<dyn std::error::Error>> {
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     let mut tasks = Vec::new();
     for url in relay_urls {
         let url = url.clone();
         let null_id = null_id.to_string();
         tasks.push(tokio::spawn(async move {
-            let ws_url = url.replace("http://", "ws://").replace("https://", "wss://");
+            let ws_url = url
+                .replace("http://", "ws://")
+                .replace("https://", "wss://");
             let timeout_result = timeout(Duration::from_secs(10), async {
                 let mut ws = ws_connect(&ws_url).await?;
 
                 let identity = match Identity::load() {
                     Ok(id) => id,
-                    Err(_) => return Ok::<Vec<(String, String, String)>, Box<dyn std::error::Error>>(Vec::new()),
+                    Err(_) => {
+                        return Ok::<Vec<(String, String, String)>, Box<dyn std::error::Error>>(
+                            Vec::new(),
+                        );
+                    }
                 };
                 let cert = match identity.cert() {
                     Ok(c) => c,
-                    Err(_) => return Ok::<Vec<(String, String, String)>, Box<dyn std::error::Error>>(Vec::new()),
+                    Err(_) => {
+                        return Ok::<Vec<(String, String, String)>, Box<dyn std::error::Error>>(
+                            Vec::new(),
+                        );
+                    }
                 };
                 let cert_armored = {
                     use sequoia_openpgp::serialize::Serialize;
@@ -2132,7 +2282,8 @@ async fn relay_fetch_all(
                             if let Some(_error) = resp.get("error").and_then(|e| e.as_str()) {
                                 return Ok(Vec::new());
                             }
-                            if let Some(entries) = resp.get("data")
+                            if let Some(entries) = resp
+                                .get("data")
                                 .and_then(|d| d.as_object())
                                 .and_then(|d| d.get("entries"))
                                 .and_then(|m| m.as_array())
@@ -2168,7 +2319,8 @@ async fn relay_fetch_all(
                     }
                 }
                 Ok(messages)
-            }).await;
+            })
+            .await;
 
             match timeout_result {
                 Ok(Ok(msgs)) => (url, msgs),
@@ -2199,18 +2351,18 @@ async fn relay_fetch_all(
 /// Send a relay-purge request after successful fetch+decrypt.
 /// This tells the relay to delete all messages for our null_id,
 /// preventing stale data accumulation (squelch).
-async fn relay_purge(
-    relay_url: &str,
-    null_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let ws_url = relay_url.replace("http://", "ws://").replace("https://", "wss://");
-    let mut ws = ws_connect(&ws_url).await
+async fn relay_purge(relay_url: &str, null_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let ws_url = relay_url
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
+    let mut ws = ws_connect(&ws_url)
+        .await
         .map_err(|e| format!("Relay connect failed for purge: {}", e))?;
 
     let identity = Identity::load()?;
     let sender_verifying_key_b64 = if let Some(sk_b64) = identity.ml_dsa87_signing_key {
         let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
-        use ml_dsa::{KeyInit, Keypair, KeyExport};
+        use ml_dsa::{KeyExport, KeyInit, Keypair};
         let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
             .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
         let vk = Keypair::verifying_key(&sk).clone();
@@ -2266,8 +2418,11 @@ async fn send_read_receipt_to_relay(
     relay_url: &str,
     receipt: &RelayReadReceipt,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let ws_url = relay_url.replace("http://", "ws://").replace("https://", "wss://");
-    let mut ws = ws_connect(&ws_url).await
+    let ws_url = relay_url
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
+    let mut ws = ws_connect(&ws_url)
+        .await
         .map_err(|e| format!("Relay connect failed for read receipt: {}", e))?;
 
     let req = serde_json::json!({
@@ -2298,6 +2453,7 @@ async fn send_read_receipt_to_relay(
 /// The relay stores the message without knowing the sender's identity.
 /// The sender identity is encapsulated under the recipient's Kyber public key
 /// so only the recipient can learn who sent it.
+#[allow(clippy::too_many_arguments)]
 async fn send_via_relay(
     identity: &Identity,
     recipient_nid: &str,
@@ -2308,8 +2464,11 @@ async fn send_via_relay(
     ttl: Option<&str>,
     force_first: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let ws_url = relay_url.replace("http://", "ws://").replace("https://", "wss://");
-    let mut ws = ws_connect(&ws_url).await
+    let ws_url = relay_url
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
+    let mut ws = ws_connect(&ws_url)
+        .await
         .map_err(|e| format!("Relay connect failed: {}", e))?;
 
     // Load our Kyber keypair deterministically derived from null_id
@@ -2324,7 +2483,11 @@ async fn send_via_relay(
     // When force_first is set (reflector bounce), always start a fresh
     // first-message so the recipient can bootstrap independently — no
     // shared ratchet state to desync across repeated bounces.
-    let session_json = if force_first { None } else { store.load_session(recipient_nid).await? };
+    let session_json = if force_first {
+        None
+    } else {
+        store.load_session(recipient_nid).await?
+    };
     let (mut ratchet_session, kyber_ct_hex_opt, shared_secret_opt) = if is_self {
         // Self-message: a single fixed-key shared session (no per-message
         // Kyber re-encapsulation). Reuse the persisted self-session if present;
@@ -2337,14 +2500,16 @@ async fn send_via_relay(
         } else {
             // First self message: derive a shared secret via Kyber to
             // self-encapsulation (recipient == self public key).
-            let (ct, shared_secret) = add_crypto::kyber::KyberKeypair::encapsulate(&recipient_kyber)
-                .map_err(|e| format!("kyber encapsulate: {}", e))?;
+            let (_ct, shared_secret) =
+                add_crypto::kyber::KyberKeypair::encapsulate(&recipient_kyber)
+                    .map_err(|e| format!("kyber encapsulate: {}", e))?;
             add_crypto::DoubleRatchetSession::new_self(
                 recipient_fp,
                 recipient_nid,
                 &identity.fingerprint,
                 &shared_secret,
-            ).map_err(|e| format!("ratchet init self: {}", e))?
+            )
+            .map_err(|e| format!("ratchet init self: {}", e))?
         };
         (session, None, None)
     } else if let Some(json) = session_json {
@@ -2359,15 +2524,16 @@ async fn send_via_relay(
         // First message: perform KEM exchange
         let (ct, shared_secret) = add_crypto::kyber::KyberKeypair::encapsulate(&recipient_kyber)
             .map_err(|e| format!("kyber encapsulate: {}", e))?;
-        let ct_hex = hex::encode(&ct);
-        let shared_secret_hex = hex::encode(&shared_secret);
+        let ct_hex = hex::encode(ct);
+        let shared_secret_hex = hex::encode(shared_secret);
         let session = add_crypto::DoubleRatchetSession::new(
             recipient_fp,
             recipient_nid,
             &identity.fingerprint,
             true,
             &shared_secret,
-        ).map_err(|e| format!("ratchet init: {}", e))?;
+        )
+        .map_err(|e| format!("ratchet init: {}", e))?;
         // New session: include Kyber ciphertext in envelope
         (session, Some(ct_hex), Some(shared_secret_hex))
     };
@@ -2378,22 +2544,31 @@ async fn send_via_relay(
     // SECURITY FIX (C1): Encrypt message using Double Ratchet + Kyber-768
     let ciphertext = if is_self {
         // Self-message: fixed-key shared session, first-message envelope format.
-        ratchet_session.encrypt_first(&padded, &[], &[])
+        ratchet_session
+            .encrypt_first(&padded, &[], &[])
             .map_err(|e| format!("ratchet encrypt_first (self): {}", e))?
-    } else if let (Some(ref kyber_ct_hex), Some(ref shared_secret_hex)) = (kyber_ct_hex_opt.clone(), shared_secret_opt.clone()) {
+    } else if let (Some(ref kyber_ct_hex), Some(ref shared_secret_hex)) =
+        (kyber_ct_hex_opt.clone(), shared_secret_opt.clone())
+    {
         // First message: use the shared secret we already have
-        ratchet_session.encrypt_first(&padded, &hex::decode(kyber_ct_hex).unwrap_or_default(), &hex::decode(shared_secret_hex).unwrap_or_default())
+        ratchet_session
+            .encrypt_first(
+                &padded,
+                &hex::decode(kyber_ct_hex).unwrap_or_default(),
+                &hex::decode(shared_secret_hex).unwrap_or_default(),
+            )
             .map_err(|e| format!("ratchet encrypt_first: {}", e))?
     } else {
         // Subsequent messages: generate new Kyber encapsulation per message
-        ratchet_session.encrypt_message(&padded, &recipient_kyber)
+        ratchet_session
+            .encrypt_message(&padded, &recipient_kyber)
             .map_err(|e| format!("ratchet encrypt: {}", e))?
     };
 
     // SECURITY FIX (M2): Sender identity required for decryption.
     // Real sender_nid/sender_fp stored for recipient to load ratchet session.
     let sealed_sender_token = String::new(); // No sealed sender - we send real identity
-    let nonce: i64 = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as i64;
+    let nonce: i64 = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
     let ts: f64 = chrono::Utc::now().timestamp() as f64;
 
     // Build the signed blob (WireEnvelope)
@@ -2415,9 +2590,10 @@ async fn send_via_relay(
             "msg_hash": sha256_hex(&ciphertext),
         })
     };
-    let sig_data = format!("{}|{}|{}|{}|{}|{}",
-        recipient_nid, identity.null_id, identity.fingerprint,
-        1i64, ts, nonce);
+    let sig_data = format!(
+        "{}|{}|{}|{}|{}|{}",
+        recipient_nid, identity.null_id, identity.fingerprint, 1i64, ts, nonce
+    );
     let sig = sign_for_transport(&sig_data)?;
 
     // SECURITY FIX (M2): Sender identity required for decryption.
@@ -2455,26 +2631,46 @@ async fn send_via_relay(
         },
     });
     let req_json = serde_json::to_string(&req)?;
-    let _sb = req.get("payload").and_then(|p| p.get("signed_blob")).and_then(|s| s.as_str()).unwrap_or("");
-    tracing::info!("DBG send blob_has_kc={} sb_len={}", _sb.contains("kyber_ciphertext"), _sb.len());
+    let _sb = req
+        .get("payload")
+        .and_then(|p| p.get("signed_blob"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    tracing::info!(
+        "DBG send blob_has_kc={} sb_len={}",
+        _sb.contains("kyber_ciphertext"),
+        _sb.len()
+    );
     ws.send(Message::Text(req_json.into()))
         .await
         .map_err(|e| format!("relay-store send failed: {}", e))?;
-    tracing::info!("relay-store sent, waiting for response... (relay={})", ws_url);
+    tracing::info!(
+        "relay-store sent, waiting for response... (relay={})",
+        ws_url
+    );
 
     // Wait for relay-ok response, skipping Ping/Pong heartbeats
     loop {
         match ws.next().await {
             Some(Ok(Message::Text(resp))) => {
                 let resp_val: serde_json::Value = serde_json::from_str(&resp)?;
-                tracing::info!("DBG store resp: {}", resp.chars().take(200).collect::<String>());
+                tracing::info!(
+                    "DBG store resp: {}",
+                    resp.chars().take(200).collect::<String>()
+                );
                 if resp_val.get("ok").and_then(|v| v.as_bool()) == Some(true) {
                     // Persist updated ratchet session
-                    let session_json = ratchet_session.serialize()
+                    let session_json = ratchet_session
+                        .serialize()
                         .map_err(|e| format!("ratchet serialize: {}", e))?;
-                    store.save_session(recipient_nid, &session_json).await
+                    store
+                        .save_session(recipient_nid, &session_json)
+                        .await
                         .map_err(|e| format!("ratchet save: {}", e))?;
-                    println!("Message delivered via relay (sealed sender) to {}", recipient_nid);
+                    println!(
+                        "Message delivered via relay (sealed sender) to {}",
+                        recipient_nid
+                    );
                     return Ok(());
                 }
                 return Err(format!("relay error: {}", resp).into());
@@ -2523,8 +2719,7 @@ async fn send_via_onion(
     // Create or load DoubleRatchet session with exit relay
     let session_json = store.load_session("__onion_exit__").await?;
     let mut ratchet_session = if let Some(json) = session_json {
-        DoubleRatchetSession::deserialize(&json)
-            .map_err(|e| format!("ratchet load: {}", e))?
+        DoubleRatchetSession::deserialize(&json).map_err(|e| format!("ratchet load: {}", e))?
     } else {
         // First onion message to exit relay: KEM exchange
         let (_ct, shared_secret) = add_crypto::kyber::KyberKeypair::encapsulate(&exit_kyber)
@@ -2535,7 +2730,8 @@ async fn send_via_onion(
             &identity.fingerprint,
             true,
             &shared_secret,
-        ).map_err(|e| format!("onion ratchet init: {}", e))?
+        )
+        .map_err(|e| format!("onion ratchet init: {}", e))?
     };
 
     // Encrypt message for exit relay (inner layer)
@@ -2564,8 +2760,7 @@ async fn send_via_onion(
 
     let entry_session_json = store.load_session("__onion_entry__").await?;
     let mut entry_ratchet = if let Some(json) = entry_session_json {
-        DoubleRatchetSession::deserialize(&json)
-            .map_err(|e| format!("ratchet load: {}", e))?
+        DoubleRatchetSession::deserialize(&json).map_err(|e| format!("ratchet load: {}", e))?
     } else {
         // First onion message to entry relay: KEM exchange
         let (_ct, shared_secret) = add_crypto::kyber::KyberKeypair::encapsulate(&entry_kyber)
@@ -2576,7 +2771,8 @@ async fn send_via_onion(
             &identity.fingerprint,
             true,
             &shared_secret,
-        ).map_err(|e| format!("entry ratchet init: {}", e))?
+        )
+        .map_err(|e| format!("entry ratchet init: {}", e))?
     };
 
     let outer_ciphertext = entry_ratchet
@@ -2597,10 +2793,12 @@ async fn send_via_onion(
     let ws_url = entry_relay_url
         .replace("http://", "ws://")
         .replace("https://", "wss://");
-    let mut ws = ws_connect(&ws_url).await
+    let mut ws = ws_connect(&ws_url)
+        .await
         .map_err(|e| format!("onion entry relay connect failed: {}", e))?;
 
-    ws.send(Message::Text(outer_payload.to_string().into())).await
+    ws.send(Message::Text(outer_payload.to_string().into()))
+        .await
         .map_err(|e| format!("onion entry relay send failed: {}", e))?;
 
     // Wait for relay-ok
@@ -2608,17 +2806,26 @@ async fn send_via_onion(
         let resp_val: serde_json::Value = serde_json::from_str(&resp)?;
         if resp_val.get("type").and_then(|t| t.as_str()) == Some("relay-ok") {
             // Persist ratchet sessions
-            let entry_json = entry_ratchet.serialize()
+            let entry_json = entry_ratchet
+                .serialize()
                 .map_err(|e| format!("entry ratchet serialize: {}", e))?;
-            store.save_session("__onion_entry__", &entry_json).await
+            store
+                .save_session("__onion_entry__", &entry_json)
+                .await
                 .map_err(|e| format!("entry ratchet save: {}", e))?;
 
-            let exit_json = ratchet_session.serialize()
+            let exit_json = ratchet_session
+                .serialize()
                 .map_err(|e| format!("exit ratchet serialize: {}", e))?;
-            store.save_session("__onion_exit__", &exit_json).await
+            store
+                .save_session("__onion_exit__", &exit_json)
+                .await
                 .map_err(|e| format!("exit ratchet save: {}", e))?;
 
-            println!("Message routed via onion (entry={} exit={})", entry_relay_url, exit_relay_url);
+            println!(
+                "Message routed via onion (entry={} exit={})",
+                entry_relay_url, exit_relay_url
+            );
             return Ok(());
         }
         return Err(format!("onion entry relay error: {}", resp).into());
@@ -2639,7 +2846,7 @@ async fn lookup_kyber_for_nid(
     let hk = hkdf::Hkdf::<Sha256>::new(None, &hash);
     let mut seed = [0u8; 64];
     hk.expand(b"add-sealed-sender-kyber-seed", &mut seed)
-        .map_err(|_| format!("HKDF expand failed"))?;
+        .map_err(|_| "HKDF expand failed".to_string())?;
     // Use the store's db_key as additional binding
     let kp = add_crypto::kyber::KyberKeypair::from_seed(&seed)
         .map_err(|e| format!("kyber keypair from seed: {}", e))?;
@@ -2658,8 +2865,8 @@ async fn relay_decrypt_message(
     our_kyber: &add_crypto::kyber::KyberKeypair,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // Parse signed_blob as a p2p-message envelope (generic JSON, not WireEnvelope)
-    let env: serde_json::Value = serde_json::from_str(signed_blob)
-        .map_err(|e| format!("parse signed_blob: {}", e))?;
+    let env: serde_json::Value =
+        serde_json::from_str(signed_blob).map_err(|e| format!("parse signed_blob: {}", e))?;
 
     // Use the sender_nid from the relay entry; fall back to computing from fp
     let nid = if sender_nid.is_empty() && !sender_fp.is_empty() {
@@ -2705,11 +2912,12 @@ async fn relay_decrypt_message(
         // enclosed Kyber CT (authoritative shared secret). We ignore any stored
         // session because it would be the *outgoing* direction with a different
         // chain, and would fail to decrypt.
-        let kyber_ct_bytes = hex::decode(kyber_ct)
-            .map_err(|e| format!("kyber_ct hex decode: {}", e))?;
+        let kyber_ct_bytes =
+            hex::decode(kyber_ct).map_err(|e| format!("kyber_ct hex decode: {}", e))?;
         let kyber_ct = add_crypto::kyber::MlKem1024Ciphertext::try_from(&kyber_ct_bytes[..])
             .map_err(|e| format!("kyber_ct parse: {:?}", e))?;
-        let shared_secret = our_kyber.decapsulate(&kyber_ct)
+        let shared_secret = our_kyber
+            .decapsulate(&kyber_ct)
             .map_err(|e| format!("kyber decapsulate: {}", e))?;
         let session = add_crypto::DoubleRatchetSession::new(
             sender_fp,
@@ -2717,7 +2925,8 @@ async fn relay_decrypt_message(
             our_fingerprint,
             false, // We are the recipient of this first message
             &shared_secret,
-        ).map_err(|e| format!("ratchet init: {}", e))?;
+        )
+        .map_err(|e| format!("ratchet init: {}", e))?;
         (session, true)
     } else if let Some(json) = session_json {
         // Subsequent message from a peer: use the persisted session (advanced by
@@ -2731,7 +2940,8 @@ async fn relay_decrypt_message(
         return Err(format!(
             "no ratchet session for sender {} (need first message with kyber_ciphertext)",
             nid
-        ).into());
+        )
+        .into());
     };
 
     let padded_plaintext = if kyber_ct_hex.is_some() {
@@ -2749,9 +2959,12 @@ async fn relay_decrypt_message(
     let plaintext = unpad_message_bucket(&padded_plaintext)?;
 
     // Update the persisted session (seq numbers advanced)
-    let updated_json = session.serialize()
+    let updated_json = session
+        .serialize()
         .map_err(|e| format!("ratchet re-serialize: {}", e))?;
-    store.save_session(&nid, &updated_json).await
+    store
+        .save_session(&nid, &updated_json)
+        .await
         .map_err(|e| format!("ratchet re-save: {}", e))?;
 
     Ok(plaintext)
@@ -2764,6 +2977,7 @@ async fn relay_decrypt_message(
 /// Send a message to a recipient via DHT lookup + direct P2P delivery.
 /// SECURITY FIX (C1): Uses Kyber-768 KEM + Double Ratchet for post-quantum encryption.
 /// SECURITY FIX (L1): When `use_pir` is true, uses PIR for privacy-enhanced DHT lookup.
+#[allow(clippy::too_many_arguments)]
 async fn send_message(
     identity: &Identity,
     recipient_nid: &str,
@@ -2784,9 +2998,9 @@ async fn send_message(
     // G1: Look up recipient's address via DHT (PIR or standard).
     // If DHT lookup fails (recipient not registered), fall back to relay delivery.
     let recipient_addr = if use_pir {
-        pir_dht_lookup(&seed_url, recipient_nid).await.ok()
+        pir_dht_lookup(seed_url, recipient_nid).await.ok()
     } else {
-        dht_lookup(&seed_url, recipient_nid, true).await.ok()
+        dht_lookup(seed_url, recipient_nid, true).await.ok()
     };
 
     // DHT addr-records are stored base64-encoded (see dht_register_addr_record).
@@ -2801,15 +3015,29 @@ async fn send_message(
 
     let ws_url = if let Some(ref addr) = recipient_addr {
         println!("Found at: {}", addr);
-        addr.replace("http://", "ws://").replace("https://", "wss://")
+        addr.replace("http://", "ws://")
+            .replace("https://", "wss://")
     } else {
         println!("DHT lookup failed — using relay delivery...");
-        relay_url.replace("http://", "ws://").replace("https://", "wss://").to_string()
+        relay_url
+            .replace("http://", "ws://")
+            .replace("https://", "wss://")
+            .to_string()
     };
 
     // If DHT lookup failed, skip P2P and go straight to relay delivery
     if recipient_addr.is_none() {
-        return send_via_relay(identity, recipient_nid, recipient_fp, message, store, relay_url, ttl, true).await;
+        return send_via_relay(
+            identity,
+            recipient_nid,
+            recipient_fp,
+            message,
+            store,
+            relay_url,
+            ttl,
+            true,
+        )
+        .await;
     }
 
     println!("Establishing P2P connection...");
@@ -2820,29 +3048,56 @@ async fn send_message(
     // hanging on a dead TCP endpoint (per architecture: relay is the fallback
     // when the peer is not directly reachable).
     let connect_fut = tokio_tungstenite::connect_async(&ws_url);
-    let (mut ws, _) = match tokio::time::timeout(std::time::Duration::from_secs(8), connect_fut).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(e)) => {
-            println!("Direct P2P failed ({}), using relay delivery...", e);
-            return send_via_relay(identity, recipient_nid, recipient_fp, message, store, relay_url, ttl, true).await;
-        }
-        Err(_) => {
-            println!("Direct P2P timed out, using relay delivery...");
-            return send_via_relay(identity, recipient_nid, recipient_fp, message, store, relay_url, ttl, true).await;
-        }
-    };
+    let (mut ws, _) =
+        match tokio::time::timeout(std::time::Duration::from_secs(8), connect_fut).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                println!("Direct P2P failed ({}), using relay delivery...", e);
+                return send_via_relay(
+                    identity,
+                    recipient_nid,
+                    recipient_fp,
+                    message,
+                    store,
+                    relay_url,
+                    ttl,
+                    true,
+                )
+                .await;
+            }
+            Err(_) => {
+                println!("Direct P2P timed out, using relay delivery...");
+                return send_via_relay(
+                    identity,
+                    recipient_nid,
+                    recipient_fp,
+                    message,
+                    store,
+                    relay_url,
+                    ttl,
+                    true,
+                )
+                .await;
+            }
+        };
 
     // SECURITY FIX (C1): Load our Kyber keypair deterministically derived from null_id
     let our_kyber = load_or_generate_kyber(&identity.null_id, store)?;
     let our_kyber_enc_b64 = add_crypto::kyber::encode_enc_key(&our_kyber.enc);
 
     // SECURITY FIX (C1): Perform handshake with Kyber key included
-    let my_vk_b64 = my_verifying_key_b64()?;
+    let _my_vk_b64 = my_verifying_key_b64()?;
 
     // SECURITY FIX (C2): Sign the P2P hello with our ML-DSA-87 key
     let my_vk_b64 = my_verifying_key_b64()?;
     let mut hello = add_p2p::protocol::build_p2p_hello_signed(
-        identity.fingerprint.as_str(), 1, 16, &our_kyber_enc_b64, "", "", &my_vk_b64
+        identity.fingerprint.as_str(),
+        1,
+        16,
+        &our_kyber_enc_b64,
+        "",
+        "",
+        &my_vk_b64,
     );
     // Sign over the SAME payload object (including sender_verifying_key) the
     // peer will verify — not a hand-built object that diverges from it.
@@ -2867,20 +3122,23 @@ async fn send_message(
         if ack_sig.is_empty() {
             return Err("p2p-hello-ack has no signature — rejecting (MITM risk)".into());
         }
-        let ack_payload = ack.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+        let ack_payload = ack
+            .get("payload")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let ack_fp = ack_payload
             .get("public_key")
             .and_then(|k| k.as_str())
             .unwrap_or("unknown");
         // Cache the peer's verifying key from the ack payload (sender embeds it)
-        if add_dht_core::crypto_helpers::get_cached_verifying_key(ack_fp).is_none() {
-            if let Some(vk_b64) = ack_payload.get("sender_verifying_key").and_then(|v| v.as_str()) {
-                if let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(vk_b64) {
-                    if let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes) {
-                        add_dht_core::crypto_helpers::cache_verifying_key(ack_fp, &vk);
-                    }
-                }
-            }
+        if add_dht_core::crypto_helpers::get_cached_verifying_key(ack_fp).is_none()
+            && let Some(vk_b64) = ack_payload
+                .get("sender_verifying_key")
+                .and_then(|v| v.as_str())
+            && let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(vk_b64)
+            && let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes)
+        {
+            add_dht_core::crypto_helpers::cache_verifying_key(ack_fp, &vk);
         }
         if ack_sig.is_empty() {
             return Err("p2p-hello-ack has no signature — rejecting (MITM risk)".into());
@@ -2890,7 +3148,8 @@ async fn send_message(
                 return Err(format!(
                     "p2p-hello-ack signature verification failed for {} — possible MITM",
                     ack_fp
-                ).into());
+                )
+                .into());
             }
         }
 
@@ -2913,16 +3172,20 @@ async fn send_message(
             let peer_ek_b64 = base64::engine::general_purpose::STANDARD.encode(&peer_ek_bytes);
             peer_kyber_enc = add_crypto::kyber::decode_enc_key(&peer_ek_b64).ok();
             if peer_kyber_enc.is_none() {
-                println!("[braid] Warning: reassembled peer EK invalid, falling back to plaintext (insecure)");
+                println!(
+                    "[braid] Warning: reassembled peer EK invalid, falling back to plaintext (insecure)"
+                );
             }
         }
-        if let Some(kyber_b64) = ack_payload.get("kyber_enc_key").and_then(|k| k.as_str()) {
-            if peer_kyber_enc.is_none() {
-                peer_kyber_enc = add_crypto::kyber::decode_enc_key(kyber_b64).ok();
-            }
+        if let Some(kyber_b64) = ack_payload.get("kyber_enc_key").and_then(|k| k.as_str())
+            && peer_kyber_enc.is_none()
+        {
+            peer_kyber_enc = add_crypto::kyber::decode_enc_key(kyber_b64).ok();
         }
         if peer_kyber_enc.is_none() {
-            println!("Warning: no Kyber public key from peer, falling back to plaintext (insecure)");
+            println!(
+                "Warning: no Kyber public key from peer, falling back to plaintext (insecure)"
+            );
         }
     } else {
         return Err("No hello-ack received".into());
@@ -2934,8 +3197,9 @@ async fn send_message(
     let peer_kyber = peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?;
     let (init_ct, init_shared_secret) = add_crypto::kyber::KyberKeypair::encapsulate(peer_kyber)
         .map_err(|e| format!("kyber encapsulate: {}", e))?;
-    let init_ct_b64 = base64::engine::general_purpose::STANDARD.encode(AsRef::<[u8]>::as_ref(&init_ct));
-    
+    let init_ct_b64 =
+        base64::engine::general_purpose::STANDARD.encode(AsRef::<[u8]>::as_ref(&init_ct));
+
     let peer_nid = add_crypto::null_id(recipient_fp);
     let mut ratchet_session = add_crypto::DoubleRatchetSession::new(
         recipient_fp,
@@ -2943,12 +3207,16 @@ async fn send_message(
         &identity.fingerprint,
         true, // is_initiator
         &init_shared_secret,
-    ).map_err(|e| format!("ratchet init: {}", e))?;
+    )
+    .map_err(|e| format!("ratchet init: {}", e))?;
     // SECURITY FIX (G9): Persist the ratchet session for this peer so
     // future relay-fetched messages (or re-connections) can decrypt.
-    let session_json = ratchet_session.serialize()
+    let session_json = ratchet_session
+        .serialize()
         .map_err(|e| format!("ratchet serialize: {}", e))?;
-    store.save_session(&peer_nid, &session_json).await
+    store
+        .save_session(&peer_nid, &session_json)
+        .await
         .map_err(|e| format!("ratchet save: {}", e))?;
 
     // SECURITY FIX (C1): Encrypt message using Double Ratchet + Kyber-768
@@ -2960,15 +3228,25 @@ async fn send_message(
     let msg_hash = sha256_hex(&encrypted_msg);
 
     // SECURITY FIX (C2): Sign the P2P message payload
-    let msg_sig_data = format!("p2p-message:{}", serde_json::json!({
-        "seq": 1,
-        "ciphertext": &encrypted_msg_b64,
-        "msg_hash": &msg_hash,
-    }));
+    let msg_sig_data = format!(
+        "p2p-message:{}",
+        serde_json::json!({
+            "seq": 1,
+            "ciphertext": &encrypted_msg_b64,
+            "msg_hash": &msg_hash,
+        })
+    );
     let msg_sig = sign_for_transport(&msg_sig_data)?;
 
     // Send encrypted message (signed) with TTL
-    let p2p_msg = add_p2p::protocol::build_p2p_message_signed(1, &encrypted_msg_b64, &msg_hash, &msg_sig, Some(&init_ct_b64), ttl);
+    let p2p_msg = add_p2p::protocol::build_p2p_message_signed(
+        1,
+        &encrypted_msg_b64,
+        &msg_hash,
+        &msg_sig,
+        Some(&init_ct_b64),
+        ttl,
+    );
 
     // ACS2.6 Part I.2: Attach delivery token for sealed sender
     let delivery_token = generate_delivery_token(recipient_nid, 1)?;
@@ -2984,10 +3262,7 @@ async fn send_message(
     let mut receipt_received = false;
 
     loop {
-        let msg = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            ws.next(),
-        ).await;
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(10), ws.next()).await;
 
         match msg {
             Ok(Some(Ok(Message::Text(resp)))) => {
@@ -3012,7 +3287,12 @@ async fn send_message(
 
                     // Verify receipt signature (authenticity)
                     let receipt_sig = msg_val.get("sig").and_then(|s| s.as_str()).unwrap_or("");
-                    if verify_receipt_signature(receipt_msg_hash, received_at, receipt_sig, recipient_fp) {
+                    if verify_receipt_signature(
+                        receipt_msg_hash,
+                        received_at,
+                        receipt_sig,
+                        recipient_fp,
+                    ) {
                         // SECURITY FIX (M8): Verify hash matches our sent message to prevent
                         // forged receipts for different messages. The hash must match exactly.
                         if receipt_msg_hash == msg_hash {
@@ -3021,8 +3301,14 @@ async fn send_message(
                                 .unwrap_or_else(|| format!("{:.0}", received_at));
                             println!("Message READ by peer at {} [E2E confirmed]", when);
                         } else {
-                            println!("Warning: p2p-receipt hash mismatch (possible forged receipt)");
-                            println!("  Sent: {}..., Received: {}...", &msg_hash[..16], &receipt_msg_hash[..16]);
+                            println!(
+                                "Warning: p2p-receipt hash mismatch (possible forged receipt)"
+                            );
+                            println!(
+                                "  Sent: {}..., Received: {}...",
+                                &msg_hash[..16],
+                                &receipt_msg_hash[..16]
+                            );
                         }
                     } else {
                         println!("Warning: p2p-receipt signature verification failed");
@@ -3039,8 +3325,8 @@ async fn send_message(
                 }
             }
             Ok(Some(Ok(_))) => {} // binary or other frame type
-            Ok(None) => break,       // connection closed
-            Err(_) => break,         // timeout
+            Ok(None) => break,    // connection closed
+            Err(_) => break,      // timeout
             Ok(Some(Err(e))) => {
                 println!("Warning: websocket error: {}", e);
                 break;
@@ -3123,28 +3409,29 @@ fn addr_host(addr: &str) -> String {
 ///   1. UPnP/IGD — ask the router to port-map external:internal (TCP),
 ///      then advertise the router's public IP:external_port.
 ///   2. STUN — learn the NAT's public IP:port and advertise that.
+///
 /// Returns Some(ws://PUBLIC_IP:PORT) on success, None if both fail.
 async fn traverse_nat(bind_ip: std::net::IpAddr, bind_port: u16) -> Option<String> {
     // Only attempt UPnP when bound to an unspecified/all-interfaces address and we
     // have a usable LAN IP to map to.
-    if bind_ip.is_unspecified() {
-        if let Some(lan) = primary_ipv4() {
-            match add_p2p::upnp::Igd::discover(lan).await {
-                Ok(igd) => match igd.add_tcp_mapping(bind_port, 0).await {
-                    Ok(ext_port) => match igd.external_ip().await {
-                        Ok(pub_ip) => {
-                            println!(
-                                "NAT traversal: UPnP mapped {}:{} -> {}:{}",
-                                pub_ip, ext_port, lan, bind_port
-                            );
-                            return Some(format!("ws://{}:{}", pub_ip, ext_port));
-                        }
-                        Err(e) => tracing::warn!("UPnP external-IP query failed: {e}"),
-                    },
-                    Err(e) => tracing::warn!("UPnP AddPortMapping failed: {e}"),
+    if bind_ip.is_unspecified()
+        && let Some(lan) = primary_ipv4()
+    {
+        match add_p2p::upnp::Igd::discover(lan).await {
+            Ok(igd) => match igd.add_tcp_mapping(bind_port, 0).await {
+                Ok(ext_port) => match igd.external_ip().await {
+                    Ok(pub_ip) => {
+                        println!(
+                            "NAT traversal: UPnP mapped {}:{} -> {}:{}",
+                            pub_ip, ext_port, lan, bind_port
+                        );
+                        return Some(format!("ws://{}:{}", pub_ip, ext_port));
+                    }
+                    Err(e) => tracing::warn!("UPnP external-IP query failed: {e}"),
                 },
-                Err(e) => tracing::warn!("UPnP IGD discovery failed: {e}"),
-            }
+                Err(e) => tracing::warn!("UPnP AddPortMapping failed: {e}"),
+            },
+            Err(e) => tracing::warn!("UPnP IGD discovery failed: {e}"),
         }
     }
 
@@ -3173,7 +3460,7 @@ async fn traverse_nat(bind_ip: std::net::IpAddr, bind_port: u16) -> Option<Strin
 async fn run_listener(
     identity: Identity,
     store: MessageStore,
-    cert: sequoia_openpgp::Cert,  // Our GPG cert for signing
+    _cert: sequoia_openpgp::Cert, // Our GPG cert for signing
     advertised_url: Option<String>,
     no_nat: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -3194,19 +3481,22 @@ async fn run_listener(
     } else {
         lan_address(local_addr)
     };
-    
+
     println!("P2P listener on ws://{}", local_addr);
     println!("Your address for incoming connections: {}", listen_address);
     println!("Registering address in DHT for direct P2P discovery...");
-    
+
     // Register address record in DHT for P2P discovery (all bootstrap servers, low difficulty)
     if let Err(e) = dht_register_addr_record_all(&identity, &listen_address, 3600).await {
         tracing::warn!("Failed to register address record in DHT: {}", e);
-        println!("Warning: Could not register address in DHT. Direct P2P may not work: {}", e);
+        println!(
+            "Warning: Could not register address in DHT. Direct P2P may not work: {}",
+            e
+        );
     } else {
         println!("Address registered in DHT for direct P2P discovery.");
     }
-    
+
     // Start background task to periodically refresh the address record (every 30 min).
     // If a fixed --advertised-url was given, keep re-registering that exact URL.
     // Otherwise re-detect the primary outbound IP (no socket rebind, stable port)
@@ -3246,35 +3536,52 @@ async fn run_listener(
             // "change" just burns PoW. Compare host (IP) only.
             let host_changed = addr_host(&current_addr) != addr_host(&last_registered_address);
             if host_changed {
-                tracing::info!("Address changed from {} to {}, re-registering...", last_registered_address, current_addr);
-                if let Err(e) = dht_register_addr_record_all(&identity_clone, &current_addr, 3600).await {
-                    tracing::warn!("Failed to re-register address record after IP change: {}", e);
+                tracing::info!(
+                    "Address changed from {} to {}, re-registering...",
+                    last_registered_address,
+                    current_addr
+                );
+                if let Err(e) =
+                    dht_register_addr_record_all(&identity_clone, &current_addr, 3600).await
+                {
+                    tracing::warn!(
+                        "Failed to re-register address record after IP change: {}",
+                        e
+                    );
                 } else {
-                    tracing::info!("Address record re-registered after IP change: {}", current_addr);
+                    tracing::info!(
+                        "Address record re-registered after IP change: {}",
+                        current_addr
+                    );
                     last_registered_address = current_addr;
                 }
             } else {
                 // Host unchanged: refresh the record's TTL. Keep advertising the
                 // already-registered address (not the churned port).
-                if let Err(e) = dht_register_addr_record_all(&identity_clone, &last_registered_address, 3600).await {
+                if let Err(e) =
+                    dht_register_addr_record_all(&identity_clone, &last_registered_address, 3600)
+                        .await
+                {
                     tracing::warn!("Failed to refresh address record: {}", e);
                 } else {
-                    tracing::debug!("Address record refreshed (no change): {}", identity_clone.null_id);
+                    tracing::debug!(
+                        "Address record refreshed (no change): {}",
+                        identity_clone.null_id
+                    );
                 }
             }
         }
     });
-    
+
     println!("Waiting for connections...");
-    
+
     loop {
         let (stream, peer_addr) = listener.accept().await?;
         let store_pool = store.pool.clone();
         let db_key_path = home_dir().join(DB_KEY_PATH);
         let id_clone = identity.clone();
-        
-        tokio::spawn(async move {
 
+        tokio::spawn(async move {
             // Each spawned task creates its own DbEncryptionKey from the file
             let db_key = match tokio::fs::read_to_string(&db_key_path).await {
                 Ok(hex) => match hex::decode(hex.trim()) {
@@ -3293,10 +3600,11 @@ async fn run_listener(
                     return;
                 }
             };
-            let store = MessageStore { pool: store_pool, db_key };
-            if let Err(e) = handle_incoming_connection(stream, peer_addr, id_clone, store).await {
-
-            }
+            let store = MessageStore {
+                pool: store_pool,
+                db_key,
+            };
+            if let Err(_e) = handle_incoming_connection(stream, peer_addr, id_clone, store).await {}
         });
     }
 }
@@ -3326,7 +3634,10 @@ async fn handle_incoming_connection(
     // WireEnvelope nests public_key/braid/kyber_enc_key inside `payload`;
     // `sig` is a top-level field. The sender signs the `payload` object,
     // so verify the same string (not the full envelope).
-    let payload = hello.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+    let payload = hello
+        .get("payload")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let peer_sig = hello.get("sig").and_then(|s| s.as_str()).unwrap_or("");
     let peer_fp = payload
         .get("public_key")
@@ -3341,12 +3652,11 @@ async fn handle_incoming_connection(
         // without a DHT round-trip. Fall back to a DHT fetch if absent.
 
         if add_dht_core::crypto_helpers::get_cached_verifying_key(peer_fp).is_none() {
-            if let Some(vk_b64) = payload.get("sender_verifying_key").and_then(|v| v.as_str()) {
-                if let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(vk_b64) {
-                    if let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes) {
-                        add_dht_core::crypto_helpers::cache_verifying_key(peer_fp, &vk);
-                    }
-                }
+            if let Some(vk_b64) = payload.get("sender_verifying_key").and_then(|v| v.as_str())
+                && let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(vk_b64)
+                && let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes)
+            {
+                add_dht_core::crypto_helpers::cache_verifying_key(peer_fp, &vk);
             }
             if add_dht_core::crypto_helpers::get_cached_verifying_key(peer_fp).is_none() {
                 let (seed_url, _bootstraps, _relays) = discover_all_servers().await;
@@ -3355,9 +3665,7 @@ async fn handle_incoming_connection(
         }
         let hello_sig_payload = format!("p2p-hello:{}\n", payload);
         if !add_dht_core::verify_signature(&hello_sig_payload, peer_sig, peer_fp) {
-            return Err(
-                format!("p2p-hello signature verification failed for {}", peer_fp).into(),
-            );
+            return Err(format!("p2p-hello signature verification failed for {}", peer_fp).into());
         }
         println!("Verified p2p-hello signature from {}", peer_fp);
     }
@@ -3370,10 +3678,8 @@ async fn handle_incoming_connection(
         .and_then(|b| b.as_bool())
         .unwrap_or(false);
     let mut peer_kyber_enc: Option<add_crypto::kyber::KyberEncapsulationKey> = None;
-    if !peer_braid {
-        if let Some(kyber_b64) = payload.get("kyber_enc_key").and_then(|k| k.as_str()) {
-            peer_kyber_enc = add_crypto::kyber::decode_enc_key(kyber_b64).ok();
-        }
+    if !peer_braid && let Some(kyber_b64) = payload.get("kyber_enc_key").and_then(|k| k.as_str()) {
+        peer_kyber_enc = add_crypto::kyber::decode_enc_key(kyber_b64).ok();
     }
 
     // SECURITY FIX (C1): Load our Kyber keypair deterministically derived from null_id
@@ -3397,7 +3703,9 @@ async fn handle_incoming_connection(
     ack.payload["sender_verifying_key"] = serde_json::Value::String(my_vk_b64);
     let ack_sig_data = format!("p2p-hello-ack:{}\n", ack.payload);
     ack.sig = sign_for_transport(&ack_sig_data)?;
-    ws_tx.send(Message::Text(serde_json::to_string(&ack)?.into())).await?;
+    ws_tx
+        .send(Message::Text(serde_json::to_string(&ack)?.into()))
+        .await?;
 
     // SPQR Braid: exchange EKs over the streamed braid channel.
     if peer_braid {
@@ -3413,7 +3721,9 @@ async fn handle_incoming_connection(
         let peer_ek_b64 = base64::engine::general_purpose::STANDARD.encode(&peer_ek_bytes);
         peer_kyber_enc = add_crypto::kyber::decode_enc_key(&peer_ek_b64).ok();
         if peer_kyber_enc.is_none() {
-            println!("[braid] Warning: reassembled peer EK invalid, falling back to plaintext (insecure)");
+            println!(
+                "[braid] Warning: reassembled peer EK invalid, falling back to plaintext (insecure)"
+            );
         }
     }
 
@@ -3430,6 +3740,7 @@ async fn handle_incoming_connection(
 
     // Read message — skip control frames (e.g. the sealed-sender delivery
     // token sent before the encrypted message) and wait for p2p-message.
+    #[allow(unused_assignments)]
     let mut msg: serde_json::Value = serde_json::Value::Null;
     loop {
         match ws_rx.next().await {
@@ -3454,30 +3765,42 @@ async fn handle_incoming_connection(
     if msg.get("type").and_then(|t| t.as_str()) == Some("p2p-message") {
         // SECURITY FIX (C2): Verify peer's message signature
         let msg_sig = msg.get("sig").and_then(|s| s.as_str()).unwrap_or("");
-            if msg_sig.is_empty() {
-                println!("Warning: p2p-message has no signature, accepting but vulnerable to MITM");
+        if msg_sig.is_empty() {
+            println!("Warning: p2p-message has no signature, accepting but vulnerable to MITM");
+        } else {
+            let msg_sig_payload = format!(
+                "p2p-message:{}\n",
+                serde_json::to_string(&msg).unwrap_or_default()
+            );
+            if !add_dht_core::verify_signature(&msg_sig_payload, msg_sig, peer_fp) {
+                println!(
+                    "Warning: p2p-message signature verification failed for {}",
+                    peer_fp
+                );
+                // Don't reject, just warn - we still want to receive the message
             } else {
-                let msg_sig_payload = format!("p2p-message:{}\n", serde_json::to_string(&msg).unwrap_or_default());
-                if !add_dht_core::verify_signature(&msg_sig_payload, msg_sig, peer_fp) {
-                    println!("Warning: p2p-message signature verification failed for {}", peer_fp);
-                    // Don't reject, just warn - we still want to receive the message
-                } else {
-                    println!("Verified p2p-message signature from {}", peer_fp);
-                }
+                println!("Verified p2p-message signature from {}", peer_fp);
             }
+        }
 
-            let payload = msg.get("payload").cloned().unwrap_or(serde_json::Value::Null);
-            let ciphertext = payload.get("ciphertext").and_then(|c| c.as_str()).unwrap_or("");
+        let payload = msg
+            .get("payload")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let ciphertext = payload
+            .get("ciphertext")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
 
-
-            // SECURITY FIX (C1): Derive the initial shared secret SYMMETRICALLY.
-            // The initiator (Bob) encapsulates to Alice and ships the Kyber
-            // ciphertext in `init_kyber_ct`; Alice decapsulates it with her own
-            // secret key to recover the SAME shared secret Bob used to seed his
-            // ratchet. Fallback: if absent, Alice independently encapsulates to
-            // Bob (legacy/relay path) — keep prior behaviour.
-            let peer_nid = add_crypto::null_id(peer_fp);
-            let init_shared_secret: Vec<u8> = if let Some(init_ct_b64) = payload.get("init_kyber_ct").and_then(|v| v.as_str()) {
+        // SECURITY FIX (C1): Derive the initial shared secret SYMMETRICALLY.
+        // The initiator (Bob) encapsulates to Alice and ships the Kyber
+        // ciphertext in `init_kyber_ct`; Alice decapsulates it with her own
+        // secret key to recover the SAME shared secret Bob used to seed his
+        // ratchet. Fallback: if absent, Alice independently encapsulates to
+        // Bob (legacy/relay path) — keep prior behaviour.
+        let peer_nid = add_crypto::null_id(peer_fp);
+        let init_shared_secret: Vec<u8> =
+            if let Some(init_ct_b64) = payload.get("init_kyber_ct").and_then(|v| v.as_str()) {
                 let ct_bytes = base64::engine::general_purpose::STANDARD
                     .decode(init_ct_b64)
                     .map_err(|e| format!("init_kyber_ct decode: {}", e))?;
@@ -3494,99 +3817,98 @@ async fn handle_incoming_connection(
                     .1;
                 AsRef::<[u8]>::as_ref(&ss2).to_vec()
             };
-            let mut ratchet_session = add_crypto::DoubleRatchetSession::new(
-                peer_fp,
-                &peer_nid,
-                &identity.fingerprint,
-                false, // not initiator
-                &init_shared_secret,
-            )
-            .map_err(|e| format!("ratchet init: {}", e))?;
-            // SECURITY FIX (G9): Persist the ratchet session for this peer so
-            // future messages (including relay-fetched) can decrypt.
-            let session_json = ratchet_session
-                .serialize()
-                .map_err(|e| format!("ratchet serialize: {}", e))?;
-            let _ = store.save_session(&peer_nid, &session_json).await;
+        let mut ratchet_session = add_crypto::DoubleRatchetSession::new(
+            peer_fp,
+            &peer_nid,
+            &identity.fingerprint,
+            false, // not initiator
+            &init_shared_secret,
+        )
+        .map_err(|e| format!("ratchet init: {}", e))?;
+        // SECURITY FIX (G9): Persist the ratchet session for this peer so
+        // future messages (including relay-fetched) can decrypt.
+        let session_json = ratchet_session
+            .serialize()
+            .map_err(|e| format!("ratchet serialize: {}", e))?;
+        let _ = store.save_session(&peer_nid, &session_json).await;
 
-            // SECURITY FIX (C1): Decrypt using Double Ratchet + Kyber-768
-            let padded_plaintext = ratchet_session
-                .decrypt_message(ciphertext, &our_kyber)
-                .map_err(|e| format!("decrypt failed: {}", e))?;
+        // SECURITY FIX (C1): Decrypt using Double Ratchet + Kyber-768
+        let padded_plaintext = ratchet_session
+            .decrypt_message(ciphertext, &our_kyber)
+            .map_err(|e| format!("decrypt failed: {}", e))?;
 
-            // SECURITY FIX (M1): Strip message padding
-            let plaintext = unpad_message_bucket(&padded_plaintext)?;
+        // SECURITY FIX (M1): Strip message padding
+        let plaintext = unpad_message_bucket(&padded_plaintext)?;
 
-            println!(
-                "[{}] From: {} | {}",
-                chrono::Utc::now().format("%H:%M:%S"),
-                peer_fp,
-                plaintext
-            );
+        println!(
+            "[{}] From: {} | {}",
+            chrono::Utc::now().format("%H:%M:%S"),
+            peer_fp,
+            plaintext
+        );
 
-            // G5: Store received message (only ciphertext, no plaintext)
-            // Status 2 = delivered
-            let message_id = sha256_hex(ciphertext.as_bytes());
-            let _ = store
-                .store_message(peer_fp, &identity.null_id, ciphertext, 2, &message_id)
-                .await;
+        // G5: Store received message (only ciphertext, no plaintext)
+        // Status 2 = delivered
+        let message_id = sha256_hex(ciphertext.as_bytes());
+        let _ = store
+            .store_message(peer_fp, &identity.null_id, ciphertext, 2, &message_id)
+            .await;
 
-            // Send ack (signed)
-            let ack_sig_data = format!(
-                "p2p-ack:{}\n",
-                serde_json::json!({
-                    "seq": 1,
-                    "msg_hash": sha256_hex(&plaintext),
-                })
-            );
-            let ack_sig = sign_for_transport(&ack_sig_data)?;
-            let p2p_ack =
-                add_p2p::protocol::build_p2p_ack_signed(1, &sha256_hex(&plaintext), &ack_sig);
-            ws_tx
-                .send(Message::Text(serde_json::to_string(&p2p_ack)?.into()))
-                .await?;
+        // Send ack (signed)
+        let ack_sig_data = format!(
+            "p2p-ack:{}\n",
+            serde_json::json!({
+                "seq": 1,
+                "msg_hash": sha256_hex(&plaintext),
+            })
+        );
+        let ack_sig = sign_for_transport(&ack_sig_data)?;
+        let p2p_ack = add_p2p::protocol::build_p2p_ack_signed(1, &sha256_hex(&plaintext), &ack_sig);
+        ws_tx
+            .send(Message::Text(serde_json::to_string(&p2p_ack)?.into()))
+            .await?;
 
-            // ACS2.6: Send p2p-receipt — cryptographic E2E delivery confirmation.
-            // The receipt is signed by the recipient and proves the message was
-            // successfully decrypted (delivered to the user) without revealing content.
-            // Hash is of ciphertext to match sender's msg_hash for correlation verification.
-            let receipt_sig_data = format!(
-                "p2p-receipt:{}:{}:{}",
-                sha256_hex(ciphertext),
-                chrono::Utc::now().timestamp() as f64,
-                1, // seq
-            );
-            let receipt_sig = sign_for_transport(&receipt_sig_data)?;
-            let p2p_receipt = add_p2p::protocol::build_p2p_receipt(
-                &sha256_hex(&plaintext),
-                chrono::Utc::now().timestamp() as f64,
-                1,
-                &receipt_sig,
-            );
-            ws_tx
-                .send(Message::Text(serde_json::to_string(&p2p_receipt)?.into()))
-                .await?;
+        // ACS2.6: Send p2p-receipt — cryptographic E2E delivery confirmation.
+        // The receipt is signed by the recipient and proves the message was
+        // successfully decrypted (delivered to the user) without revealing content.
+        // Hash is of ciphertext to match sender's msg_hash for correlation verification.
+        let receipt_sig_data = format!(
+            "p2p-receipt:{}:{}:{}",
+            sha256_hex(ciphertext),
+            chrono::Utc::now().timestamp() as f64,
+            1, // seq
+        );
+        let receipt_sig = sign_for_transport(&receipt_sig_data)?;
+        let p2p_receipt = add_p2p::protocol::build_p2p_receipt(
+            &sha256_hex(&plaintext),
+            chrono::Utc::now().timestamp() as f64,
+            1,
+            &receipt_sig,
+        );
+        ws_tx
+            .send(Message::Text(serde_json::to_string(&p2p_receipt)?.into()))
+            .await?;
 
-            // Also send read receipt to all known relays for cross-relay sync
-            let receipt = RelayReadReceipt {
-                message_id: sha256_hex(ciphertext.as_bytes()),
-                recipient_nid: identity.null_id.clone(),
-                recipient_fp: identity.fingerprint.clone(),
-                signature: receipt_sig,
-                timestamp: chrono::Utc::now().timestamp() as f64,
-                nonce: uuid_hex(),
-                recipient_verifying_key: my_verifying_key_b64()?,
-                other_relays: relay_urls.clone(),
-            };
-            for url in &relay_urls {
-                if let Err(e) = send_read_receipt_to_relay(url, &receipt).await {
-                    tracing::warn!(relay = %url, "failed to send read receipt: {}", e);
-                }
+        // Also send read receipt to all known relays for cross-relay sync
+        let receipt = RelayReadReceipt {
+            message_id: sha256_hex(ciphertext.as_bytes()),
+            recipient_nid: identity.null_id.clone(),
+            recipient_fp: identity.fingerprint.clone(),
+            signature: receipt_sig,
+            timestamp: chrono::Utc::now().timestamp() as f64,
+            nonce: uuid_hex(),
+            recipient_verifying_key: my_verifying_key_b64()?,
+            other_relays: relay_urls.clone(),
+        };
+        for url in &relay_urls {
+            if let Err(e) = send_read_receipt_to_relay(url, &receipt).await {
+                tracing::warn!(relay = %url, "failed to send read receipt: {}", e);
             }
+        }
 
-            // Update local message status to "read" (3)
-            let message_id = sha256_hex(ciphertext.as_bytes());
-            let _ = store.update_message_status(&message_id, 3).await;
+        // Update local message status to "read" (3)
+        let message_id = sha256_hex(ciphertext.as_bytes());
+        let _ = store.update_message_status(&message_id, 3).await;
     }
 
     ws_tx.close().await.ok();
@@ -3696,8 +4018,14 @@ fn safety_number(fp1: &str, fp2: &str) -> String {
     // Format as 8 groups of 8 hex chars for easy visual comparison
     format!(
         "{} {} {} {} {} {} {} {}",
-        &hash[0..8], &hash[8..16], &hash[16..24], &hash[24..32],
-        &hash[32..40], &hash[40..48], &hash[48..56], &hash[56..64]
+        &hash[0..8],
+        &hash[8..16],
+        &hash[16..24],
+        &hash[24..32],
+        &hash[32..40],
+        &hash[40..48],
+        &hash[48..56],
+        &hash[56..64]
     )
 }
 
@@ -3873,7 +4201,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let current_pid = std::process::id() as i32;
     if matches!(args.cmd, Commands::Listen { .. }) {
         let is_already_listen = listen_pid_path.exists()
-            && std::fs::read_to_string(&listen_pid_path).ok().and_then(|p| p.trim().parse::<i32>().ok()) == Some(current_pid);
+            && std::fs::read_to_string(&listen_pid_path)
+                .ok()
+                .and_then(|p| p.trim().parse::<i32>().ok())
+                == Some(current_pid);
 
         if !is_already_listen {
             // Check listen PID file (for background listen process from Electron app)
@@ -3915,7 +4246,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shutdown_clone = Arc::clone(&shutdown);
     tokio::spawn(async move {
         let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("received SIGINT, initiating graceful shutdown (zeroizing secure memory)...");
+        tracing::info!(
+            "received SIGINT, initiating graceful shutdown (zeroizing secure memory)..."
+        );
         shutdown_clone.notify_one();
     });
 
@@ -3924,7 +4257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let shutdown_clone2 = Arc::clone(&shutdown);
         tokio::spawn(async move {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
             let _ = sigterm.recv().await;
             tracing::info!("received SIGTERM, initiating graceful shutdown...");
@@ -3957,7 +4290,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Use first (primary) relay for single-relay ops
-    let relay_url = relay_urls.first().cloned().unwrap_or_else(|| RELAY_URL.to_string());
+    let relay_url = relay_urls
+        .first()
+        .cloned()
+        .unwrap_or_else(|| RELAY_URL.to_string());
 
     // Log relay configuration
     if relay_urls.len() > 1 {
@@ -3973,24 +4309,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Init => {
             // Check if identity already exists — require confirmation to overwrite
             let identity_path = home_dir().join(IDENTITY_PATH);
-            if identity_path.exists() {
-                if let Ok(existing) = Identity::load() {
-                    println!("An identity already exists!");
-                    println!("  Null ID:     {}", existing.null_id);
-                    println!("  Fingerprint: {}", existing.fingerprint);
-                    println!();
-                    println!("WARNING: Re-initializing will destroy your current identity.");
-                    println!("         You will NOT be able to read messages sent to this identity.");
-                    println!("         All contacts will need your new Null ID.");
-                    println!();
-                    println!("Type 'yes' to confirm and replace your identity:");
+            if identity_path.exists()
+                && let Ok(existing) = Identity::load()
+            {
+                println!("An identity already exists!");
+                println!("  Null ID:     {}", existing.null_id);
+                println!("  Fingerprint: {}", existing.fingerprint);
+                println!();
+                println!("WARNING: Re-initializing will destroy your current identity.");
+                println!("         You will NOT be able to read messages sent to this identity.");
+                println!("         All contacts will need your new Null ID.");
+                println!();
+                println!("Type 'yes' to confirm and replace your identity:");
 
-                    let mut confirm = String::new();
-                    std::io::stdin().read_line(&mut confirm)?;
-                    if confirm.trim() != "yes" {
-                        println!("Aborted. Your existing identity is unchanged.");
-                        return Ok(());
-                    }
+                let mut confirm = String::new();
+                std::io::stdin().read_line(&mut confirm)?;
+                if confirm.trim() != "yes" {
+                    println!("Aborted. Your existing identity is unchanged.");
+                    return Ok(());
                 }
             }
 
@@ -4008,9 +4344,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // A vanity label here would never resolve to an addr_record.
             let mut contacts = load_contacts();
             if !contacts.contains_key("NN-UFtv-8fHu") {
-                contacts.insert("NN-UFtv-8fHu".to_string(), "3957378550B111F2678DC1B4A58C27B22091D5CF".to_string());
+                contacts.insert(
+                    "NN-UFtv-8fHu".to_string(),
+                    "3957378550B111F2678DC1B4A58C27B22091D5CF".to_string(),
+                );
                 save_contacts(&contacts)?;
-                println!("\nAdded Reflector Bot (NN-UFtv-8fHu) as ECHO contact for latency testing.");
+                println!(
+                    "\nAdded Reflector Bot (NN-UFtv-8fHu) as ECHO contact for latency testing."
+                );
             }
         }
         Commands::Id => {
@@ -4018,7 +4359,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Null ID:     {}", identity.null_id);
             println!("Fingerprint: {}", identity.fingerprint);
         }
-        Commands::Send { to, message, pir, ttl } => {
+        Commands::Send {
+            to,
+            message,
+            pir,
+            ttl,
+        } => {
             let store = MessageStore::open().await?;
             let identity = Identity::load()?;
             let aliases = load_aliases();
@@ -4028,7 +4374,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match best_relay {
                 Some(url) => {
                     tracing::info!("Selected fastest relay: {}", url);
-                    send_message(&identity, &resolved_to, &message, &store, pir, &seed_url, &url, ttl.as_deref()).await?;
+                    send_message(
+                        &identity,
+                        &resolved_to,
+                        &message,
+                        &store,
+                        pir,
+                        &seed_url,
+                        &url,
+                        ttl.as_deref(),
+                    )
+                    .await?;
                 }
                 None => {
                     return Err("No relay servers reachable".into());
@@ -4059,7 +4415,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &identity.fingerprint,
                         &store,
                         &our_kyber,
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(decrypted) => {
                             let msg_hash = sha256_hex(decrypted.as_bytes());
                             if !seen_hashes.contains(&msg_hash) {
@@ -4107,18 +4465,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     // Checkmark indicators based on status
                     let checkmark = match msg.status {
-                        0 => "🔘", // Sent
-                        1 => "☑️",  // Relayed
-                        2 => "✔️",  // Delivered
+                        0 => "🔘",   // Sent
+                        1 => "☑️",   // Relayed
+                        2 => "✔️",   // Delivered
                         3 => "✔️✔️", // Read
                         _ => "?",
                     };
-                    println!("  [{}] {} {} -> {}: {}", idx + 1, checkmark, msg.from_nid, msg.to_nid, preview);
+                    println!(
+                        "  [{}] {} {} -> {}: {}",
+                        idx + 1,
+                        checkmark,
+                        msg.from_nid,
+                        msg.to_nid,
+                        preview
+                    );
                 }
                 println!("  (use 'add delete <position>' to delete a message)");
             }
         }
-        Commands::Reflect { ttl, interval, relay } => {
+        Commands::Reflect {
+            ttl,
+            interval,
+            relay,
+        } => {
             // Always-online echo mode (Reflector Bot). Reuses the normal
             // receive + send paths — no bespoke crypto. For every message we
             // receive, we send back exactly the same text to its sender.
@@ -4146,12 +4515,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let identity_refresh = identity.clone();
             let advertised_refresh = advertised.clone();
             tokio::spawn(async move {
-                let mut interval_timer = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
+                let mut interval_timer =
+                    tokio::time::interval(std::time::Duration::from_secs(30 * 60));
                 interval_timer.tick().await; // consume immediate first tick
                 loop {
                     interval_timer.tick().await;
                     if let Err(e) =
-                        dht_register_addr_record_all(&identity_refresh, &advertised_refresh, 3600).await
+                        dht_register_addr_record_all(&identity_refresh, &advertised_refresh, 3600)
+                            .await
                     {
                         tracing::warn!("DHT register refresh failed: {}", e);
                     }
@@ -4231,7 +4602,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &seed_url,
                             &select_fastest_relay(&relay_urls).await.unwrap_or_default(),
                             ttl.as_deref(),
-                        ).await {
+                        )
+                        .await
+                        {
                             true
                         } else {
                             send_via_relay(
@@ -4243,7 +4616,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 &select_fastest_relay(&relay_urls).await.unwrap_or_default(),
                                 ttl.as_deref(),
                                 true,
-                            ).await.is_ok()
+                            )
+                            .await
+                            .is_ok()
                         };
                         if echo_sent {
                             // ACK the source message on the relay (message_id == the
@@ -4251,9 +4626,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // will NOT be re-fetched on the next poll.
                             let rts = chrono::Utc::now().timestamp() as f64;
                             let rnonce = uuid_hex();
-                            if let Ok(rsig) = sign_for_transport(
-                                &format!("{}|{}|{}", signed_blob, identity.null_id, rts),
-                            ) {
+                            if let Ok(rsig) = sign_for_transport(&format!(
+                                "{}|{}|{}",
+                                signed_blob, identity.null_id, rts
+                            )) {
                                 let receipt = RelayReadReceipt {
                                     message_id: signed_blob.clone(),
                                     recipient_nid: identity.null_id.clone(),
@@ -4267,7 +4643,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = send_read_receipt_to_relay(
                                     &select_fastest_relay(&relay_urls).await.unwrap_or_default(),
                                     &receipt,
-                                ).await;
+                                )
+                                .await;
                             }
                         }
                     }
@@ -4276,9 +4653,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     for blob in &ack_blobs {
                         let rts = chrono::Utc::now().timestamp() as f64;
                         let rnonce = uuid_hex();
-                        if let Ok(rsig) = sign_for_transport(
-                            &format!("{}|{}|{}", blob, identity.null_id, rts),
-                        ) {
+                        if let Ok(rsig) =
+                            sign_for_transport(&format!("{}|{}|{}", blob, identity.null_id, rts))
+                        {
                             let receipt = RelayReadReceipt {
                                 message_id: blob.clone(),
                                 recipient_nid: identity.null_id.clone(),
@@ -4292,7 +4669,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let _ = send_read_receipt_to_relay(
                                 &select_fastest_relay(&relay_urls).await.unwrap_or_default(),
                                 &receipt,
-                            ).await;
+                            )
+                            .await;
                         }
                     }
                     // Purge delivered echoes from the mailbox so we don't loop.
@@ -4311,7 +4689,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // decryption of relay-stored (kyber_ciphertext) echoes.
             let mut all = relay_fetch_all(&relay_urls, &identity.null_id).await?;
             if !relay_urls.iter().any(|u| u == &relay) {
-                match relay_fetch_all(&[relay.clone()], &identity.null_id).await {
+                match relay_fetch_all(std::slice::from_ref(&relay), &identity.null_id).await {
                     Ok(mut more) => all.append(&mut more),
                     Err(e) => println!("  (relay {} error: {})", relay, e),
                 }
@@ -4319,10 +4697,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("RAWFETCH count={}", all.len());
             let store = MessageStore::open().await?;
             let our_kyber = load_or_generate_kyber(&identity.null_id, &store)?;
-            for (i, (src, blob, snd, sfp)) in all.iter().enumerate() {
-                match relay_decrypt_message(blob, snd, sfp, &identity.fingerprint, &store, &our_kyber).await {
+            for (i, (_src, blob, snd, sfp)) in all.iter().enumerate() {
+                match relay_decrypt_message(
+                    blob,
+                    snd,
+                    sfp,
+                    &identity.fingerprint,
+                    &store,
+                    &our_kyber,
+                )
+                .await
+                {
                     Ok(plaintext) => println!("  [{}] from {}: {}", i, snd, plaintext),
-                    Err(e) => println!("  [{}] from {}: <decrypt-failed: {}> blob={}", i, snd, e, blob),
+                    Err(e) => println!(
+                        "  [{}] from {}: <decrypt-failed: {}> blob={}",
+                        i, snd, e, blob
+                    ),
                 }
             }
         }
@@ -4346,16 +4736,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::AddContact { null_id, fingerprint } => {
+        Commands::AddContact {
+            null_id,
+            fingerprint,
+        } => {
             if fingerprint.len() < 32 || !fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
                 return Err("invalid fingerprint format — must be 32-40 hex chars".into());
             }
             let mut contacts = load_contacts();
             contacts.insert(null_id.clone(), fingerprint.to_uppercase());
             save_contacts(&contacts)?;
-            println!("Added contact: {} -> {}", null_id, fingerprint.to_uppercase());
+            println!(
+                "Added contact: {} -> {}",
+                null_id,
+                fingerprint.to_uppercase()
+            );
         }
-        Commands::Listen { advertised_url, no_nat } => {
+        Commands::Listen {
+            advertised_url,
+            no_nat,
+        } => {
             let store = MessageStore::open().await?;
             let identity = Identity::load()?;
             // Load our GPG cert for signing address records
@@ -4392,7 +4792,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // G4: Document that the DHT is centralized (seed model)
             println!("\n  DHT model: Centralized seed (no Kademlia routing)");
-            println!("  The DHT seed node at {} stores all key-value pairs.", seed_url);
+            println!(
+                "  The DHT seed node at {} stores all key-value pairs.",
+                seed_url
+            );
             println!("  Clients connect directly to the seed for lookups and writes.");
             println!("  P2P connections are established after DHT lookup for direct delivery.");
         }
@@ -4400,19 +4803,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let contacts = load_contacts();
             let aliases = load_aliases();
             let resolved_nid = resolve_recipient(&null_id, &aliases);
-            let fp = contacts.get(&resolved_nid).ok_or("unknown contact — add with 'add-contact' first")?;
+            let fp = contacts
+                .get(&resolved_nid)
+                .ok_or("unknown contact — add with 'add-contact' first")?;
             let identity = Identity::load()?;
             let sn = safety_number(&identity.fingerprint, fp);
             println!("Safety number for {}:", resolved_nid);
             println!("  {}", sn);
             println!("\nVerify this matches your contact's safety number.");
-            println!("If it doesn't match, a man-in-the-middle may be intercepting your communication.");
+            println!(
+                "If it doesn't match, a man-in-the-middle may be intercepting your communication."
+            );
         }
         Commands::SafetyNumber { null_id } => {
             let contacts = load_contacts();
             let aliases = load_aliases();
             let resolved_nid = resolve_recipient(&null_id, &aliases);
-            let fp = contacts.get(&resolved_nid).ok_or("unknown contact — add with 'add-contact' first")?;
+            let fp = contacts
+                .get(&resolved_nid)
+                .ok_or("unknown contact — add with 'add-contact' first")?;
             let identity = Identity::load()?;
             let sn = safety_number(&identity.fingerprint, fp);
             println!("Your safety number with {}:", resolved_nid);
@@ -4422,7 +4831,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Validate that the null_id exists in contacts
             let contacts = load_contacts();
             if !contacts.contains_key(&null_id) {
-                return Err(format!("unknown Null ID: {} — add it first with 'add-contact {} <fingerprint>'", null_id, null_id).into());
+                return Err(format!(
+                    "unknown Null ID: {} — add it first with 'add-contact {} <fingerprint>'",
+                    null_id, null_id
+                )
+                .into());
             }
             let mut aliases = load_aliases();
             aliases.insert(alias.clone(), null_id.clone());
@@ -4449,8 +4862,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::RegisterAllBootstraps => {
             let identity = Identity::load()?;
             let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
-            println!("Registering identity {} with {} bootstrap servers...", identity.null_id, bootstraps.len());
-            
+            println!(
+                "Registering identity {} with {} bootstrap servers...",
+                identity.null_id,
+                bootstraps.len()
+            );
+
             let mut tasks = Vec::new();
             for bootstrap_url in bootstraps.clone() {
                 let ident = identity.clone();
@@ -4462,7 +4879,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }));
             }
-            
+
             // Wait for all to complete
             let mut results = Vec::new();
             for task in tasks {
@@ -4470,7 +4887,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     results.push((url, result));
                 }
             }
-            
+
             // Print results
             let mut all_ok = true;
             for (url, result) in &results {
@@ -4482,9 +4899,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            
+
             if all_ok {
-                println!("\n✓ All {} bootstrap registrations successful.", results.len());
+                println!(
+                    "\n✓ All {} bootstrap registrations successful.",
+                    results.len()
+                );
             } else {
                 println!("\n⚠ Some registrations failed. Run 'add check-register' to verify.");
             }
@@ -4492,8 +4912,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::CheckRegister => {
             let identity = Identity::load()?;
             let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
-            println!("Checking registration for {} across {} bootstrap servers...", identity.null_id, bootstraps.len());
-            
+            println!(
+                "Checking registration for {} across {} bootstrap servers...",
+                identity.null_id,
+                bootstraps.len()
+            );
+
             let mut tasks = Vec::new();
             for bootstrap_url in bootstraps.clone() {
                 let ident = identity.clone();
@@ -4507,17 +4931,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }));
             }
-            
+
             let mut results = Vec::new();
             for task in tasks {
                 if let Ok((url, status)) = task.await {
                     results.push((url, status.to_string()));
                 }
             }
-            
+
             // Print status table
             println!("\nBootstrap Registration Status:");
-            println!("{:<50} {}", "Server", "Status");
+            println!("{:<50} Status", "Server");
             println!("{}", "-".repeat(70));
             let mut all_online = true;
             for (url, status) in &results {
@@ -4527,29 +4951,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     all_online = false;
                 }
             }
-            
-            println!("\nSummary: {} online, {} incomplete", 
+
+            println!(
+                "\nSummary: {} online, {} incomplete",
                 results.iter().filter(|(_, s)| s == "online").count(),
-                results.iter().filter(|(_, s)| s != "online").count());
-            
+                results.iter().filter(|(_, s)| s != "online").count()
+            );
+
             if all_online {
                 println!("✓ All bootstrap servers have your identity registered.");
             } else {
-                println!("⚠ Some servers missing registration. Run 'add register-all-bootstraps' to fix.");
+                println!(
+                    "⚠ Some servers missing registration. Run 'add register-all-bootstraps' to fix."
+                );
             }
         }
         Commands::ContactStatus => {
-            let identity = Identity::load()?;
+            let _identity = Identity::load()?;
             let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
             let contacts = load_contacts();
-            
+
             if contacts.is_empty() {
-                println!("No contacts found. Add contacts with 'add add-contact <null_id> <fingerprint>'");
+                println!(
+                    "No contacts found. Add contacts with 'add add-contact <null_id> <fingerprint>'"
+                );
             } else {
-                println!("Checking online status for {} contacts across {} bootstrap servers...", contacts.len(), bootstraps.len());
-                
+                println!(
+                    "Checking online status for {} contacts across {} bootstrap servers...",
+                    contacts.len(),
+                    bootstraps.len()
+                );
+
                 let mut contact_status = Vec::new();
-                
+
                 for (null_id, fingerprint) in &contacts {
                     // Query each bootstrap for addr record
                     let mut found_online = false;
@@ -4558,34 +4992,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match dht_get(bootstrap_url, &addr_key).await {
                             Ok(Some(value)) => {
                                 // Decode the base64 address
-                                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&value) {
-                                    if let Ok(addr) = String::from_utf8(decoded) {
-                                        println!("  ✓ {} ({}) - ONLINE at {}", 
-                                            fingerprint.chars().take(8).collect::<String>(),
-                                            null_id,
-                                            addr);
-                                        found_online = true;
-                                        break;
-                                    }
+                                if let Ok(decoded) =
+                                    base64::engine::general_purpose::STANDARD.decode(&value)
+                                    && let Ok(addr) = String::from_utf8(decoded)
+                                {
+                                    println!(
+                                        "  ✓ {} ({}) - ONLINE at {}",
+                                        fingerprint.chars().take(8).collect::<String>(),
+                                        null_id,
+                                        addr
+                                    );
+                                    found_online = true;
+                                    break;
                                 }
                             }
                             Ok(None) => continue,
                             Err(_) => continue,
                         }
                     }
-                    
+
                     if !found_online {
-                        println!("  ✗ {} ({}) - OFFLINE", 
+                        println!(
+                            "  ✗ {} ({}) - OFFLINE",
                             fingerprint.chars().take(8).collect::<String>(),
-                            null_id);
+                            null_id
+                        );
                     }
                     contact_status.push((null_id.clone(), fingerprint.clone(), found_online));
                 }
-                
+
                 // Summary
-                let online_count = contact_status.iter().filter(|(_, _, online)| *online).count();
+                let online_count = contact_status
+                    .iter()
+                    .filter(|(_, _, online)| *online)
+                    .count();
                 let offline_count = contact_status.len() - online_count;
-                println!("\nSummary: {} online, {} offline", online_count, offline_count);
+                println!(
+                    "\nSummary: {} online, {} offline",
+                    online_count, offline_count
+                );
             }
         }
         Commands::Delete { id } => {
@@ -4595,7 +5040,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let stored = store.get_messages(100).await?;
             let pos = id.max(1) as usize; // clamp to 1-indexed
             if pos > stored.len() {
-                println!("No message found at position {}. ({} stored messages)", pos, stored.len());
+                println!(
+                    "No message found at position {}. ({} stored messages)",
+                    pos,
+                    stored.len()
+                );
             } else {
                 // messages are ordered DESC, position 1 = newest (first in list)
                 let msg_id = stored[pos - 1].id;

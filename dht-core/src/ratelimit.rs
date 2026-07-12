@@ -10,8 +10,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
 /// Per-key sliding-window rate limiter.
 ///
@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct RateLimiter {
     max: usize,
     window: f64,
-    max_buckets: usize,  // SECURITY FIX (G9): Limit total number of buckets
+    max_buckets: usize, // SECURITY FIX (G9): Limit total number of buckets
     buckets: Arc<Mutex<HashMap<String, Vec<f64>>>>,
 }
 
@@ -41,7 +41,7 @@ impl RateLimiter {
         Self {
             max: max_per_window,
             window: window_sec,
-            max_buckets: 100_000,  // SECURITY FIX (G9): Cap at 100k unique keys
+            max_buckets: 100_000, // SECURITY FIX (G9): Cap at 100k unique keys
             buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -83,7 +83,7 @@ impl RateLimiter {
         let mut buckets = self.buckets.lock().await;
         let keys_to_remove: Vec<String> = buckets
             .iter_mut()
-            .map(|(k, entries)| {
+            .filter_map(|(k, entries)| {
                 entries.retain(|&t| t >= cutoff);
                 if entries.is_empty() {
                     Some(k.clone())
@@ -91,7 +91,6 @@ impl RateLimiter {
                     None
                 }
             })
-            .filter_map(|x| x)
             .collect();
         for k in keys_to_remove {
             buckets.remove(&k);
@@ -100,10 +99,7 @@ impl RateLimiter {
 
     /// Start a background task that prunes expired entries periodically.
     /// Returns a JoinHandle that can be used to stop the task.
-    pub fn start_background_prune(
-        &self,
-        interval_sec: f64,
-    ) -> tokio::task::JoinHandle<()> {
+    pub fn start_background_prune(&self, interval_sec: f64) -> tokio::task::JoinHandle<()> {
         let buckets = self.buckets.clone();
         let window = self.window;
         tokio::spawn(async move {
@@ -115,7 +111,7 @@ impl RateLimiter {
                 let mut buckets = buckets.lock().await;
                 let keys_to_remove: Vec<String> = buckets
                     .iter_mut()
-                    .map(|(k, entries)| {
+                    .filter_map(|(k, entries)| {
                         entries.retain(|&t| t >= cutoff);
                         if entries.is_empty() {
                             Some(k.clone())
@@ -123,7 +119,6 @@ impl RateLimiter {
                             None
                         }
                     })
-                    .filter_map(|x| x)
                     .collect();
                 for k in keys_to_remove {
                     buckets.remove(&k);

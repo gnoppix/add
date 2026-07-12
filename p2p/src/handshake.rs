@@ -11,15 +11,15 @@
 //-------------------------------------------------------------------------------
 
 use rand::Rng;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 use add_protocol::constants;
 use add_protocol::envelope::WireEnvelope;
 use add_protocol::pow::pow_check;
 
-use crate::protocol::{build_p2p_hello, build_p2p_hello_ack};
-use crate::transport::{send_envelope, recv_envelope, WebSocketConn};
 use crate::P2pError;
+use crate::protocol::{build_p2p_hello, build_p2p_hello_ack};
+use crate::transport::{WebSocketConn, recv_envelope, send_envelope};
 
 /// Timeout for handshake operations (seconds).
 const HANDSHAKE_TIMEOUT: u64 = 30;
@@ -99,7 +99,9 @@ pub async fn handshake_initiator(
     // SECURITY FIX (M6): PoW data includes server_challenge to prevent replay
     let pow_data = format!("{}{}{}", peer_key, peer_nonce, server_challenge);
     if !pow_check(&pow_data, peer_nonce, peer_pow_bits, &[]).unwrap_or(false) {
-        return Err(P2pError::Handshake("peer PoW verification failed".to_string()));
+        return Err(P2pError::Handshake(
+            "peer PoW verification failed".to_string(),
+        ));
     }
 
     debug!("Handshake complete, peer key: {}", peer_key);
@@ -151,7 +153,9 @@ pub async fn handshake_responder(
 
     let pow_data = format!("{}{}", peer_key, peer_nonce);
     if !pow_check(&pow_data, peer_nonce, peer_pow_bits, &[]).unwrap_or(false) {
-        return Err(P2pError::Handshake("peer PoW verification failed".to_string()));
+        return Err(P2pError::Handshake(
+            "peer PoW verification failed".to_string(),
+        ));
     }
 
     // SECURITY FIX (M6): Generate a fresh random server_challenge for this
@@ -162,11 +166,26 @@ pub async fn handshake_responder(
     // Solve our own PoW (includes server_challenge) and send hello-ack
     let mut rng = rand::thread_rng();
     let base_nonce: u64 = rng.r#gen();
-    let nonce = solve_hello_pow_challenged(public_key_b64, base_nonce, HELLO_POW_BITS, &server_challenge);
+    let nonce = solve_hello_pow_challenged(
+        public_key_b64,
+        base_nonce,
+        HELLO_POW_BITS,
+        &server_challenge,
+    );
 
-    info!("Received valid p2p-hello, sending p2p-hello-ack nonce={} challenge={}", nonce, &server_challenge[..8]);
+    info!(
+        "Received valid p2p-hello, sending p2p-hello-ack nonce={} challenge={}",
+        nonce,
+        &server_challenge[..8]
+    );
 
-    let ack = build_p2p_hello_ack(public_key_b64, nonce, HELLO_POW_BITS, &server_challenge, kyber_enc_key_b64);
+    let ack = build_p2p_hello_ack(
+        public_key_b64,
+        nonce,
+        HELLO_POW_BITS,
+        &server_challenge,
+        kyber_enc_key_b64,
+    );
     send_envelope(ws, &ack).await?;
 
     Ok(hello)
@@ -193,7 +212,12 @@ fn solve_hello_pow(public_key_b64: &str, base_nonce: u64, difficulty: u32) -> u6
 /// the server_challenge. This makes the PoW unique per connection.
 /// SECURITY FIX (M11): Passes empty node_secret since P2P hello PoW
 /// is ephemeral (per-connection via server_challenge), not per-node.
-fn solve_hello_pow_challenged(public_key_b64: &str, base_nonce: u64, difficulty: u32, challenge: &str) -> u64 {
+fn solve_hello_pow_challenged(
+    public_key_b64: &str,
+    base_nonce: u64,
+    difficulty: u32,
+    challenge: &str,
+) -> u64 {
     for i in 0..1_000_000 {
         let nonce = base_nonce.wrapping_add(i);
         let data = format!("{}{}{}", public_key_b64, nonce, challenge);

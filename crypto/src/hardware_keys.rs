@@ -19,31 +19,22 @@
 //                                    ├── Sealed Sender Root (per-identity)
 //                                    └── Delivery Token Root (per-message)
 
-use argon2::{
-    password_hash::{PasswordHashString, SaltString},
-    Argon2, Algorithm, Params, Version,
-};
+use argon2::{Algorithm, Argon2, Params, Version, password_hash::SaltString};
 use hkdf::Hkdf;
-use rand::RngCore;
 use sha2::Sha512;
-use std::sync::Arc;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{CryptoError, MlKem1024Keypair, secure_mem::{SecureKeyMaterial, lock_memory, unlock_memory}};
-use ml_kem::KeyExport;
+use crate::{
+    CryptoError, MlKem1024Keypair,
+    secure_mem::{SecureKeyMaterial, lock_memory, unlock_memory},
+};
 
 /// Argon2id parameters for key derivation (OWASP recommended)
 const ARGON2_MEMORY_KIB: u32 = 19456; // ~19 MiB
 const ARGON2_ITERATIONS: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 1;
 const ARGON2_OUTPUT_LEN: usize = 64;
-
-/// Salt size for Argon2id
-const ARGON2_SALT_LEN: usize = 32;
-
-/// Root secret size (HSM-backed)
-const ROOT_SECRET_SIZE: usize = 64;
 
 /// HKDF info strings for key separation
 const HKDF_INFO_IDENTITY: &[u8] = b"add-identity-root-v1";
@@ -165,7 +156,8 @@ impl RootSecret {
                 ARGON2_ITERATIONS,
                 ARGON2_PARALLELISM,
                 Some(ARGON2_OUTPUT_LEN),
-            ).unwrap(),
+            )
+            .unwrap(),
         );
 
         // Parse salt from b64-encoded SaltString
@@ -175,7 +167,9 @@ impl RootSecret {
         };
 
         let mut output = [0u8; ARGON2_OUTPUT_LEN];
-        argon2.hash_password_into(passphrase, salt.as_str().as_bytes(), &mut output).is_ok()
+        argon2
+            .hash_password_into(passphrase, salt.as_str().as_bytes(), &mut output)
+            .is_ok()
     }
 
     /// Get the raw key material for derivation (internal use only)
@@ -242,7 +236,7 @@ impl HardwareKeyManager {
     pub fn new_from_passphrase(passphrase: &[u8]) -> Result<Self, HardwareKeyError> {
         let root_secret = RootSecret::from_passphrase(passphrase)?;
         let identity_root = IdentityRootKey::derive(&root_secret)?;
-        
+
         Ok(Self {
             root_secret,
             identity_root,
@@ -254,7 +248,7 @@ impl HardwareKeyManager {
     pub fn new_from_hsm() -> Result<Self, HardwareKeyError> {
         let root_secret = RootSecret::from_hsm()?;
         let identity_root = IdentityRootKey::derive(&root_secret)?;
-        
+
         Ok(Self {
             root_secret,
             identity_root,
@@ -275,15 +269,16 @@ impl HardwareKeyManager {
     /// The seed is derived from the identity root key
     pub fn generate_mlkem_keypair(&self) -> Result<MlKem1024Keypair, HardwareKeyError> {
         let session_keys = self.session_keys()?;
-        
+
         // Use HKDF to expand ratchet_root (32 bytes) to 64-byte seed for ML-KEM
         let hkdf = Hkdf::<Sha512>::new(None, session_keys.ratchet_root.bytes());
         let mut seed = [0u8; 64];
         hkdf.expand(b"add-mlkem-seed-v1", &mut seed)
             .map_err(|e| HardwareKeyError::DerivationFailed(e.to_string()))?;
 
-        let keypair = MlKem1024Keypair::from_seed(&seed)
-            .map_err(|e| HardwareKeyError::Crypto(CryptoError::Ratchet(format!("ML-KEM keypair: {}", e))))?;
+        let keypair = MlKem1024Keypair::from_seed(&seed).map_err(|e| {
+            HardwareKeyError::Crypto(CryptoError::Ratchet(format!("ML-KEM keypair: {}", e)))
+        })?;
 
         Ok(keypair)
     }
@@ -354,6 +349,7 @@ impl HardwareKeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ml_kem::KeyExport;
 
     #[test]
     fn test_root_secret_from_passphrase() {
@@ -396,9 +392,9 @@ mod tests {
     fn test_hardware_key_manager() {
         let passphrase = b"test-passphrase-123";
         let manager = HardwareKeyManager::new_from_passphrase(passphrase).unwrap();
-        
+
         assert_eq!(manager.root_source(), RootSecretSource::Argon2id);
-        
+
         let session = manager.session_keys().unwrap();
         assert_eq!(session.ratchet_root.len(), 32);
     }
@@ -407,9 +403,9 @@ mod tests {
     fn test_mlkem_keypair_generation() {
         let passphrase = b"test-passphrase-123";
         let manager = HardwareKeyManager::new_from_passphrase(passphrase).unwrap();
-        
+
         let keypair = manager.generate_mlkem_keypair().unwrap();
-        
+
         // Verify keypair works using static method
         let (ct, ss1) = MlKem1024Keypair::encapsulate(&keypair.enc).unwrap();
         let ss2 = keypair.decapsulate(&ct).unwrap();
@@ -422,14 +418,14 @@ mod tests {
     #[test]
     fn test_deterministic_keys_same_passphrase() {
         let passphrase = b"same-passphrase";
-        
+
         let manager1 = HardwareKeyManager::new_from_passphrase(passphrase).unwrap();
         let manager2 = HardwareKeyManager::new_from_passphrase(passphrase).unwrap();
-        
+
         // Keys should be different each time due to random salt
         let kp1 = manager1.generate_mlkem_keypair().unwrap();
         let kp2 = manager2.generate_mlkem_keypair().unwrap();
-        
+
         // Different keypairs (salt is random) - compare via KeyExport
         let kp1_bytes = kp1.enc.to_bytes();
         let kp2_bytes = kp2.enc.to_bytes();
@@ -440,7 +436,7 @@ mod tests {
     fn test_lock_unlock_memory() {
         let passphrase = b"test-passphrase-123";
         let mut manager = HardwareKeyManager::new_from_passphrase(passphrase).unwrap();
-        
+
         // Best effort - may not work in all test environments
         let _ = manager.lock_all();
         let _ = manager.unlock_all();

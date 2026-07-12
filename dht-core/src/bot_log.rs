@@ -92,7 +92,11 @@ impl BotLogger {
         // SECURITY FIX (M8): Rotate the log file if it has grown too large.
         self.rotate_if_needed();
 
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&self.log_path) {
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+        {
             let _ = writeln!(f, "{}", log_line);
         } else {
             tracing::warn!("could not write to {}", self.log_path.display());

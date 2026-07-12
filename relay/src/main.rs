@@ -19,7 +19,7 @@ use clap::Parser;
 use futures::{SinkExt as _, StreamExt as _};
 use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message;
 use tracing_subscriber::EnvFilter;
@@ -53,6 +53,7 @@ const MIX_MIN_DELAY_SECONDS: u64 = 1;
 /// Maximum random delay (seconds) before forwarding a message  
 const MIX_MAX_DELAY_SECONDS: u64 = 60;
 /// Cover message burst size when mixing
+#[allow(dead_code)]
 const MIX_COVER_BURST_COUNT: usize = 3;
 
 // =============================================================================
@@ -103,24 +104,24 @@ impl TrafficBudget {
         match state {
             NetworkState::Unrestricted => Self {
                 state,
-                base_rate_pps: 0.1,      // ~50-100 MB/hr
+                base_rate_pps: 0.1, // ~50-100 MB/hr
                 burst_multiplier: 10.0,
                 mixnet_enabled: true,
                 push_enabled: true,
             },
             NetworkState::Metered => Self {
                 state,
-                base_rate_pps: 0.0,      // Zero idle traffic
-                burst_multiplier: 2.0,   // Padding only during send
+                base_rate_pps: 0.0,    // Zero idle traffic
+                burst_multiplier: 2.0, // Padding only during send
                 mixnet_enabled: true,
                 push_enabled: true,
             },
             NetworkState::Tactical => Self {
                 state,
-                base_rate_pps: 0.0,      // Zero idle traffic
-                burst_multiplier: 1.0,   // No padding
-                mixnet_enabled: false,   // Direct routing only
-                push_enabled: false,     // No push
+                base_rate_pps: 0.0,    // Zero idle traffic
+                burst_multiplier: 1.0, // No padding
+                mixnet_enabled: false, // Direct routing only
+                push_enabled: false,   // No push
             },
         }
     }
@@ -139,7 +140,7 @@ impl NodeRole {
     pub fn is_core(&self) -> bool {
         matches!(self, NodeRole::Core)
     }
-    
+
     pub fn is_edge(&self) -> bool {
         matches!(self, NodeRole::Edge)
     }
@@ -158,7 +159,8 @@ impl std::fmt::Display for NodeRole {
 // CBNP (Coordinated Baseline Noise Protocol) — ACS2.6 Part V.1
 // =============================================================================
 /// Minimum cover traffic rate to maintain anonymity set
-const CBNP_MIN_COVER_RATE_PPS: f64 = 0.05;  // ~25 MB/hr
+#[allow(dead_code)]
+const CBNP_MIN_COVER_RATE_PPS: f64 = 0.05; // ~25 MB/hr
 
 // ------------------------------------------------------------------ //
 //  Protocol messages                                                 //
@@ -211,85 +213,85 @@ struct MailboxStoreRequest {
     sealed_sender: String,
 }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct MailboxFetchRequest {
-        recipient_nid: String,
-        auth_hmac: String,
-        /// SECURITY FIX (H3): ML-DSA-87 signature proving the requester
-        /// owns the identity associated with `recipient_nid`.
-        #[serde(default)]
-        sender_sig: String,
-        /// SECURITY FIX (H3): Fingerprint of the requester (must match the
-        /// null_id derivation).
-        #[serde(default)]
-        requester_fp: String,
-        /// SECURITY FIX (H3): Timestamp for replay protection.
-        #[serde(default)]
-        timestamp: f64,
-        /// SECURITY FIX (H3): Unique nonce for replay protection.
-        #[serde(default)]
-        nonce: String,
-        /// Requester's ML-DSA-87 verifying key (base64-encoded).
-        #[serde(default)]
-        requester_verifying_key: String,
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MailboxFetchRequest {
+    recipient_nid: String,
+    auth_hmac: String,
+    /// SECURITY FIX (H3): ML-DSA-87 signature proving the requester
+    /// owns the identity associated with `recipient_nid`.
+    #[serde(default)]
+    sender_sig: String,
+    /// SECURITY FIX (H3): Fingerprint of the requester (must match the
+    /// null_id derivation).
+    #[serde(default)]
+    requester_fp: String,
+    /// SECURITY FIX (H3): Timestamp for replay protection.
+    #[serde(default)]
+    timestamp: f64,
+    /// SECURITY FIX (H3): Unique nonce for replay protection.
+    #[serde(default)]
+    nonce: String,
+    /// Requester's ML-DSA-87 verifying key (base64-encoded).
+    #[serde(default)]
+    requester_verifying_key: String,
+}
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct RelayResponse {
-        ok: bool,
-        error: Option<String>,
-        data: Option<serde_json::Value>,
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelayResponse {
+    ok: bool,
+    error: Option<String>,
+    data: Option<serde_json::Value>,
+}
 
-    // ------------------------------------------------------------------ //
-    //  Federation protocol messages                                      //
-    // ------------------------------------------------------------------ //
+// ------------------------------------------------------------------ //
+//  Federation protocol messages                                      //
+// ------------------------------------------------------------------ //
 
-    /// Route advertisement: tell peers which Null IDs are on this relay.
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct RouteAdvertise {
-        relay_url: String,
-        route_count: usize,
-        ttl: u64,
-    }
+/// Route advertisement: tell peers which Null IDs are on this relay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RouteAdvertise {
+    relay_url: String,
+    route_count: usize,
+    ttl: u64,
+}
 
-    /// Response to route-advertise with our own routes.
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct RouteAdvertiseAck {
-        relay_url: String,
-        route_count: usize,
-    }
+/// Response to route-advertise with our own routes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RouteAdvertiseAck {
+    relay_url: String,
+    route_count: usize,
+}
 
-    /// Query: "do you know which relay serves this Null ID?"
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct WhoHas {
-        null_id: String,
-    }
+/// Query: "do you know which relay serves this Null ID?"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WhoHas {
+    null_id: String,
+}
 
-    /// Response: "this Null ID is served by relay_url"
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct RouteFound {
-        null_id: String,
-        relay_url: String,
-    }
+/// Response: "this Null ID is served by relay_url"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RouteFound {
+    null_id: String,
+    relay_url: String,
+}
 
-    /// Challenge for HMAC peer authentication.
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct PeerAuth {
-        challenge: String,   // hex-encoded random bytes
-        relay_url: String,
-    }
+/// Challenge for HMAC peer authentication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PeerAuth {
+    challenge: String, // hex-encoded random bytes
+    relay_url: String,
+}
 
-    /// Response to peer-auth: HMAC-SHA256(challenge, shared_secret).
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct PeerAuthReply {
-        response: String,    // hex-encoded HMAC
-        relay_url: String,
-    }
+/// Response to peer-auth: HMAC-SHA256(challenge, shared_secret).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PeerAuthReply {
+    response: String, // hex-encoded HMAC
+    relay_url: String,
+}
 
-    /// Forward a message to a remote relay for delivery.
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct RelayForward {
+/// Forward a message to a remote relay for delivery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RelayForward {
     recipient_nid: String,
     signed_blob: String,
     sender_nid: String,
@@ -335,12 +337,12 @@ struct RelayForwardAck {
 /// Read receipt from recipient client to relays (triggers cross-relay deletion).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RelayReadReceipt {
-    message_id: String,           // SHA-256 hash of the message payload
-    recipient_nid: String,        // The recipient who read the message
-    recipient_fp: String,         // Fingerprint of the recipient
-    signature: String,            // ML-DSA-87 signature over message_id + recipient_nid + timestamp
-    timestamp: f64,               // Unix timestamp
-    nonce: String,                // Unique nonce for replay protection
+    message_id: String,    // SHA-256 hash of the message payload
+    recipient_nid: String, // The recipient who read the message
+    recipient_fp: String,  // Fingerprint of the recipient
+    signature: String,     // ML-DSA-87 signature over message_id + recipient_nid + timestamp
+    timestamp: f64,        // Unix timestamp
+    nonce: String,         // Unique nonce for replay protection
     /// Recipient's ML-DSA-87 verifying key (base64-encoded).
     #[serde(default)]
     recipient_verifying_key: String,
@@ -358,17 +360,17 @@ struct RelayReadReceiptAck {
 /// Request to delete a message from all relays (cross-relay sync).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RelayDeleteRequest {
-    message_id: String,           // SHA-256 hash of the message payload
-    recipient_nid: String,        // The recipient who requested deletion
-    recipient_fp: String,         // Fingerprint of the recipient
-    signature: String,            // ML-DSA-87 signature over message_id + recipient_nid + timestamp
-    timestamp: f64,               // Unix timestamp
-    nonce: String,                // Unique nonce for replay protection
+    message_id: String,    // SHA-256 hash of the message payload
+    recipient_nid: String, // The recipient who requested deletion
+    recipient_fp: String,  // Fingerprint of the recipient
+    signature: String,     // ML-DSA-87 signature over message_id + recipient_nid + timestamp
+    timestamp: f64,        // Unix timestamp
+    nonce: String,         // Unique nonce for replay protection
     /// Recipient's ML-DSA-87 verifying key (base64-encoded).
     #[serde(default)]
     recipient_verifying_key: String,
     /// Reason for deletion
-    reason: String,               // e.g., "read", "expired", "manual"
+    reason: String, // e.g., "read", "expired", "manual"
 }
 
 /// Response to a delete request.
@@ -412,7 +414,7 @@ struct RelayStatusRequest {
 
 #[derive(Debug, Clone)]
 struct MailboxEntry {
-    message_id: String,           // SHA-256 hash of signed_blob
+    message_id: String, // SHA-256 hash of signed_blob
     signed_blob: String,
     sender_nid: String,
     sender_fp: String,
@@ -449,10 +451,18 @@ impl Mailbox {
         // SECURITY FIX (M5): Cap entries per sender. If a single sender
         // has reached the cap, evict their oldest entry instead of the
         // global oldest (which could belong to a different sender).
-        let sender_count = self.entries.iter().filter(|e| e.sender_fp == entry.sender_fp).count();
+        let sender_count = self
+            .entries
+            .iter()
+            .filter(|e| e.sender_fp == entry.sender_fp)
+            .count();
         if sender_count >= MAX_ENTRIES_PER_SENDER {
             // Find and remove the oldest entry from this sender
-            if let Some(idx) = self.entries.iter().position(|e| e.sender_fp == entry.sender_fp) {
+            if let Some(idx) = self
+                .entries
+                .iter()
+                .position(|e| e.sender_fp == entry.sender_fp)
+            {
                 self.entries.remove(idx);
             }
         } else if self.entries.len() >= self.max_size {
@@ -476,6 +486,7 @@ impl Mailbox {
     }
 
     /// Get entries that are pending delivery (status < 2)
+    #[allow(dead_code)]
     fn fetch_undelivered(&self) -> Vec<MailboxEntry> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -549,6 +560,7 @@ struct PeerInfo {
     /// CBNP cover traffic session for this peer (distinct key per peer).
     cover_session: add_crypto::cbnp::CbnpSession,
     /// Pending cover messages queued for this peer (for batching).
+    #[allow(dead_code)]
     cover_queue: Vec<Vec<u8>>,
 }
 
@@ -603,29 +615,36 @@ impl FederationState {
 
     /// Look up the relay URL for a Null ID.
     fn lookup_route(&self, null_id: &str) -> Option<&str> {
-        self.remote_routes.get(null_id).map(|e| e.relay_url.as_str())
+        self.remote_routes
+            .get(null_id)
+            .map(|e| e.relay_url.as_str())
     }
 
     /// Add a peer with its sender channel.
     #[allow(dead_code)]
     fn add_peer(&mut self, url: String, sender: mpsc::Sender<FederationMessage>) {
-        self.peers.insert(url.clone(), PeerInfo {
-            url,
-            routes: HashSet::new(),
-            last_seen: Instant::now(),
-            authenticated: false,
-            sender: Some(sender),
-            cover_session: add_crypto::cbnp::CbnpSession::new(add_crypto::cbnp::CbnpConfig::default()),
-            cover_queue: Vec::new(),
-        });
+        self.peers.insert(
+            url.clone(),
+            PeerInfo {
+                url,
+                routes: HashSet::new(),
+                last_seen: Instant::now(),
+                authenticated: false,
+                sender: Some(sender),
+                cover_session: add_crypto::cbnp::CbnpSession::new(
+                    add_crypto::cbnp::CbnpConfig::default(),
+                ),
+                cover_queue: Vec::new(),
+            },
+        );
     }
 
     /// Send a message to a peer if connected.
     fn send_to_peer(&self, url: &str, message: FederationMessage) -> bool {
-        if let Some(peer) = self.peers.get(url) {
-            if let Some(ref sender) = peer.sender {
-                return sender.try_send(message).is_ok();
-            }
+        if let Some(peer) = self.peers.get(url)
+            && let Some(ref sender) = peer.sender
+        {
+            return sender.try_send(message).is_ok();
         }
         false
     }
@@ -634,13 +653,15 @@ impl FederationState {
     fn cleanup_expired_routes(&mut self) {
         let now = Instant::now();
         self.remote_routes.retain(|_, entry| entry.expires_at > now);
-        self.peers.retain(|_, peer| peer.last_seen.elapsed() < Duration::from_secs(FEDERATION_PEER_TIMEOUT_SECONDS));
+        self.peers.retain(|_, peer| {
+            peer.last_seen.elapsed() < Duration::from_secs(FEDERATION_PEER_TIMEOUT_SECONDS)
+        });
     }
 
     /// Record a nonce from a peer for replay protection.
     #[allow(dead_code)]
     fn record_nonce(&mut self, peer_url: &str, nonce: &str) -> bool {
-        let nonces = self.seen_nonces.entry(peer_url.to_string()).or_insert_with(Vec::new);
+        let nonces = self.seen_nonces.entry(peer_url.to_string()).or_default();
         if nonces.contains(&nonce.to_string()) {
             return false; // replay
         }
@@ -681,6 +702,7 @@ struct RelayState {
     metadata_key: [u8; 32],
     shared_secret: Option<String>,
     /// SECURITY FIX (C4/H7): Replay protection — tracks seen nonces per sender.
+    #[allow(dead_code)]
     seen_nonces: RwLock<HashMap<String, Vec<i64>>>,
     /// SECURITY FIX (H3): Replay protection for string nonces (fetch requests).
     /// Stores (nonce, timestamp) pairs for time-based eviction (H2).
@@ -702,6 +724,7 @@ struct RelayState {
     /// When false, relay-forward requests are rejected (edge/mobile mode).
     allow_relay: bool,
     /// ACS2.6 §V.1: Whether CBNP cover traffic is enabled.
+    #[allow(dead_code)]
     cbnp_enabled: bool,
 }
 
@@ -709,7 +732,13 @@ impl RelayState {
     /// Initialize relay state with optional SQLite persistence.
     /// SECURITY FIX (C5): Mailbox entries are stored in SQLite encrypted at rest
     /// using DbEncryptionKey. This ensures messages survive relay restart.
-    async fn new(shared_secret: Option<String>, gpg_home: String, db_path: Option<String>, allow_relay: bool, cbnp_enabled: bool) -> Result<Self, Box<dyn std::error::Error>> {
+    async fn new(
+        shared_secret: Option<String>,
+        gpg_home: String,
+        db_path: Option<String>,
+        allow_relay: bool,
+        cbnp_enabled: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // Load known peers from disk if available
         let known_peers = Self::load_known_peers_sync(&gpg_home);
 
@@ -749,7 +778,7 @@ impl RelayState {
                     stored_at INTEGER NOT NULL,
                     delivered INTEGER NOT NULL DEFAULT 0,
                     sender_encrypted TEXT
-                )"
+                )",
             )
             .execute(&pool)
             .await?;
@@ -830,7 +859,8 @@ impl RelayState {
     /// Returns true if the nonce is fresh (not seen before), false if replayed.
     ///
     /// SECURITY FIX (H2): Evict nonces older than STORE_TIMESTAMP_TOLERANCE_SECS
-    /// to prevent unbounded memory growth from high-volume senders.
+    /// SECURITY FIX (C4/H7): Check and record a nonce for replay protection.
+    #[allow(dead_code)]
     async fn check_and_record_nonce(&self, sender_fp: &str, nonce: i64) -> bool {
         let mut nonces = self.seen_nonces.write().await;
         let entry = nonces.entry(sender_fp.to_string()).or_insert_with(Vec::new);
@@ -907,8 +937,7 @@ impl RelayState {
         // Canonical signing data: all fields except the signature itself
         let signing_data = format!(
             "{}|{}|{}|{}|{}|{}",
-            req.recipient_nid, req.sender_nid, req.sender_fp,
-            req.seq, req.timestamp, req.nonce
+            req.recipient_nid, req.sender_nid, req.sender_fp, req.seq, req.timestamp, req.nonce
         );
 
         // TOFU: cache cert BEFORE verification (first-seen-is-trusted)
@@ -920,7 +949,7 @@ impl RelayState {
             &signing_data,
             &req.sender_fp,
             &self.ml_dsa87_verifying_key_cache,
-            &req.sender_verifying_key,  // Pass ML-DSA-87 verifying key for TOFU
+            &req.sender_verifying_key, // Pass ML-DSA-87 verifying key for TOFU
         )
         .unwrap_or(false);
         if !verified {
@@ -950,39 +979,50 @@ impl RelayState {
     }
 
     async fn store_message(&self, req: MailboxStoreRequest) -> Result<(), String> {
-            // Always write to in-memory cache for fast reads
-            let mut mailboxes = self.mailboxes.write().await;
-            let mailbox = mailboxes
-                .entry(req.recipient_nid.clone())
-                .or_insert_with(|| Mailbox::new(MAX_MAILBOX_SIZE));
+        // Always write to in-memory cache for fast reads
+        let mut mailboxes = self.mailboxes.write().await;
+        let mailbox = mailboxes
+            .entry(req.recipient_nid.clone())
+            .or_insert_with(|| Mailbox::new(MAX_MAILBOX_SIZE));
 
-            // Compute message ID as SHA-256 of the signed_blob for deduplication
-            let message_id = sha256_hex(req.signed_blob.as_bytes());
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+        // Compute message ID as SHA-256 of the signed_blob for deduplication
+        let message_id = sha256_hex(req.signed_blob.as_bytes());
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
-            mailbox.store(MailboxEntry {
-                message_id: message_id.clone(),
-                signed_blob: req.signed_blob.clone(),
-                sender_nid: req.sender_nid.clone(),
-                sender_fp: req.sender_fp.clone(),
-                seq: req.seq,
-                stored_at: now,
-                delivery_status: 1, // 1=relayed (ack from relay)
-                status_updated_at: now,
-                read_receipt_at: None,
-            });
+        mailbox.store(MailboxEntry {
+            message_id: message_id.clone(),
+            signed_blob: req.signed_blob.clone(),
+            sender_nid: req.sender_nid.clone(),
+            sender_fp: req.sender_fp.clone(),
+            seq: req.seq,
+            stored_at: now,
+            delivery_status: 1, // 1=relayed (ack from relay)
+            status_updated_at: now,
+            read_receipt_at: None,
+        });
+        let tail = if req.signed_blob.len() > 120 {
+            &req.signed_blob[req.signed_blob.len() - 120..]
+        } else {
+            &req.signed_blob[..]
+        };
+        tracing::info!(
+            "DBG relay store recv blob_len={} has_kc={} TAIL={}",
+            req.signed_blob.len(),
+            req.signed_blob.contains("kyber_ciphertext"),
+            tail
+        );
 
-            // SECURITY FIX (C5): Persist to SQLite for durability across restarts
-            // SECURITY FIX (M3): Encrypt sender metadata (nid + fp) at rest
-            if let Some(ref pool) = self.db_pool {
-                // Encrypt sender metadata: [sender_nid][sender_fp] -> AES-256-GCM
-                let sender_plaintext = format!("{}\n{}", req.sender_nid, req.sender_fp);
-                let sender_encrypted = Self::encrypt_metadata(&sender_plaintext, &self.metadata_key);
+        // SECURITY FIX (C5): Persist to SQLite for durability across restarts
+        // SECURITY FIX (M3): Encrypt sender metadata (nid + fp) at rest
+        if let Some(ref pool) = self.db_pool {
+            // Encrypt sender metadata: [sender_nid][sender_fp] -> AES-256-GCM
+            let sender_plaintext = format!("{}\n{}", req.sender_nid, req.sender_fp);
+            let sender_encrypted = Self::encrypt_metadata(&sender_plaintext, &self.metadata_key);
 
-                sqlx::query(
+            sqlx::query(
                     "INSERT INTO mailbox_entries (recipient_nid, signed_blob, sender_nid, sender_fp, seq, stored_at, sender_encrypted)
                      VALUES (?, ?, ?, ?, ?, ?, ?)"
                 )
@@ -996,42 +1036,41 @@ impl RelayState {
                 .execute(pool)
                 .await
                 .map_err(|e| format!("db store error: {}", e))?;
-            }
-
-            Ok(())
         }
+
+        Ok(())
+    }
 
     async fn fetch_messages(&self, recipient_nid: &str) -> Vec<MailboxEntry> {
         // SECURITY FIX (C5): Read from SQLite if available (persistent storage),
         // otherwise fall back to in-memory cache.
-        if let Some(ref pool) = self.db_pool {
-            if let Ok(rows) = sqlx::query_as::<_, (String, String, String, i64, i64)>(
+        if let Some(ref pool) = self.db_pool
+            && let Ok(rows) = sqlx::query_as::<_, (String, String, String, i64, i64)>(
                 "SELECT signed_blob, sender_nid, sender_fp, seq, stored_at
                  FROM mailbox_entries
                  WHERE recipient_nid = ? AND delivered = 0
-                 ORDER BY seq ASC"
+                 ORDER BY seq ASC",
             )
             .bind(recipient_nid)
             .fetch_all(pool)
-            .await {
-                let entries: Vec<MailboxEntry> = rows.into_iter()
-                    .filter_map(|(blob, snid, sfp, seq, stored)| {
-                        Some(MailboxEntry {
-                            message_id: sha256_hex(blob.as_bytes()),
-                            signed_blob: blob,
-                            sender_nid: snid,
-                            sender_fp: sfp,
-                            seq: seq,
-                            stored_at: stored as u64,
-                            delivery_status: 0,
-                            status_updated_at: stored as u64,
-                            read_receipt_at: None,
-                        })
-                    })
-                    .collect();
-                if !entries.is_empty() {
-                    return entries;
-                }
+            .await
+        {
+            let entries: Vec<MailboxEntry> = rows
+                .into_iter()
+                .map(|(blob, snid, sfp, seq, stored)| MailboxEntry {
+                    message_id: sha256_hex(blob.as_bytes()),
+                    signed_blob: blob,
+                    sender_nid: snid,
+                    sender_fp: sfp,
+                    seq,
+                    stored_at: stored as u64,
+                    delivery_status: 0,
+                    status_updated_at: stored as u64,
+                    read_receipt_at: None,
+                })
+                .collect();
+            if !entries.is_empty() {
+                return entries;
             }
         }
         // Fallback to in-memory cache
@@ -1062,7 +1101,7 @@ impl RelayState {
         if let Some(ref pool) = self.db_pool {
             let _ = sqlx::query(
                 "UPDATE mailbox_entries SET delivered = 1
-                 WHERE recipient_nid = ? AND seq = ? AND delivered = 0"
+                 WHERE recipient_nid = ? AND seq = ? AND delivered = 0",
             )
             .bind(recipient_nid)
             .bind(seq)
@@ -1084,12 +1123,10 @@ impl RelayState {
 
         // SQLite purge
         if let Some(ref pool) = self.db_pool {
-            let _ = sqlx::query(
-                "DELETE FROM mailbox_entries WHERE recipient_nid = ?"
-            )
-            .bind(recipient_nid)
-            .execute(pool)
-            .await;
+            let _ = sqlx::query("DELETE FROM mailbox_entries WHERE recipient_nid = ?")
+                .bind(recipient_nid)
+                .execute(pool)
+                .await;
         }
     }
 
@@ -1101,19 +1138,19 @@ impl RelayState {
             .unwrap_or_default()
             .as_secs();
         for mb in mailboxes.values_mut() {
-            mb.entries.retain(|e| now - e.stored_at < MAILBOX_TTL_SECONDS);
+            mb.entries
+                .retain(|e| now - e.stored_at < MAILBOX_TTL_SECONDS);
         }
         mailboxes.retain(|_, mb| !mb.entries.is_empty());
 
         // SECURITY FIX (C5): SQLite cleanup
         if let Some(ref pool) = self.db_pool {
             let cutoff = (now - MAILBOX_TTL_SECONDS) as i64;
-            let _ = sqlx::query(
-                "DELETE FROM mailbox_entries WHERE stored_at < ? AND delivered = 1"
-            )
-            .bind(cutoff)
-            .execute(pool)
-            .await;
+            let _ =
+                sqlx::query("DELETE FROM mailbox_entries WHERE stored_at < ? AND delivered = 1")
+                    .bind(cutoff)
+                    .execute(pool)
+                    .await;
         }
     }
 
@@ -1132,7 +1169,10 @@ impl RelayState {
 type TlsAcceptor = tokio_rustls::TlsAcceptor;
 
 /// SECURITY FIX (C5): Load a TLS acceptor from PEM cert and key files.
-fn load_tls_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
+fn load_tls_acceptor(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<TlsAcceptor, Box<dyn std::error::Error>> {
     let cert_pem = std::fs::read(cert_path)?;
     let key_pem = std::fs::read(key_path)?;
 
@@ -1140,7 +1180,6 @@ fn load_tls_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor, Box
         rustls_pemfile::certs(&mut &cert_pem[..])
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
-            .map(|c| c.into())
             .collect();
 
     let key = rustls_pemfile::private_key(&mut &key_pem[..])?
@@ -1167,9 +1206,9 @@ async fn handle_connection(
     {
         let mut limiters = state.conn_limiters.write().await;
         let now = Instant::now();
-        let entry = limiters.entry(ip).or_insert_with(|| {
-            (add_dht_core::RateLimiter::new(30, 60.0), now)
-        });
+        let entry = limiters
+            .entry(ip)
+            .or_insert_with(|| (add_dht_core::RateLimiter::new(30, 60.0), now));
         entry.1 = now; // update last-access time
         if !entry.0.allow(&ip.to_string()).await {
             drop(limiters); // release lock before warn log
@@ -1177,10 +1216,13 @@ async fn handle_connection(
             return Ok(());
         }
         // SECURITY FIX (H8): Evict oldest entry if map is full
-        if limiters.len() > MAX_PEER_LIMITERS {
-            if let Some(oldest_ip) = limiters.iter().min_by_key(|(_, (_, ts))| *ts).map(|(k, _)| *k) {
-                limiters.remove(&oldest_ip);
-            }
+        if limiters.len() > MAX_PEER_LIMITERS
+            && let Some(oldest_ip) = limiters
+                .iter()
+                .min_by_key(|(_, (_, ts))| *ts)
+                .map(|(k, _)| *k)
+        {
+            limiters.remove(&oldest_ip);
         }
     }
 
@@ -1190,7 +1232,12 @@ async fn handle_connection(
         let tls_stream = acceptor.accept(stream).await?;
 
         // ACS2.6 Part IV.2: TOFU peer certificate pinning
-        if let Some(peer_cert) = tls_stream.get_ref().1.peer_certificates().and_then(|c| c.first()) {
+        if let Some(peer_cert) = tls_stream
+            .get_ref()
+            .1
+            .peer_certificates()
+            .and_then(|c| c.first())
+        {
             let cert_fingerprint = sha256_hex(peer_cert.as_ref());
             if !state.known_peers.read().await.contains(&cert_fingerprint) {
                 // TOFU: auto-pin on first use, but log it
@@ -1199,7 +1246,11 @@ async fn handle_connection(
                     cert_fp = %cert_fingerprint,
                     "TOFU: pinning new peer certificate"
                 );
-                state.known_peers.write().await.insert(cert_fingerprint.clone());
+                state
+                    .known_peers
+                    .write()
+                    .await
+                    .insert(cert_fingerprint.clone());
                 // Persist to disk
                 let _ = state.save_known_peers().await;
             }
@@ -1240,7 +1291,10 @@ async fn handle_ws_connection(
                 data: None,
             };
             let json = serde_json::to_string(&resp)?;
-            ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await?;
+            ws.send(Message::Text(
+                tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+            ))
+            .await?;
             ws.close(None).await?;
             return Ok(());
         }
@@ -1327,10 +1381,14 @@ async fn send_error(ws: &mut WsStream, error: &str) {
         error: Some(error.to_string()),
         data: None,
     };
-    if let Ok(json) = serde_json::to_string(&resp) {
-        if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-            tracing::warn!("websocket send error for error response: {}", e);
-        }
+    if let Ok(json) = serde_json::to_string(&resp)
+        && let Err(e) = ws
+            .send(Message::Text(
+                tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+            ))
+            .await
+    {
+        tracing::warn!("websocket send error for error response: {}", e);
     }
 }
 
@@ -1342,10 +1400,14 @@ async fn send_ok(ws: &mut WsStream, data: Option<serde_json::Value>) {
         error: None,
         data,
     };
-    if let Ok(json) = serde_json::to_string(&resp) {
-        if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-            tracing::warn!("websocket send error for ok response: {}", e);
-        }
+    if let Ok(json) = serde_json::to_string(&resp)
+        && let Err(e) = ws
+            .send(Message::Text(
+                tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+            ))
+            .await
+    {
+        tracing::warn!("websocket send error for ok response: {}", e);
     }
 }
 
@@ -1354,11 +1416,12 @@ async fn handle_message(
     env: &RelayEnvelope,
     state: &Arc<RelayState>,
 ) -> Result<(), String> {
+    #[allow(unreachable_patterns)]
     match env.msg_type.as_str() {
         "relay-store" => {
             tracing::debug!("relay-store payload: {}", env.payload);
-            let req: MailboxStoreRequest = serde_json::from_value(env.payload.clone())
-                .map_err(|e| {
+            let req: MailboxStoreRequest =
+                serde_json::from_value(env.payload.clone()).map_err(|e| {
                     tracing::warn!("parse error: {} payload: {}", e, env.payload);
                     format!("invalid store request: {}", e)
                 })?;
@@ -1370,7 +1433,10 @@ async fn handle_message(
             state.check_timestamp_freshness(req.timestamp)?;
 
             // SECURITY FIX (H7): Check for replayed nonces
-            if !state.check_and_record_nonce_str(&req.sender_fp, &req.nonce).await {
+            if !state
+                .check_and_record_nonce_str(&req.sender_fp, &req.nonce)
+                .await
+            {
                 return Err("replay detected: nonce already seen".to_string());
             }
 
@@ -1396,7 +1462,9 @@ async fn handle_message(
             // Verify null_id matches the fingerprint
             let computed_nid = add_dht_core::compute_null_id(&req.requester_fp);
             if computed_nid != req.recipient_nid {
-                return Err("fetch denied: null_id does not match requester fingerprint".to_string());
+                return Err(
+                    "fetch denied: null_id does not match requester fingerprint".to_string()
+                );
             }
 
             // Verify ML-DSA-87 signature
@@ -1404,26 +1472,48 @@ async fn handle_message(
                 "relay-fetch:{}:{}:{}",
                 req.recipient_nid, req.timestamp, req.nonce
             );
-            if !verify_ml_dsa87_signature(&req.sender_sig, &sig_data, &req.requester_fp, &state.ml_dsa87_verifying_key_cache, &req.requester_verifying_key)
-                .unwrap_or(false)
+            if !verify_ml_dsa87_signature(
+                &req.sender_sig,
+                &sig_data,
+                &req.requester_fp,
+                &state.ml_dsa87_verifying_key_cache,
+                &req.requester_verifying_key,
+            )
+            .unwrap_or(false)
             {
                 return Err("fetch denied: ML-DSA-87 signature verification failed".to_string());
             }
 
             // Check replay
             let nonce_hash = format!("{}:{}", req.requester_fp, req.nonce);
-            if !state.check_and_record_nonce_str(&req.requester_fp, &nonce_hash).await {
+            if !state
+                .check_and_record_nonce_str(&req.requester_fp, &nonce_hash)
+                .await
+            {
                 return Err("replay detected: nonce already seen".to_string());
             }
 
             // Verify HMAC if shared secret is also configured
-            if let Some(ref secret) = state.shared_secret {
-                if !verify_hmac(&req.recipient_nid, &req.auth_hmac, secret) {
-                    return Err("HMAC authentication failed".to_string());
-                }
+            if let Some(ref secret) = state.shared_secret
+                && !verify_hmac(&req.recipient_nid, &req.auth_hmac, secret)
+            {
+                return Err("HMAC authentication failed".to_string());
             }
 
             let entries = state.fetch_messages(&req.recipient_nid).await;
+            for e in &entries {
+                let t = if e.signed_blob.len() > 120 {
+                    &e.signed_blob[e.signed_blob.len() - 120..]
+                } else {
+                    &e.signed_blob[..]
+                };
+                tracing::info!(
+                    "DBG relay fetch entry blob_len={} has_kc={} TAIL={}",
+                    e.signed_blob.len(),
+                    e.signed_blob.contains("kyber_ciphertext"),
+                    t
+                );
+            }
             let data = serde_json::json!({
                 "entries": entries.iter().map(|e| {
                     serde_json::json!({
@@ -1451,12 +1541,18 @@ async fn handle_message(
 
             // Check replay
             let nonce_hash = format!("status:{}:{}", req.requester_fp, req.nonce);
-            if !state.check_and_record_nonce_str(&req.requester_fp, &nonce_hash).await {
+            if !state
+                .check_and_record_nonce_str(&req.requester_fp, &nonce_hash)
+                .await
+            {
                 return Err("replay detected: nonce already seen".to_string());
             }
 
             // Verify ML-DSA-87 signature
-            let sig_data = format!("relay-status:{}:{}:{}", req.recipient_nid, req.timestamp, req.nonce);
+            let sig_data = format!(
+                "relay-status:{}:{}:{}",
+                req.recipient_nid, req.timestamp, req.nonce
+            );
             let verified = verify_ml_dsa87_signature(
                 &req.sender_sig,
                 &sig_data,
@@ -1472,14 +1568,16 @@ async fn handle_message(
             // Verify null_id matches fingerprint
             let computed_nid = add_dht_core::compute_null_id(&req.requester_fp);
             if computed_nid != req.recipient_nid {
-                return Err("status denied: null_id does not match requester fingerprint".to_string());
+                return Err(
+                    "status denied: null_id does not match requester fingerprint".to_string(),
+                );
             }
 
             // Check HMAC if configured
-            if let Some(ref secret) = state.shared_secret {
-                if !verify_hmac(&req.recipient_nid, &req.auth_hmac, secret) {
-                    return Err("HMAC authentication failed".to_string());
-                }
+            if let Some(ref secret) = state.shared_secret
+                && !verify_hmac(&req.recipient_nid, &req.auth_hmac, secret)
+            {
+                return Err("HMAC authentication failed".to_string());
             }
 
             // Get status for requested message IDs
@@ -1516,11 +1614,7 @@ async fn handle_message(
                 .get("recipient_nid")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let seq = env
-                .payload
-                .get("seq")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
+            let seq = env.payload.get("seq").and_then(|v| v.as_i64()).unwrap_or(0);
 
             // SECURITY FIX (M2): Authenticate the ack request.
             // Without this, anyone could delete messages from any mailbox
@@ -1569,8 +1663,14 @@ async fn handle_message(
                 "relay-ack:{}:{}:{}:{}",
                 recipient_nid, seq, ack_ts, ack_nonce
             );
-            if !verify_ml_dsa87_signature(&ack_sig, &sig_data, &ack_fp, &state.ml_dsa87_verifying_key_cache, &ack_verifying_key)
-                .unwrap_or(false)
+            if !verify_ml_dsa87_signature(
+                ack_sig,
+                &sig_data,
+                ack_fp,
+                &state.ml_dsa87_verifying_key_cache,
+                ack_verifying_key,
+            )
+            .unwrap_or(false)
             {
                 return Err("ack denied: ML-DSA-87 signature verification failed".to_string());
             }
@@ -1594,7 +1694,12 @@ async fn handle_message(
             };
             let json = serde_json::to_string(&pong).map_err(|e| e.to_string())?;
             // SECURITY FIX (H1): Log send errors instead of silently ignoring
-            if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
+            if let Err(e) = ws
+                .send(Message::Text(
+                    tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                ))
+                .await
+            {
                 tracing::warn!("websocket send error for relay-pong: {}", e);
             }
             Ok(())
@@ -1620,7 +1725,13 @@ async fn handle_message(
 
             // Respond with our own routes
             let local_nids = state.get_local_null_ids().await;
-            let our_url = state.federation.read().await.our_url.clone().unwrap_or_default();
+            let our_url = state
+                .federation
+                .read()
+                .await
+                .our_url
+                .clone()
+                .unwrap_or_default();
             let ack = RouteAdvertiseAck {
                 relay_url: our_url,
                 route_count: local_nids.len(),
@@ -1636,7 +1747,12 @@ async fn handle_message(
                 ts: now_unix(),
             };
             let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-            if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
+            if let Err(e) = ws
+                .send(Message::Text(
+                    tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                ))
+                .await
+            {
                 tracing::warn!("websocket send error: {}", e);
             }
             tracing::debug!(peer=%peer_url, peer_routes=route_count, our_routes=ack.route_count, "route-advertise acknowledged");
@@ -1663,7 +1779,13 @@ async fn handle_message(
             if local_nids.contains(&query.null_id) {
                 let found = RouteFound {
                     null_id: query.null_id,
-                    relay_url: state.federation.read().await.our_url.clone().unwrap_or_default(),
+                    relay_url: state
+                        .federation
+                        .read()
+                        .await
+                        .our_url
+                        .clone()
+                        .unwrap_or_default(),
                 };
                 let found_env = RelayEnvelope {
                     msg_type: "route-found".to_string(),
@@ -1675,9 +1797,14 @@ async fn handle_message(
                     ts: now_unix(),
                 };
                 let json = serde_json::to_string(&found_env).map_err(|e| e.to_string())?;
-                if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-                tracing::warn!("websocket send error: {}", e);
-            }
+                if let Err(e) = ws
+                    .send(Message::Text(
+                        tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                    ))
+                    .await
+                {
+                    tracing::warn!("websocket send error: {}", e);
+                }
             }
             // Also check remote_routes
             else if let Some(url) = state.federation.read().await.lookup_route(&query.null_id) {
@@ -1695,9 +1822,14 @@ async fn handle_message(
                     ts: now_unix(),
                 };
                 let json = serde_json::to_string(&found_env).map_err(|e| e.to_string())?;
-                if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-                tracing::warn!("websocket send error: {}", e);
-            }
+                if let Err(e) = ws
+                    .send(Message::Text(
+                        tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                    ))
+                    .await
+                {
+                    tracing::warn!("websocket send error: {}", e);
+                }
             }
             Ok(())
         }
@@ -1711,7 +1843,8 @@ async fn handle_message(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            fed.pending_challenges.insert(auth.relay_url.clone(), (auth.challenge.clone(), now_ts));
+            fed.pending_challenges
+                .insert(auth.relay_url.clone(), (auth.challenge.clone(), now_ts));
             // Compute HMAC response
             if let Some(ref secret) = fed.shared_secret {
                 let response = compute_hmac(&auth.challenge, secret);
@@ -1729,9 +1862,14 @@ async fn handle_message(
                     ts: now_unix(),
                 };
                 let json = serde_json::to_string(&reply_env).map_err(|e| e.to_string())?;
-                if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-                tracing::warn!("websocket send error: {}", e);
-            }
+                if let Err(e) = ws
+                    .send(Message::Text(
+                        tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                    ))
+                    .await
+                {
+                    tracing::warn!("websocket send error: {}", e);
+                }
             }
             Ok(())
         }
@@ -1781,9 +1919,14 @@ async fn handle_message(
                     ts: now_unix(),
                 };
                 let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-                if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-                tracing::warn!("websocket send error: {}", e);
-            }
+                if let Err(e) = ws
+                    .send(Message::Text(
+                        tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                    ))
+                    .await
+                {
+                    tracing::warn!("websocket send error: {}", e);
+                }
                 return Ok(());
             }
 
@@ -1797,33 +1940,47 @@ async fn handle_message(
                 let fed = state.federation.read().await;
                 if fed.shared_secret.is_some() {
                     // Only enforce if federation auth is configured
-                    if let Some(peer) = fed.peers.get(&forward.source_relay_url) {
-                        if !peer.authenticated {
-                            let ack = RelayForwardAck {
-                                accepted: false,
-                                error: Some("peer not authenticated — HMAC challenge-response required".to_string()),
-                            };
-                            let ack_env = RelayEnvelope {
-                                msg_type: "relay-forward-ack".to_string(),
-                                payload: serde_json::json!({
-                                    "accepted": ack.accepted,
-                                    "error": ack.error,
-                                }),
-                                msg_id: uuid_hex(),
-                                ts: now_unix(),
-                            };
-                            let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-                            if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-                                tracing::warn!("websocket send error: {}", e);
-                            }
-                            return Ok(());
+                    if let Some(peer) = fed.peers.get(&forward.source_relay_url)
+                        && !peer.authenticated
+                    {
+                        let ack = RelayForwardAck {
+                            accepted: false,
+                            error: Some(
+                                "peer not authenticated — HMAC challenge-response required"
+                                    .to_string(),
+                            ),
+                        };
+                        let ack_env = RelayEnvelope {
+                            msg_type: "relay-forward-ack".to_string(),
+                            payload: serde_json::json!({
+                                "accepted": ack.accepted,
+                                "error": ack.error,
+                            }),
+                            msg_id: uuid_hex(),
+                            ts: now_unix(),
+                        };
+                        let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
+                        if let Err(e) = ws
+                            .send(Message::Text(
+                                tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                            ))
+                            .await
+                        {
+                            tracing::warn!("websocket send error: {}", e);
                         }
+                        return Ok(());
                     }
                 }
             }
 
             // Loop detection: check if we're already in the via chain
-            let our_url = state.federation.read().await.our_url.clone().unwrap_or_default();
+            let our_url = state
+                .federation
+                .read()
+                .await
+                .our_url
+                .clone()
+                .unwrap_or_default();
             if forward.via.contains(&our_url) {
                 let ack = RelayForwardAck {
                     accepted: false,
@@ -1839,9 +1996,14 @@ async fn handle_message(
                     ts: now_unix(),
                 };
                 let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-                if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-                tracing::warn!("websocket send error: {}", e);
-            }
+                if let Err(e) = ws
+                    .send(Message::Text(
+                        tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                    ))
+                    .await
+                {
+                    tracing::warn!("websocket send error: {}", e);
+                }
                 return Ok(());
             }
 
@@ -1861,9 +2023,14 @@ async fn handle_message(
                     ts: now_unix(),
                 };
                 let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-                if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
-                tracing::warn!("websocket send error: {}", e);
-            }
+                if let Err(e) = ws
+                    .send(Message::Text(
+                        tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                    ))
+                    .await
+                {
+                    tracing::warn!("websocket send error: {}", e);
+                }
                 return Ok(());
             }
 
@@ -1871,14 +2038,17 @@ async fn handle_message(
             // This breaks timing correlation between sender and recipient
             // Check cbnp_enabled from state (federation config)
             if state.allow_relay {
-                let delay_secs = rand::Rng::gen_range(&mut rand::thread_rng(), MIX_MIN_DELAY_SECONDS..=MIX_MAX_DELAY_SECONDS);
+                let delay_secs = rand::Rng::gen_range(
+                    &mut rand::thread_rng(),
+                    MIX_MIN_DELAY_SECONDS..=MIX_MAX_DELAY_SECONDS,
+                );
                 if delay_secs > 0 {
                     tracing::debug!(recipient=%forward.recipient_nid, delay_sec=delay_secs, "mix: applying random delay before store/forward");
                     // Note: Cover burst would be sent via a separate mechanism
                     tokio::time::sleep(Duration::from_secs(delay_secs)).await;
                 }
             }
-            
+
             // Verify the inner signature
             let req = MailboxStoreRequest {
                 recipient_nid: forward.recipient_nid.clone(),
@@ -1895,7 +2065,10 @@ async fn handle_message(
             };
             state.verify_store_signature(&req).await?;
             state.check_timestamp_freshness(req.timestamp)?;
-            if !state.check_and_record_nonce_str(&req.sender_fp, &req.nonce).await {
+            if !state
+                .check_and_record_nonce_str(&req.sender_fp, &req.nonce)
+                .await
+            {
                 return Err("replay detected: nonce already seen".to_string());
             }
 
@@ -1916,7 +2089,12 @@ async fn handle_message(
                 ts: now_unix(),
             };
             let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-            if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
+            if let Err(e) = ws
+                .send(Message::Text(
+                    tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                ))
+                .await
+            {
                 tracing::warn!("websocket send error: {}", e);
             }
             Ok(())
@@ -1985,21 +2163,32 @@ async fn handle_message(
 
             let computed_nid = add_dht_core::compute_null_id(&purge_fp);
             if computed_nid != purge_recipient {
-                return Err("purge denied: null_id does not match requester fingerprint".to_string());
+                return Err(
+                    "purge denied: null_id does not match requester fingerprint".to_string()
+                );
             }
 
             let sig_data = format!(
                 "relay-purge:{}:{}:{}",
                 purge_recipient, purge_ts, purge_nonce
             );
-            if !verify_ml_dsa87_signature(&purge_sig, &sig_data, &purge_fp, &state.ml_dsa87_verifying_key_cache, &purge_verifying_key)
-                .unwrap_or(false)
+            if !verify_ml_dsa87_signature(
+                &purge_sig,
+                &sig_data,
+                &purge_fp,
+                &state.ml_dsa87_verifying_key_cache,
+                &purge_verifying_key,
+            )
+            .unwrap_or(false)
             {
                 return Err("purge denied: ML-DSA-87 signature verification failed".to_string());
             }
 
             let nonce_hash = format!("purge:{}:{}", purge_fp, purge_nonce);
-            if !state.check_and_record_nonce_str(&purge_fp, &nonce_hash).await {
+            if !state
+                .check_and_record_nonce_str(&purge_fp, &nonce_hash)
+                .await
+            {
                 return Err("replay detected: nonce already seen".to_string());
             }
 
@@ -2015,7 +2204,10 @@ async fn handle_message(
                 .map_err(|e| format!("invalid read-receipt: {}", e))?;
 
             // Verify the signature
-            let sig_data = format!("{}|{}|{}", receipt.message_id, receipt.recipient_nid, receipt.timestamp);
+            let sig_data = format!(
+                "{}|{}|{}",
+                receipt.message_id, receipt.recipient_nid, receipt.timestamp
+            );
             let verified = verify_ml_dsa87_signature(
                 &receipt.signature,
                 &sig_data,
@@ -2030,7 +2222,10 @@ async fn handle_message(
 
             // Check replay
             let nonce_hash = format!("read:{}:{}", receipt.recipient_fp, receipt.nonce);
-            if !state.check_and_record_nonce_str(&receipt.recipient_fp, &nonce_hash).await {
+            if !state
+                .check_and_record_nonce_str(&receipt.recipient_fp, &nonce_hash)
+                .await
+            {
                 return Err("replay detected: nonce already seen".to_string());
             }
 
@@ -2038,8 +2233,11 @@ async fn handle_message(
             state.check_timestamp_freshness(receipt.timestamp)?;
 
             // Update message status to "read" (3) in local mailbox
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-            let updated = {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let _updated = {
                 let mut mailboxes = state.mailboxes.write().await;
                 if let Some(mb) = mailboxes.get_mut(&receipt.recipient_nid) {
                     mb.mark_read(&receipt.message_id, now)
@@ -2063,7 +2261,7 @@ async fn handle_message(
             for other_relay_url in &receipt.other_relays {
                 let relay_url = other_relay_url.clone();
                 let receipt = receipt.clone();
-                let state_clone = Arc::clone(&state);
+                let state_clone = Arc::clone(state);
                 tokio::spawn(async move {
                     if let Err(e) = forward_read_receipt(state_clone, &relay_url, receipt).await {
                         tracing::warn!(peer=%relay_url, "failed to forward read receipt: {}", e);
@@ -2085,15 +2283,20 @@ async fn handle_message(
             for other_relay_url in &receipt.other_relays {
                 let relay_url = other_relay_url.clone();
                 let delete_req = delete_req.clone();
-                let state_clone = Arc::clone(&state);
+                let state_clone = Arc::clone(state);
                 tokio::spawn(async move {
-                    if let Err(e) = forward_delete_request(state_clone, &relay_url, delete_req).await {
+                    if let Err(e) =
+                        forward_delete_request(state_clone, &relay_url, delete_req).await
+                    {
                         tracing::warn!(peer=%relay_url, "failed to forward delete request: {}", e);
                     }
                 });
             }
 
-            let ack = RelayReadReceiptAck { accepted: true, error: None };
+            let ack = RelayReadReceiptAck {
+                accepted: true,
+                error: None,
+            };
             let ack_env = RelayEnvelope {
                 msg_type: "relay-read-receipt-ack".to_string(),
                 payload: serde_json::json!({"accepted": ack.accepted, "error": ack.error}),
@@ -2101,7 +2304,12 @@ async fn handle_message(
                 ts: now_unix(),
             };
             let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-            if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
+            if let Err(e) = ws
+                .send(Message::Text(
+                    tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                ))
+                .await
+            {
                 tracing::warn!("websocket send error: {}", e);
             }
             Ok(())
@@ -2112,7 +2320,10 @@ async fn handle_message(
                 .map_err(|e| format!("invalid delete request: {}", e))?;
 
             // Verify the signature
-            let sig_data = format!("{}|{}|{}", delete_req.message_id, delete_req.recipient_nid, delete_req.timestamp);
+            let sig_data = format!(
+                "{}|{}|{}",
+                delete_req.message_id, delete_req.recipient_nid, delete_req.timestamp
+            );
             let verified = verify_ml_dsa87_signature(
                 &delete_req.signature,
                 &sig_data,
@@ -2127,7 +2338,10 @@ async fn handle_message(
 
             // Check replay
             let nonce_hash = format!("delete:{}:{}", delete_req.recipient_fp, delete_req.nonce);
-            if !state.check_and_record_nonce_str(&delete_req.recipient_fp, &nonce_hash).await {
+            if !state
+                .check_and_record_nonce_str(&delete_req.recipient_fp, &nonce_hash)
+                .await
+            {
                 return Err("replay detected: nonce already seen".to_string());
             }
 
@@ -2135,7 +2349,7 @@ async fn handle_message(
             state.check_timestamp_freshness(delete_req.timestamp)?;
 
             // Remove message from local mailbox
-            let removed = {
+            let _removed = {
                 let mut mailboxes = state.mailboxes.write().await;
                 if let Some(mb) = mailboxes.get_mut(&delete_req.recipient_nid) {
                     mb.remove_message(&delete_req.message_id)
@@ -2147,7 +2361,7 @@ async fn handle_message(
             // Also remove from SQLite
             if let Some(ref pool) = state.db_pool {
                 let _ = sqlx::query(
-                    "DELETE FROM mailbox_entries WHERE recipient_nid = ? AND signed_blob = ?"
+                    "DELETE FROM mailbox_entries WHERE recipient_nid = ? AND signed_blob = ?",
                 )
                 .bind(&delete_req.recipient_nid)
                 .bind(&delete_req.message_id)
@@ -2155,7 +2369,10 @@ async fn handle_message(
                 .await;
             }
 
-            let ack = RelayDeleteAck { accepted: true, error: None };
+            let ack = RelayDeleteAck {
+                accepted: true,
+                error: None,
+            };
             let ack_env = RelayEnvelope {
                 msg_type: "relay-delete-ack".to_string(),
                 payload: serde_json::json!({"accepted": ack.accepted, "error": ack.error}),
@@ -2163,7 +2380,12 @@ async fn handle_message(
                 ts: now_unix(),
             };
             let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-            if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
+            if let Err(e) = ws
+                .send(Message::Text(
+                    tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                ))
+                .await
+            {
                 tracing::warn!("websocket send error: {}", e);
             }
             Ok(())
@@ -2209,7 +2431,13 @@ async fn handle_message(
                 nonce: now_unix() as i64,
                 hop_count: 1,
                 via: vec![],
-                source_relay_url: state.federation.read().await.our_url.clone().unwrap_or_default(),
+                source_relay_url: state
+                    .federation
+                    .read()
+                    .await
+                    .our_url
+                    .clone()
+                    .unwrap_or_default(),
                 source_relay_sig: String::new(),
                 source_relay_cert: String::new(),
                 source_relay_fp: String::new(),
@@ -2224,7 +2452,12 @@ async fn handle_message(
             let json = serde_json::to_string(&forward_env)
                 .map_err(|e| format!("onion forward serialize: {}", e))?;
 
-            if !state.federation.read().await.send_to_peer(exit_relay_url, json.clone()) {
+            if !state
+                .federation
+                .read()
+                .await
+                .send_to_peer(exit_relay_url, json.clone())
+            {
                 // Queue for retry
                 tracing::warn!(exit_relay = %exit_relay_url, "onion: exit relay not reachable, queued");
             }
@@ -2243,7 +2476,9 @@ async fn handle_message(
             // Verify null_id matches the requester fingerprint
             let computed_nid = add_dht_core::compute_null_id(&req.requester_fp);
             if computed_nid != req.recipient_nid {
-                return Err("purge denied: null_id does not match requester fingerprint".to_string());
+                return Err(
+                    "purge denied: null_id does not match requester fingerprint".to_string()
+                );
             }
 
             // Verify ML-DSA-87 signature
@@ -2265,7 +2500,10 @@ async fn handle_message(
 
             // Check replay
             let nonce_hash = format!("purge:{}:{}", req.requester_fp, req.nonce);
-            if !state.check_and_record_nonce_str(&req.requester_fp, &nonce_hash).await {
+            if !state
+                .check_and_record_nonce_str(&req.requester_fp, &nonce_hash)
+                .await
+            {
                 return Err("replay detected: nonce already seen".to_string());
             }
 
@@ -2280,12 +2518,10 @@ async fn handle_message(
                 }
             }
             if let Some(ref pool) = state.db_pool {
-                let _ = sqlx::query(
-                    "DELETE FROM mailbox_entries WHERE recipient_nid = ?",
-                )
-                .bind(&req.recipient_nid)
-                .execute(pool)
-                .await;
+                let _ = sqlx::query("DELETE FROM mailbox_entries WHERE recipient_nid = ?")
+                    .bind(&req.recipient_nid)
+                    .execute(pool)
+                    .await;
             }
 
             let ack_env = RelayEnvelope {
@@ -2295,7 +2531,12 @@ async fn handle_message(
                 ts: now_unix(),
             };
             let json = serde_json::to_string(&ack_env).map_err(|e| e.to_string())?;
-            if let Err(e) = ws.send(Message::Text(tokio_tungstenite::tungstenite::Utf8Bytes::from(json))).await {
+            if let Err(e) = ws
+                .send(Message::Text(
+                    tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+                ))
+                .await
+            {
                 tracing::warn!("websocket send error: {}", e);
             }
             Ok(())
@@ -2316,30 +2557,35 @@ async fn connect_to_peer(
     cbnp_enabled: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (_host, _port, _use_tls) = parse_relay_url(&url)?;
-    
-    let (ws_stream, _response) = tokio_tungstenite::connect_async(format!("{}/federation", url))
-        .await?;
+
+    let (ws_stream, _response) =
+        tokio_tungstenite::connect_async(format!("{}/federation", url)).await?;
     let (mut ws_sink, mut ws_stream) = ws_stream.split();
-    
+
     tracing::info!(peer=%url, "connected to peer relay");
-    
+
     // Create channel for outgoing messages
     let (tx, mut rx) = mpsc::channel::<FederationMessage>(100);
-    
+
     // Register peer with our sender channel
     {
         let mut fed = state.federation.write().await;
-        fed.peers.insert(url.clone(), PeerInfo {
-            url: url.clone(),
-            routes: HashSet::new(),
-            last_seen: Instant::now(),
-            authenticated: false,
-            sender: Some(tx),
-            cover_session: add_crypto::cbnp::CbnpSession::new(add_crypto::cbnp::CbnpConfig::default()),
-            cover_queue: Vec::new(),
-        });
+        fed.peers.insert(
+            url.clone(),
+            PeerInfo {
+                url: url.clone(),
+                routes: HashSet::new(),
+                last_seen: Instant::now(),
+                authenticated: false,
+                sender: Some(tx),
+                cover_session: add_crypto::cbnp::CbnpSession::new(
+                    add_crypto::cbnp::CbnpConfig::default(),
+                ),
+                cover_queue: Vec::new(),
+            },
+        );
     }
-    
+
     // Sender task: forward messages from channel to WebSocket (with cover traffic)
     let url_clone = url.clone();
     let state_clone = Arc::clone(&state);
@@ -2347,19 +2593,34 @@ async fn connect_to_peer(
         use tokio_tungstenite::tungstenite::Utf8Bytes;
         while let Some(msg) = rx.recv().await {
             // Send real message
-            if ws_sink.send(Message::Text(Utf8Bytes::from(msg))).await.is_err() {
+            if ws_sink
+                .send(Message::Text(Utf8Bytes::from(msg)))
+                .await
+                .is_err()
+            {
                 break;
             }
             // ACS2.6 §V.2: Send cover traffic after real message to obscure timing
             if cbnp_enabled {
-                let cover = state_clone.federation.write().await.peers.get_mut(&url_clone)
+                let cover = state_clone
+                    .federation
+                    .write()
+                    .await
+                    .peers
+                    .get_mut(&url_clone)
                     .and_then(|peer| {
                         let packet = peer.cover_session.generate_cover_packet().ok()?;
                         Some(packet)
                     });
                 if let Some(packet) = cover {
                     // Send cover packet via federation channel (binary message)
-                    if !ws_sink.send(Message::Binary(tokio_tungstenite::tungstenite::Bytes::from(packet))).await.is_ok() {
+                    if !ws_sink
+                        .send(Message::Binary(
+                            tokio_tungstenite::tungstenite::Bytes::from(packet),
+                        ))
+                        .await
+                        .is_ok()
+                    {
                         // Check if done due to error
                     }
                 }
@@ -2367,15 +2628,15 @@ async fn connect_to_peer(
         }
         tracing::debug!(peer=%url_clone, "peer sender task ended");
     });
-    
+
     // Receiver task: handle incoming messages from peer
     let state_clone2 = Arc::clone(&state);
     tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_stream.next().await {
             match msg {
                 Message::Text(text) => {
-                    if let Ok(env) = serde_json::from_str::<RelayEnvelope>(&text) {
-                        if env.msg_type == "route-advertise" {
+                    if let Ok(env) = serde_json::from_str::<RelayEnvelope>(&text)
+                        && env.msg_type == "route-advertise" {
                             // Store routes from peer
                             if let Some(peer_routes) = env.payload.get("null_ids")
                                 .and_then(|v| v.as_array())
@@ -2392,28 +2653,27 @@ async fn connect_to_peer(
                                 }
                             }
                         }
-                    }
                 }
-                Message::Binary(bin) => {
+                Message::Binary(bin)
                     // ACS2.6 §V.3: Handle incoming cover traffic (drop silently)
-                    if !add_crypto::cbnp::CbnpSession::is_cover_traffic(&bin) {
+                    if !add_crypto::cbnp::CbnpSession::is_cover_traffic(&bin) => {
                         tracing::debug!(peer=%url, len=bin.len(), "unexpected binary message on federation channel");
                     }
                     // Cover traffic is silently dropped - it's indistinguishable from noise
-                }
                 _ => {}
             }
         }
         tracing::debug!(peer=%url, "peer receiver task ended");
     });
-    
+
     Ok(())
 }
 
 /// Periodic gossip: advertise our routes to all connected peers.
 /// SECURITY FIX (HIGH-6): Actually sends messages via peer channels.
 async fn gossip_task(state: Arc<RelayState>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(FEDERATION_GOSSIP_INTERVAL_SECONDS));
+    let mut interval =
+        tokio::time::interval(Duration::from_secs(FEDERATION_GOSSIP_INTERVAL_SECONDS));
     loop {
         interval.tick().await;
 
@@ -2424,7 +2684,13 @@ async fn gossip_task(state: Arc<RelayState>) {
 
         let null_ids: Vec<String> = local_nids.into_iter().collect();
 
-        let our_url = state.federation.read().await.our_url.clone().unwrap_or_default();
+        let our_url = state
+            .federation
+            .read()
+            .await
+            .our_url
+            .clone()
+            .unwrap_or_default();
         let json = match serde_json::to_string(&RelayEnvelope {
             msg_type: "route-advertise".to_string(),
             payload: serde_json::json!({
@@ -2448,7 +2714,12 @@ async fn gossip_task(state: Arc<RelayState>) {
         };
 
         for peer_url in &peer_urls {
-            if !state.federation.read().await.send_to_peer(peer_url, json.clone()) {
+            if !state
+                .federation
+                .read()
+                .await
+                .send_to_peer(peer_url, json.clone())
+            {
                 tracing::warn!(peer=%peer_url, "peer not reachable for gossip");
             }
         }
@@ -2472,16 +2743,28 @@ async fn forward_to_peer(
     // SECURITY FIX (C3): Set our URL as source_relay_url so the receiving
     // relay can verify our authentication state.
     if forward.source_relay_url.is_empty() {
-        forward.source_relay_url = state.federation.read().await.our_url.clone().unwrap_or_default();
+        forward.source_relay_url = state
+            .federation
+            .read()
+            .await
+            .our_url
+            .clone()
+            .unwrap_or_default();
     }
     let json = serde_json::to_string(&RelayEnvelope {
         msg_type: "relay-forward".to_string(),
         payload: serde_json::json!(forward),
         msg_id: uuid_hex(),
         ts: now_unix(),
-    }).map_err(|e| format!("serialize forward: {}", e))?;
+    })
+    .map_err(|e| format!("serialize forward: {}", e))?;
 
-    if !state.federation.read().await.send_to_peer(relay_url, json.clone()) {
+    if !state
+        .federation
+        .read()
+        .await
+        .send_to_peer(relay_url, json.clone())
+    {
         tracing::warn!(target_relay=%relay_url, recipient=%forward.recipient_nid, "peer not reachable, message queued");
     } else {
         tracing::info!(target_relay=%relay_url, recipient=%forward.recipient_nid, "forwarded message to peer");
@@ -2500,9 +2783,15 @@ async fn forward_read_receipt(
         payload: serde_json::json!(receipt),
         msg_id: uuid_hex(),
         ts: now_unix(),
-    }).map_err(|e| format!("serialize read-receipt: {}", e))?;
+    })
+    .map_err(|e| format!("serialize read-receipt: {}", e))?;
 
-    if !state.federation.read().await.send_to_peer(relay_url, json.clone()) {
+    if !state
+        .federation
+        .read()
+        .await
+        .send_to_peer(relay_url, json.clone())
+    {
         tracing::warn!(target_relay=%relay_url, "peer not reachable for read receipt");
     } else {
         tracing::info!(target_relay=%relay_url, "forwarded read receipt to peer");
@@ -2521,9 +2810,15 @@ async fn forward_delete_request(
         payload: serde_json::json!(delete_req),
         msg_id: uuid_hex(),
         ts: now_unix(),
-    }).map_err(|e| format!("serialize delete: {}", e))?;
+    })
+    .map_err(|e| format!("serialize delete: {}", e))?;
 
-    if !state.federation.read().await.send_to_peer(relay_url, json.clone()) {
+    if !state
+        .federation
+        .read()
+        .await
+        .send_to_peer(relay_url, json.clone())
+    {
         tracing::warn!(target_relay=%relay_url, "peer not reachable for delete request");
     } else {
         tracing::info!(target_relay=%relay_url, "forwarded delete request to peer");
@@ -2546,13 +2841,13 @@ async fn ttl_monitoring_task(state: &Arc<RelayState>) -> Result<(), Box<dyn std:
     const FOURTEEN_DAYS: u64 = 1209600;
 
     let mailboxes = state.mailboxes.read().await;
-    
+
     for (recipient_nid, mb) in mailboxes.iter() {
         for entry in &mb.entries {
             let age = now.saturating_sub(entry.stored_at);
-            
+
             // Check for 1-day warning (message not delivered after 24 hours)
-            if age >= ONE_DAY && age < ONE_DAY + 3600 && entry.delivery_status < 2 {
+            if (ONE_DAY..ONE_DAY + 3600).contains(&age) && entry.delivery_status < 2 {
                 tracing::warn!(
                     recipient = %recipient_nid,
                     message_id = %entry.message_id,
@@ -2561,9 +2856,9 @@ async fn ttl_monitoring_task(state: &Arc<RelayState>) -> Result<(), Box<dyn std:
                 );
                 // In production: send notification to sender via P2P or relay
             }
-            
+
             // Check for 7-day warning
-            if age >= SEVEN_DAYS && age < SEVEN_DAYS + 3600 && entry.delivery_status < 2 {
+            if (SEVEN_DAYS..SEVEN_DAYS + 3600).contains(&age) && entry.delivery_status < 2 {
                 tracing::warn!(
                     recipient = %recipient_nid,
                     message_id = %entry.message_id,
@@ -2572,7 +2867,7 @@ async fn ttl_monitoring_task(state: &Arc<RelayState>) -> Result<(), Box<dyn std:
                 );
                 // In production: send escalated notification to sender
             }
-            
+
             // Check for 14-day hard expiry
             if age >= FOURTEEN_DAYS {
                 tracing::error!(
@@ -2598,19 +2893,22 @@ async fn cross_relay_sync_task(state: &Arc<RelayState>) -> Result<(), Box<dyn st
 
     // In a real implementation, this would query each peer for their deletion state
     // and reconcile any differences. For now, we log the sync attempt.
-    tracing::debug!("Cross-relay sync task running, {} peers connected", peer_urls.len());
-    
-    // In production: 
+    tracing::debug!(
+        "Cross-relay sync task running, {} peers connected",
+        peer_urls.len()
+    );
+
+    // In production:
     // 1. Query each peer for their recent deletions
     // 2. Compare with local deletion state
     // 3. Reconcile any discrepancies
     // 4. Forward any missing deletions
-    
+
     Ok(())
 }
 
 // ------------------------------------------------------------------ //
-//  Helpers                                                            // 
+//  Helpers                                                            //
 // ------------------------------------------------------------------ //
 
 /// SECURITY FIX (C4): Verify an ML-DSA-87 signature.
@@ -2622,25 +2920,28 @@ fn verify_ml_dsa87_signature(
     data: &str,
     fingerprint: &str,
     verifying_key_cache: &RwLock<HashMap<String, String>>,
-    provided_verifying_key: &str,  // base64-encoded ML-DSA-87 verifying key
+    provided_verifying_key: &str, // base64-encoded ML-DSA-87 verifying key
 ) -> Result<bool, String> {
     use ml_dsa::MlDsa87;
-    use ml_dsa::VerifyingKey as MlDsa87VerifyingKey;
-    use ml_dsa::Signature as MlDsa87Signature;
+
+    use add_crypto_pq::verify as verify_ml_dsa87;
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-    use add_crypto_pq::verify as verify_ml_dsa87;
+    use ml_dsa::Signature as MlDsa87Signature;
 
     // TOFU: if verifying key provided, add to cache BEFORE verification
     if !provided_verifying_key.is_empty() {
-        let mut cache = verifying_key_cache.try_write()
+        let mut cache = verifying_key_cache
+            .try_write()
             .map_err(|e| format!("verifying key cache write lock: {}", e))?;
-        cache.entry(fingerprint.to_string())
+        cache
+            .entry(fingerprint.to_string())
             .or_insert_with(|| provided_verifying_key.to_string());
     }
 
     // Look up the verifying key from cache — use try_read to avoid blocking the runtime
-    let cache = verifying_key_cache.try_read()
+    let cache = verifying_key_cache
+        .try_read()
         .map_err(|e| format!("verifying key cache lock: {}", e))?;
 
     let sig_bytes = BASE64_STANDARD
@@ -2674,8 +2975,8 @@ fn verify_ml_dsa87_signature(
         .ok_or_else(|| "invalid signature encoding".to_string())?;
 
     // Verify the signature using crypto-pq helper
-    let verified = verify_ml_dsa87(data.as_bytes(), &sig, &vk)
-        .map_err(|e| format!("verify error: {}", e))?;
+    let verified =
+        verify_ml_dsa87(data.as_bytes(), &sig, &vk).map_err(|e| format!("verify error: {}", e))?;
 
     Ok(verified)
 }
@@ -2714,7 +3015,7 @@ fn verify_hmac(data: &str, provided_hmac: &str, secret: &str) -> bool {
 
 /// Compute SHA-256 hex hash of data.
 fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
@@ -2727,8 +3028,8 @@ fn compute_hmac(data: &str, secret: &str) -> String {
 
     type HmacSha256 = Hmac<Sha256>;
 
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(data.as_bytes());
     let result = mac.finalize();
     hex::encode(result.into_bytes())
@@ -2737,16 +3038,16 @@ fn compute_hmac(data: &str, secret: &str) -> String {
 /// Parse a relay URL into (host, port, use_tls).
 fn parse_relay_url(url: &str) -> Result<(String, u16, bool), Box<dyn std::error::Error>> {
     // Simple URL parser for ws:// and wss:// schemes
-    let (use_tls, rest) = if url.starts_with("wss://") {
-        (true, &url[6..])
-    } else if url.starts_with("ws://") {
-        (false, &url[5..])
+    let (use_tls, rest) = if let Some(rest) = url.strip_prefix("wss://") {
+        (true, rest)
+    } else if let Some(rest) = url.strip_prefix("ws://") {
+        (false, rest)
     } else {
         (false, url)
     };
 
     let (host, port_str) = if let Some(colon_pos) = rest.rfind(':') {
-        (&rest[..colon_pos], &rest[colon_pos+1..])
+        (&rest[..colon_pos], &rest[colon_pos + 1..])
     } else {
         (rest, if use_tls { "443" } else { "80" })
     };
@@ -2891,10 +3192,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Ensure GPG home directory exists
-    if !std::path::Path::new(&gpg_home).exists() {
-        if let Err(e) = std::fs::create_dir_all(&gpg_home) {
-            tracing::warn!("Could not create GPG home {}: {}", gpg_home, e);
-        }
+    if !std::path::Path::new(&gpg_home).exists()
+        && let Err(e) = std::fs::create_dir_all(&gpg_home)
+    {
+        tracing::warn!("Could not create GPG home {}: {}", gpg_home, e);
     }
 
     // Detect reverse proxy mode by host binding
@@ -2904,8 +3205,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tls_acceptor = if let (Some(cert_path), Some(key_path)) = (&args.tls_cert, &args.tls_key) {
         Some(load_tls_acceptor(cert_path, key_path)?)
     } else if !is_behind_proxy {
-        tracing::warn!("TLS not configured -- relay running in plaintext mode (ws://). \
-                        For production, use --tls-cert and --tls-key.");
+        tracing::warn!(
+            "TLS not configured -- relay running in plaintext mode (ws://). \
+                        For production, use --tls-cert and --tls-key."
+        );
         None
     } else {
         // Behind nginx proxy - TLS handled by proxy, silence warning
@@ -2914,9 +3217,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&addr).await?;
-    tracing::info!("add-relay listening on {} ({})",
+    tracing::info!(
+        "add-relay listening on {} ({})",
         addr,
-        if tls_acceptor.is_some() { "wss:// (TLS)" } else { "ws:// (plaintext)" });
+        if tls_acceptor.is_some() {
+            "wss:// (TLS)"
+        } else {
+            "ws:// (plaintext)"
+        }
+    );
 
     // SECURITY FIX (L4): Resolve shared secret from file if provided,
     // to avoid exposing it in the process list.
@@ -2933,7 +3242,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else if args.secret.is_some() {
-        tracing::warn!("--secret exposes the secret in the process list. Use --secret-file instead.");
+        tracing::warn!(
+            "--secret exposes the secret in the process list. Use --secret-file instead."
+        );
         args.secret.clone()
     } else {
         None
@@ -2949,9 +3260,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Use explicit db_path or derive from gpg_home
-    let db_path = args.db_path.clone().unwrap_or_else(|| {
-        format!("{}/mailbox.db", gpg_home)
-    });
+    let db_path = args
+        .db_path
+        .clone()
+        .unwrap_or_else(|| format!("{}/mailbox.db", gpg_home));
 
     // Snapshot-defense: snapshot-resistant secure bootstrap kit (SSS 2-of-3 + volatile AES-256).
     // Generates a volatile key, splits it across 3 local "OHT" provider dirs (fetch-and-delete
@@ -2973,11 +3285,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let key = kit.into_key();
         let (nonce, ct) = key.seal(b"add-relay-ok").expect("seal");
         let _ = add_crypto::snapshot_defense::VolatileKey::open(&nonce, &ct, &key).expect("open");
-        tracing::info!("snapshot-defense: secure bootstrap kit ready (SSS 2-of-3, volatile AES-256)");
+        tracing::info!(
+            "snapshot-defense: secure bootstrap kit ready (SSS 2-of-3, volatile AES-256)"
+        );
     }
     let allow_relay = args.allow_relay;
     let cbnp_enabled = args.cbnp_enabled;
-    let state = Arc::new(RelayState::new(shared_secret.clone(), gpg_home, Some(db_path), allow_relay, cbnp_enabled).await?);
+    let state = Arc::new(
+        RelayState::new(
+            shared_secret.clone(),
+            gpg_home,
+            Some(db_path),
+            allow_relay,
+            cbnp_enabled,
+        )
+        .await?,
+    );
     {
         let mut fed = state.federation.write().await;
         fed.our_url = Some(our_url.clone());
@@ -2998,13 +3321,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let limiter_state = Arc::clone(&state);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(PEER_LIMITER_CLEANUP_SECS));
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(PEER_LIMITER_CLEANUP_SECS));
             loop {
                 interval.tick().await;
                 let mut limiters = limiter_state.conn_limiters.write().await;
                 let cutoff = Instant::now() - Duration::from_secs(PEER_LIMITER_CLEANUP_SECS * 2);
                 limiters.retain(|_, (_, last_access)| *last_access > cutoff);
-                tracing::debug!(active_limiters=limiters.len(), "per-IP rate limiter cleanup complete");
+                tracing::debug!(
+                    active_limiters = limiters.len(),
+                    "per-IP rate limiter cleanup complete"
+                );
             }
         });
     }
@@ -3246,7 +3573,10 @@ mod tests {
     fn test_federation_add_and_lookup_route() {
         let mut fed = FederationState::new(None);
         fed.add_route("NN-ALICE-1234", "ws://relay-a.example.com:8765");
-        assert_eq!(fed.lookup_route("NN-ALICE-1234"), Some("ws://relay-a.example.com:8765"));
+        assert_eq!(
+            fed.lookup_route("NN-ALICE-1234"),
+            Some("ws://relay-a.example.com:8765")
+        );
         assert_eq!(fed.lookup_route("NN-BOB-5678"), None);
     }
 

@@ -18,13 +18,12 @@
 // - No one can decrypt pure messages via ML-KEM — they are separate cipher systems.
 //-------------------------------------------------------------------------------
 
-use ml_kem::kem::{Decapsulate, Encapsulate, Kem};
 use ml_kem::KeyExport;
-use ml_kem::MlKem1024;
 use ml_kem::MlKem768;
+use ml_kem::MlKem1024;
 use ml_kem::TryKeyInit;
+use ml_kem::kem::{Decapsulate, Encapsulate, Kem};
 use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
 use zeroize::ZeroizeOnDrop;
 
 use base64::Engine;
@@ -97,7 +96,11 @@ impl MlKem1024Keypair {
     /// AES-256-GCM with a key derived from `encryption_key` via HKDF-SHA256.
     /// Format (hex JSON): [salt (32 bytes)][nonce (12 bytes)][ciphertext (variable)]
     /// The public key (`enc`) is stored in plaintext (it is not secret).
-    pub fn save(&self, path: &std::path::Path, encryption_key: &[u8; 32]) -> Result<(), CryptoError> {
+    pub fn save(
+        &self,
+        path: &std::path::Path,
+        encryption_key: &[u8; 32],
+    ) -> Result<(), CryptoError> {
         use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
         use aes_gcm::{Aes256Gcm, Key};
         use hkdf::Hkdf;
@@ -181,11 +184,14 @@ impl MlKem1024Keypair {
             .map_err(|e| CryptoError::KeyPersistence(format!("AES-GCM decrypt: {}", e)))?;
 
         // Reconstruct keys: enc uses KeyInit::new_from_slice, dec uses from_seed
-        let enc_key = ml_kem::kem::EncapsulationKey::<MlKem1024>::new_from_slice(enc_bytes.as_slice())
-            .map_err(|_| CryptoError::KeyPersistence("invalid enc key bytes".into()))?;
+        let enc_key =
+            ml_kem::kem::EncapsulationKey::<MlKem1024>::new_from_slice(enc_bytes.as_slice())
+                .map_err(|_| CryptoError::KeyPersistence("invalid enc key bytes".into()))?;
         // ml_kem 0.3.x from_seed expects seed as Array<u8, U64>
         let dec_key = ml_kem::kem::DecapsulationKey::<MlKem1024>::from_seed(
-            dec_bytes.as_slice().try_into()
+            dec_bytes
+                .as_slice()
+                .try_into()
                 .map_err(|_| CryptoError::KeyPersistence("invalid seed length".into()))?,
         );
         Ok(Self {
@@ -194,7 +200,10 @@ impl MlKem1024Keypair {
         })
     }
 
-    pub fn load_or_generate(path: &std::path::Path, encryption_key: &[u8; 32]) -> Result<Self, CryptoError> {
+    pub fn load_or_generate(
+        path: &std::path::Path,
+        encryption_key: &[u8; 32],
+    ) -> Result<Self, CryptoError> {
         if path.exists() {
             Self::load(path, encryption_key)
         } else {
@@ -227,7 +236,8 @@ impl MlKem1024Keypair {
         });
         std::fs::write(path, data.to_string())
             .map_err(|e| CryptoError::KeyPersistence(format!("write failed: {}", e)))?;
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
         }
@@ -252,10 +262,13 @@ impl MlKem1024Keypair {
         let dec_bytes = hex::decode(dec_hex)
             .map_err(|e| CryptoError::KeyPersistence(format!("dec hex decode: {}", e)))?;
 
-        let enc_key = ml_kem::kem::EncapsulationKey::<MlKem1024>::new_from_slice(enc_bytes.as_slice())
-            .map_err(|_| CryptoError::KeyPersistence("invalid enc key bytes".into()))?;
+        let enc_key =
+            ml_kem::kem::EncapsulationKey::<MlKem1024>::new_from_slice(enc_bytes.as_slice())
+                .map_err(|_| CryptoError::KeyPersistence("invalid enc key bytes".into()))?;
         let dec_key = ml_kem::kem::DecapsulationKey::<MlKem1024>::from_seed(
-            dec_bytes.as_slice().try_into()
+            dec_bytes
+                .as_slice()
+                .try_into()
                 .map_err(|_| CryptoError::KeyPersistence("invalid seed length".into()))?,
         );
         Ok(Self {
@@ -269,11 +282,15 @@ impl MlKem1024Keypair {
     pub fn from_seed(seed: &[u8; 64]) -> Result<Self, CryptoError> {
         use ml_kem::kem::DecapsulationKey;
         let dec = DecapsulationKey::<MlKem1024>::from_seed(
-            seed.as_slice().try_into()
+            seed.as_slice()
+                .try_into()
                 .map_err(|_| CryptoError::Serialization("invalid seed length".into()))?,
         );
         let enc = dec.encapsulation_key();
-        Ok(Self { enc: enc.clone(), dec })
+        Ok(Self {
+            enc: enc.clone(),
+            dec,
+        })
     }
 }
 
@@ -357,13 +374,21 @@ impl VariantKeypair {
                 let kp = MlKem1024Keypair::generate()?;
                 let enc_bytes = kp.enc.to_bytes().to_vec();
                 let dec_bytes = kp.dec.to_bytes().to_vec();
-                Ok(Self { variant, enc_bytes, dec_bytes })
+                Ok(Self {
+                    variant,
+                    enc_bytes,
+                    dec_bytes,
+                })
             }
             MlKemVariant::MlKem768 => {
                 let (dec, enc) = MlKem768::generate_keypair();
                 let enc_bytes = enc.to_bytes().to_vec();
                 let dec_bytes = dec.to_bytes().to_vec();
-                Ok(Self { variant, enc_bytes, dec_bytes })
+                Ok(Self {
+                    variant,
+                    enc_bytes,
+                    dec_bytes,
+                })
             }
         }
     }
@@ -378,7 +403,13 @@ impl VariantKeypair {
 
     fn encapsulate_768(
         enc_key: &ml_kem::kem::EncapsulationKey<MlKem768>,
-    ) -> Result<(ml_kem::kem::Ciphertext<MlKem768>, ml_kem::kem::SharedKey<MlKem768>), CryptoError> {
+    ) -> Result<
+        (
+            ml_kem::kem::Ciphertext<MlKem768>,
+            ml_kem::kem::SharedKey<MlKem768>,
+        ),
+        CryptoError,
+    > {
         let (ct, ss) = enc_key.encapsulate();
         Ok((ct, ss))
     }
@@ -418,10 +449,15 @@ impl VariantKeypair {
         let enc_key = ml_kem::kem::EncapsulationKey::<MlKem1024>::new_from_slice(&self.enc_bytes)
             .map_err(|_| CryptoError::KeyPersistence("invalid enc key".into()))?;
         let dec_key = ml_kem::kem::DecapsulationKey::<MlKem1024>::from_seed(
-            self.dec_bytes.as_slice().try_into()
+            self.dec_bytes
+                .as_slice()
+                .try_into()
                 .map_err(|_| CryptoError::KeyPersistence("invalid dec key".into()))?,
         );
-        Ok(MlKem1024Keypair { enc: enc_key, dec: dec_key })
+        Ok(MlKem1024Keypair {
+            enc: enc_key,
+            dec: dec_key,
+        })
     }
 }
 

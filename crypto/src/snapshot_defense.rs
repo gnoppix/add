@@ -142,7 +142,7 @@ impl VolatileKey {
         if bytes.len() != KEY_LEN {
             return Err(SnapError::KeyLength { got: bytes.len() });
         }
-        let mut key = bytes.to_vec();
+        let key = bytes.to_vec();
         let mut v = Self { key };
         secure_mem::lock_memory(&mut v.key);
         exclude_from_core_dump(&mut v.key);
@@ -157,10 +157,11 @@ impl VolatileKey {
     /// AEAD-seal `plaintext` with this key. Returns `(nonce, ciphertext)`.
     /// The key is consumed only inside this call; nothing persists afterward.
     pub fn seal(&self, plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), SnapError> {
+        use aes_gcm::Aes256Gcm;
         use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
-        use aes_gcm::{Aes256Gcm, Nonce};
 
-        let cipher = Aes256Gcm::new_from_slice(&self.key).map_err(|e| SnapError::Aes(e.to_string()))?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&self.key).map_err(|e| SnapError::Aes(e.to_string()))?;
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let ct = cipher
             .encrypt(&nonce, plaintext)
@@ -176,9 +177,12 @@ impl VolatileKey {
         if nonce.len() != 12 {
             return Err(SnapError::Aes(format!("bad nonce length {}", nonce.len())));
         }
-        let cipher = Aes256Gcm::new_from_slice(&key.key).map_err(|e| SnapError::Aes(e.to_string()))?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&key.key).map_err(|e| SnapError::Aes(e.to_string()))?;
         let nonce = Nonce::from_slice(nonce);
-        cipher.decrypt(nonce, ct).map_err(|e| SnapError::Aes(e.to_string()))
+        cipher
+            .decrypt(nonce, ct)
+            .map_err(|e| SnapError::Aes(e.to_string()))
     }
 }
 
@@ -378,7 +382,8 @@ pub fn exclude_from_core_dump(buf: &mut [u8]) -> bool {
 pub fn verify_ephemeral_mount(path: &Path) -> Result<(), SnapError> {
     #[cfg(target_os = "linux")]
     {
-        let cpath = CString::new(path.as_os_str().as_bytes()).map_err(|_| SnapError::InvalidPath)?;
+        let cpath =
+            CString::new(path.as_os_str().as_bytes()).map_err(|_| SnapError::InvalidPath)?;
         let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
         let ret = unsafe {
             // SAFETY: `cpath` is a NUL-terminated C string; `stat` is an owned out-parameter.
@@ -433,7 +438,9 @@ pub fn enforce_ephemeral_storage(path: &Path) {
             );
         }
         Err(e) => {
-            eprintln!("[snapshot_defense] WARNING: could not verify ephemeral mount for {path:?}: {e}");
+            eprintln!(
+                "[snapshot_defense] WARNING: could not verify ephemeral mount for {path:?}: {e}"
+            );
         }
     }
 }
@@ -521,10 +528,10 @@ impl SecKit {
         let dirs = default_provider_dirs(state_dir);
         let mut found: Vec<Shard> = Vec::with_capacity(3);
         for dir in &dirs {
-            if let Ok(bytes) = fs::read(dir.join(SHARD_FILE)) {
-                if let Ok(s) = Shard::from_bytes(&bytes) {
-                    found.push(s);
-                }
+            if let Ok(bytes) = fs::read(dir.join(SHARD_FILE))
+                && let Ok(s) = Shard::from_bytes(&bytes)
+            {
+                found.push(s);
             }
             if found.len() >= 2 {
                 break;
@@ -679,8 +686,8 @@ mod tests {
             // Recover the SAME key from the on-disk shards (any 2 of 3) — proves persistence.
             let recovered = SecKit::recover_or_bootstrap(&dir, false).expect("recover");
             let rkey = recovered.into_key();
-            let opened = VolatileKey::open(&nonce, &ct, &rkey).expect("open");
-            opened
+
+            VolatileKey::open(&nonce, &ct, &rkey).expect("open")
         };
         assert_eq!(original, b"boot");
 

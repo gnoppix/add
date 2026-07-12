@@ -43,8 +43,7 @@ pub fn domain_matches(cert_domain: &str, pattern: &str) -> bool {
     let cert_domain = cert_domain.to_lowercase();
     let pattern = pattern.to_lowercase();
 
-    if pattern.starts_with("*.") {
-        let base = &pattern[2..];
+    if let Some(base) = pattern.strip_prefix("*.") {
         cert_domain == base || cert_domain.ends_with(&format!(".{}", base))
     } else {
         cert_domain == pattern
@@ -74,12 +73,12 @@ fn extract_cert_info(cert_der: &[u8]) -> Result<CertInfo, String> {
 
     let mut subject_alt_names = Vec::new();
     for ext in cert.extensions() {
-        if ext.oid == x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME {
-            if let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension() {
-                for name in &san.general_names {
-                    if let GeneralName::DNSName(name_str) = name {
-                        subject_alt_names.push(name_str.to_string());
-                    }
+        if ext.oid == x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME
+            && let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension()
+        {
+            for name in &san.general_names {
+                if let GeneralName::DNSName(name_str) = name {
+                    subject_alt_names.push(name_str.to_string());
                 }
             }
         }
@@ -296,7 +295,12 @@ pub fn verify_bootstrap_cert(seed_url: &str) -> bool {
     }
 
     // Check against pinned values
-    bootstrap_pin_check(seed_url, &cert_fp, &cert_info.not_before, &cert_info.not_after)
+    bootstrap_pin_check(
+        seed_url,
+        &cert_fp,
+        &cert_info.not_before,
+        &cert_info.not_after,
+    )
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 // You can use the code for free if your company or organisation doesn't have more than 2 people.
 //-------------------------------------------------------------------------------
 
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite, Row};
+use sqlx::{Pool, Row, Sqlite, sqlite::SqlitePoolOptions};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::DhtResult;
@@ -100,17 +100,13 @@ impl DhtStore {
         .execute(&self.pool)
         .await?;
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_expires ON kv_store(expires_at)",
-        )
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_expires ON kv_store(expires_at)")
+            .execute(&self.pool)
+            .await?;
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_publisher ON kv_store(publisher_fp)",
-        )
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_publisher ON kv_store(publisher_fp)")
+            .execute(&self.pool)
+            .await?;
 
         sqlx::query(
             r#"
@@ -125,11 +121,9 @@ impl DhtStore {
         .execute(&self.pool)
         .await?;
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_nonce_log_recorded ON nonce_log(recorded_at)",
-        )
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_nonce_log_recorded ON nonce_log(recorded_at)")
+            .execute(&self.pool)
+            .await?;
 
         // WAL mode and foreign keys are set per-connection in SQLite.
         // We set WAL via pragma on each new connection by executing it.
@@ -175,6 +169,7 @@ impl DhtStore {
     /// - The new seq is higher than existing (prevents replay)
     /// - The value size is within limits
     /// - The nonce has not been seen before for this key (prevents replay across restarts)
+    #[allow(clippy::too_many_arguments)]
     pub async fn put(
         &self,
         key: &str,
@@ -193,10 +188,7 @@ impl DhtStore {
 
         // Check nonce for replay protection (persistent across restarts)
         if self.is_nonce_seen(key, nonce).await? {
-            tracing::debug!(
-                "nonce {} already seen for key {}, rejecting",
-                nonce, key
-            );
+            tracing::debug!("nonce {} already seen for key {}, rejecting", nonce, key);
             return Ok(false);
         }
 
@@ -204,33 +196,31 @@ impl DhtStore {
         let expires = now + ttl as f64;
 
         // Check existing seq for replay protection
-        let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT seq FROM kv_store WHERE key = ?",
-        )
-        .bind(key)
-        .fetch_optional(&self.pool)
-        .await?;
+        let existing: Option<i64> = sqlx::query_scalar("SELECT seq FROM kv_store WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
 
-        if let Some(existing_seq) = existing {
-            if existing_seq >= seq {
-                tracing::debug!(
-                    "stale seq {} < existing {} for key {}",
-                    seq, existing_seq, key
-                );
-                return Ok(false);
-            }
+        if let Some(existing_seq) = existing
+            && existing_seq >= seq
+        {
+            tracing::debug!(
+                "stale seq {} < existing {} for key {}",
+                seq,
+                existing_seq,
+                key
+            );
+            return Ok(false);
         }
 
         // Record nonce and store value in a transaction
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query(
-            "INSERT OR IGNORE INTO nonce_log (key, nonce) VALUES (?, ?)",
-        )
-        .bind(key)
-        .bind(nonce)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("INSERT OR IGNORE INTO nonce_log (key, nonce) VALUES (?, ?)")
+            .bind(key)
+            .bind(nonce)
+            .execute(&mut *tx)
+            .await?;
 
         sqlx::query(
             "INSERT OR REPLACE INTO kv_store \
@@ -266,49 +256,42 @@ impl DhtStore {
     /// Count non-expired keys.
     pub async fn count_keys(&self) -> DhtResult<i64> {
         let now = now_unix();
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM kv_store WHERE expires_at > ?",
-        )
-        .bind(now)
-        .fetch_one(&self.pool)
-        .await?;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM kv_store WHERE expires_at > ?")
+            .bind(now)
+            .fetch_one(&self.pool)
+            .await?;
         Ok(count)
     }
 
     /// Check if we already have the same (key, or key+nonce) recorded.
     pub async fn has_key(&self, key: &str) -> DhtResult<bool> {
-        let row: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM kv_store WHERE key = ?",
-        )
-        .bind(key)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<i64> = sqlx::query_scalar("SELECT 1 FROM kv_store WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.is_some())
     }
 
     /// Check if a nonce has already been recorded for the given key.
     /// Provides persistent replay protection across node restarts.
     pub async fn is_nonce_seen(&self, key: &str, nonce: i64) -> DhtResult<bool> {
-        let row: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM nonce_log WHERE key = ? AND nonce = ?",
-        )
-        .bind(key)
-        .bind(nonce)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM nonce_log WHERE key = ? AND nonce = ?")
+                .bind(key)
+                .bind(nonce)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.is_some())
     }
 
     /// Record a nonce for the given key. Called after successful put.
     /// INSERT OR IGNORE makes this idempotent — re-recording is a no-op.
     pub async fn record_nonce(&self, key: &str, nonce: i64) -> DhtResult<()> {
-        sqlx::query(
-            "INSERT OR IGNORE INTO nonce_log (key, nonce) VALUES (?, ?)",
-        )
-        .bind(key)
-        .bind(nonce)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT OR IGNORE INTO nonce_log (key, nonce) VALUES (?, ?)")
+            .bind(key)
+            .bind(nonce)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -316,12 +299,10 @@ impl DhtStore {
     /// Call periodically to prevent unbounded growth.
     /// Default retention: 7 days (604800 seconds).
     pub async fn prune_old_nonces(&self, cutoff_timestamp: i64) -> DhtResult<u64> {
-        let result = sqlx::query(
-            "DELETE FROM nonce_log WHERE recorded_at < ?",
-        )
-        .bind(cutoff_timestamp)
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query("DELETE FROM nonce_log WHERE recorded_at < ?")
+            .bind(cutoff_timestamp)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected())
     }
 }
@@ -345,7 +326,16 @@ mod tests {
         assert!(result.is_none());
 
         let stored = store
-            .put("NN-TEST-0001", "base64blob", "somesalt", 1, "AABB", 3600, "b64sig", 1001)
+            .put(
+                "NN-TEST-0001",
+                "base64blob",
+                "somesalt",
+                1,
+                "AABB",
+                3600,
+                "b64sig",
+                1001,
+            )
             .await
             .unwrap();
         assert!(stored);
@@ -362,27 +352,63 @@ mod tests {
         let store = DhtStore::open_in_memory().await.unwrap();
 
         store
-            .put("NN-TEST-0002", "blob1", "salt1", 5, "FP1", 3600, "sig1", 2001)
+            .put(
+                "NN-TEST-0002",
+                "blob1",
+                "salt1",
+                5,
+                "FP1",
+                3600,
+                "sig1",
+                2001,
+            )
             .await
             .unwrap();
 
         // Same seq should be rejected
         let stored = store
-            .put("NN-TEST-0002", "blob2", "salt2", 5, "FP1", 3600, "sig2", 2002)
+            .put(
+                "NN-TEST-0002",
+                "blob2",
+                "salt2",
+                5,
+                "FP1",
+                3600,
+                "sig2",
+                2002,
+            )
             .await
             .unwrap();
         assert!(!stored);
 
         // Lower seq should be rejected
         let stored = store
-            .put("NN-TEST-0002", "blob3", "salt3", 3, "FP1", 3600, "sig3", 2003)
+            .put(
+                "NN-TEST-0002",
+                "blob3",
+                "salt3",
+                3,
+                "FP1",
+                3600,
+                "sig3",
+                2003,
+            )
             .await
             .unwrap();
         assert!(!stored);
 
         // Higher seq should be accepted
         let stored = store
-            .put("NN-TEST-0002", "blob4", "salt4", 6, "FP1", 3600, "sig4", 2004)
+            .put(
+                "NN-TEST-0002",
+                "blob4",
+                "salt4",
+                6,
+                "FP1",
+                3600,
+                "sig4",
+                2004,
+            )
             .await
             .unwrap();
         assert!(stored);
@@ -394,21 +420,48 @@ mod tests {
 
         // First put with nonce 3001 should succeed
         let stored = store
-            .put("NN-TEST-NONCE", "blob1", "salt1", 1, "FP1", 3600, "sig1", 3001)
+            .put(
+                "NN-TEST-NONCE",
+                "blob1",
+                "salt1",
+                1,
+                "FP1",
+                3600,
+                "sig1",
+                3001,
+            )
             .await
             .unwrap();
         assert!(stored);
 
         // Same key, same nonce, higher seq should be rejected (nonce replay)
         let stored = store
-            .put("NN-TEST-NONCE", "blob2", "salt2", 2, "FP1", 3600, "sig2", 3001)
+            .put(
+                "NN-TEST-NONCE",
+                "blob2",
+                "salt2",
+                2,
+                "FP1",
+                3600,
+                "sig2",
+                3001,
+            )
             .await
             .unwrap();
         assert!(!stored);
 
         // Same key, different nonce should succeed
         let stored = store
-            .put("NN-TEST-NONCE", "blob3", "salt3", 2, "FP1", 3600, "sig3", 3002)
+            .put(
+                "NN-TEST-NONCE",
+                "blob3",
+                "salt3",
+                2,
+                "FP1",
+                3600,
+                "sig3",
+                3002,
+            )
             .await
             .unwrap();
         assert!(stored);
@@ -433,9 +486,18 @@ mod tests {
         {
             let store = DhtStore::open(Some(&path_str)).await.unwrap();
             let stored = store
-                .put("NN-TEST-PERSIST", "blob1", "salt1", 1, "FP1", 3600, "sig1", 4001)
+                .put(
+                    "NN-TEST-PERSIST",
+                    "blob1",
+                    "salt1",
+                    1,
+                    "FP1",
+                    3600,
+                    "sig1",
+                    4001,
+                )
                 .await
-            .unwrap();
+                .unwrap();
             assert!(stored);
         }
 
@@ -446,16 +508,34 @@ mod tests {
 
             // Attempt replay with same nonce should be rejected
             let stored = store
-                .put("NN-TEST-PERSIST", "blob2", "salt2", 2, "FP1", 3600, "sig2", 4001)
+                .put(
+                    "NN-TEST-PERSIST",
+                    "blob2",
+                    "salt2",
+                    2,
+                    "FP1",
+                    3600,
+                    "sig2",
+                    4001,
+                )
                 .await
-            .unwrap();
+                .unwrap();
             assert!(!stored);
 
             // Different nonce should work
             let stored = store
-                .put("NN-TEST-PERSIST", "blob3", "salt3", 2, "FP1", 3600, "sig3", 4002)
+                .put(
+                    "NN-TEST-PERSIST",
+                    "blob3",
+                    "salt3",
+                    2,
+                    "FP1",
+                    3600,
+                    "sig3",
+                    4002,
+                )
                 .await
-            .unwrap();
+                .unwrap();
             assert!(stored);
         }
 
@@ -512,7 +592,16 @@ mod tests {
         assert_eq!(store.count_keys().await.unwrap(), 0);
 
         store
-            .put("NN-TEST-0004", "blob1", "salt1", 1, "FP1", 3600, "sig1", 6001)
+            .put(
+                "NN-TEST-0004",
+                "blob1",
+                "salt1",
+                1,
+                "FP1",
+                3600,
+                "sig1",
+                6001,
+            )
             .await
             .unwrap();
         assert_eq!(store.count_keys().await.unwrap(), 1);

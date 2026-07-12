@@ -17,9 +17,9 @@
 //! - SecureKeyMaterial: Optional guard-page-protected key allocation
 //! - Assembly barriers: Speculative execution mitigation (LFENCE, speculation barrier)
 
-use std::alloc::{alloc, Layout};
+use std::alloc::{Layout, alloc};
 use std::ptr::NonNull;
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{Ordering, compiler_fence};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Guard page size (matches typical OS page size)
@@ -57,7 +57,7 @@ pub fn secure_zero_memory(buffer: &mut [u8]) {
 }
 
 /// Speculative execution mitigation barrier (LFENCE).
-/// 
+///
 /// Prevents speculative execution from leaking data via side channels (Spectre/Meltdown).
 /// On x86_64, emits LFENCE. On ARM, emits DSB SYS + ISB.
 /// On other architectures, acts as a compiler barrier.
@@ -67,18 +67,18 @@ pub fn speculation_barrier() {
     unsafe {
         core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
     }
-    
+
     #[cfg(target_arch = "aarch64")]
     unsafe {
         core::arch::asm!("dsb sy", "isb", options(nostack, nomem, preserves_flags));
     }
-    
+
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     compiler_fence(Ordering::SeqCst);
 }
 
 /// Hardened version of secure_zero_memory with speculation barrier.
-/// 
+///
 /// Adds LFENCE/DSB+ISB before and after zeroing to prevent speculative
 /// execution from reading zeroed memory during the operation.
 #[inline(never)]
@@ -86,22 +86,22 @@ pub fn secure_zero_memory_hardened(buffer: &mut [u8]) {
     if buffer.is_empty() {
         return;
     }
-    
+
     // Pre-zeroing speculation barrier
     speculation_barrier();
-    
+
     unsafe {
         let mut ptr = buffer.as_mut_ptr();
         let end = ptr.add(buffer.len());
-        
+
         while ptr < end {
             std::ptr::write_volatile(ptr, 0u8);
             ptr = ptr.add(1);
         }
     }
-    
+
     compiler_fence(Ordering::SeqCst);
-    
+
     // Post-zeroing speculation barrier
     speculation_barrier();
 }
@@ -111,7 +111,12 @@ pub fn secure_zero_memory_hardened(buffer: &mut [u8]) {
 /// On Linux/Android, uses mlock. Returns Ok(true) on success, Ok(false) on unsupported
 /// or failed platforms. This is best-effort - the function does not fail if mlock fails.
 pub fn lock_memory(buffer: &mut [u8]) -> bool {
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    ))]
     {
         unsafe {
             let ptr = buffer.as_mut_ptr() as *mut libc::c_void;
@@ -120,7 +125,12 @@ pub fn lock_memory(buffer: &mut [u8]) -> bool {
             ret == 0
         }
     }
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
     {
         // No-op on unsupported platforms
         true
@@ -129,7 +139,12 @@ pub fn lock_memory(buffer: &mut [u8]) -> bool {
 
 /// Unlocks previously locked memory pages.
 pub fn unlock_memory(buffer: &mut [u8]) -> bool {
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    ))]
     {
         unsafe {
             let ptr = buffer.as_mut_ptr() as *mut libc::c_void;
@@ -138,7 +153,12 @@ pub fn unlock_memory(buffer: &mut [u8]) -> bool {
             ret == 0
         }
     }
-    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios")))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
     {
         true
     }
@@ -174,7 +194,10 @@ impl SecureKeyMaterial {
         } else {
             false
         };
-        Self { key_material: key_bytes, locked }
+        Self {
+            key_material: key_bytes,
+            locked,
+        }
     }
 
     /// Access the key material (for encryption operations).
@@ -335,25 +358,25 @@ impl Drop for GuardedKeyMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_secure_zero_memory() {
         let mut buffer = [0x42u8; 32];
         assert_eq!(buffer, vec![0x42u8; 32].as_slice());
-        
+
         secure_zero_memory(&mut buffer);
-        
+
         // After secure zeroing, all bytes should be zero
         assert_eq!(buffer, vec![0u8; 32].as_slice());
     }
-    
+
     #[test]
     fn test_secure_key_material() {
         let key = vec![0xDEu8; 32];
         let skm = SecureKeyMaterial::new(key.clone(), false);
         assert_eq!(skm.bytes(), &key[..]);
     }
-    
+
     #[test]
     fn test_secure_key_material_purge() {
         let key = vec![0xDEu8; 32];

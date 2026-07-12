@@ -13,8 +13,8 @@ use std::collections::HashMap;
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use generic_array::typenum::U12;
 use base64::Engine;
+use generic_array::typenum::U12;
 use hkdf::Hkdf;
 use ml_kem::MlKem1024;
 use serde::{Deserialize, Serialize};
@@ -25,12 +25,12 @@ pub use kyber::MlKem1024EncapsulationKey;
 pub use kyber::MlKem1024Keypair;
 pub use kyber::MlKemVariant;
 pub use kyber::VariantKeypair;
+pub mod cbnp;
+pub mod delivery_tokens;
+pub mod hardware_keys;
+pub mod pir;
 pub mod secure_mem;
 pub mod snapshot_defense;
-pub mod delivery_tokens;
-pub mod cbnp;
-pub mod pir;
-pub mod hardware_keys;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
@@ -97,13 +97,13 @@ pub fn validate_null_id_strict(nid: &str, fingerprint: &str) -> Result<(), Crypt
 }
 
 pub fn null_id(fingerprint: &str) -> String {
-    use blake2::digest::{Update, VariableOutput};
     use blake2::Blake2bVar;
+    use blake2::digest::{Update, VariableOutput};
     let mut hasher = Blake2bVar::new(8).expect("valid");
     Update::update(&mut hasher, fingerprint.as_bytes());
     let mut result = [0u8; 8];
     let _ = hasher.finalize_variable(&mut result);
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&result);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(result);
     let b64 = b64.trim_end_matches('=');
     let b64: String = b64.chars().take(8).collect();
     format!("NN-{}-{}", &b64[..4], &b64[4..8])
@@ -140,7 +140,14 @@ impl DoubleRatchetSession {
         is_initiator: bool,
         shared_secret: &[u8],
     ) -> Result<Self, CryptoError> {
-        Self::new_with_mode(peer_fp, peer_nid, our_fp, is_initiator, false, shared_secret)
+        Self::new_with_mode(
+            peer_fp,
+            peer_nid,
+            our_fp,
+            is_initiator,
+            false,
+            shared_secret,
+        )
     }
 
     /// Self-message session: a single shared ratchet chain (both send and recv
@@ -177,7 +184,7 @@ impl DoubleRatchetSession {
             .map_err(|_| CryptoError::Ratchet("HKDF root_key".into()))?;
         hk.expand(b"add-double-ratchet-v1-chains", &mut chain_keys)
             .map_err(|_| CryptoError::Ratchet("HKDF chain_keys".into()))?;
-        let (mut send_ck, mut recv_ck) = if is_initiator {
+        let (send_ck, mut recv_ck) = if is_initiator {
             (chain_keys[..32].to_vec(), chain_keys[32..].to_vec())
         } else {
             (chain_keys[32..].to_vec(), chain_keys[..32].to_vec())
@@ -294,11 +301,12 @@ impl DoubleRatchetSession {
 
         // Check for Kyber CT appended (post-first-message format)
         let pt = if body.len() > 2 {
-            let kyber_len = u16::from_be_bytes([body[body.len()-2], body[body.len()-1]]) as usize;
+            let kyber_len =
+                u16::from_be_bytes([body[body.len() - 2], body[body.len() - 1]]) as usize;
             if kyber_len > 0 && kyber_len + 2 <= body.len() {
                 let aes_ct_end = body.len() - 2 - kyber_len;
                 let aes_ct = &body[..aes_ct_end];
-                let kyber_ct_bytes = &body[aes_ct_end..body.len()-2];
+                let kyber_ct_bytes = &body[aes_ct_end..body.len() - 2];
                 let kyber_ct = ml_kem::kem::Ciphertext::<MlKem1024>::try_from(kyber_ct_bytes)
                     .map_err(|e| CryptoError::DecryptFailed(format!("kyber parse: {:?}", e)))?;
                 let kyber_ss = our_kyber
@@ -315,7 +323,8 @@ impl DoubleRatchetSession {
                     self.state.recv_chain_key = new_ck;
                 }
                 let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&msg_key));
-                let pt = cipher.decrypt(nonce, aes_ct)
+                let pt = cipher
+                    .decrypt(nonce, aes_ct)
                     .map_err(|e| CryptoError::DecryptFailed(format!("AES-GCM: {}", e)))?;
                 self.state.recv_message_number += 1;
                 pt
@@ -358,7 +367,8 @@ impl DoubleRatchetSession {
             self.state.recv_chain_key = new_ck;
         }
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&msg_key));
-        let pt = cipher.decrypt(nonce, body)
+        let pt = cipher
+            .decrypt(nonce, body)
             .map_err(|e| CryptoError::DecryptFailed(format!("AES-GCM: {}", e)))?;
         self.state.recv_message_number += 1;
         Ok(pt)
@@ -374,14 +384,39 @@ impl DoubleRatchetSession {
     }
 }
 
+/// Pad a message to a constant-size bucket to resist traffic analysis.
+pub fn pad_message_bucket(message: &str) -> String {
+    // 8 ASCII-armored characters per real-character, hex-encoded → 16 hex chars
+    let armor_len = message.len() * 8;
+    let padded = format!("{:0<width$}", "", width = armor_len);
+    hex::encode(padded.as_bytes())
+}
+
+/// Unpad a message from constant-size bucket.
+pub fn unpad_message_bucket(padded_hex: &str) -> Result<String, CryptoError> {
+    let bytes = hex::decode(padded_hex)
+        .map_err(|e| CryptoError::DecryptFailed(format!("hex decode: {}", e)))?;
+    let _len = bytes.len();
+    // Strip trailing zeros
+    let trimmed = bytes.split(|&b| b != 0).next().unwrap_or(&bytes);
+    String::from_utf8_lossy(trimmed).to_string();
+    // The original message is embedded in the zero-padded ASCII armored string.
+    // Each original char was padded to 8 chars. We just return the hex-decoded
+    // non-zero portion. The actual message extraction is done by the caller.
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(s.trim_end_matches('\0').trim().to_string()),
+        Err(_) => Ok(String::new()),
+    }
+}
+
 // ------------------------------------------------------------------ //
 //  Tests                                                              //
 // ------------------------------------------------------------------ //
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::kyber::MlKem1024Keypair;
+    use super::*;
 
     #[test]
     fn test_null_id_known() {
@@ -466,32 +501,5 @@ mod tests {
         let ct4_b64 = ct_base64.encode(&ct4_raw);
         let dec4 = sess_a.decrypt_message(&ct4_b64, &kp).unwrap();
         assert_eq!(dec4, pt4, "fourth message decrypt failed");
-    }
-}
-
-/// Pad a message to a constant-size bucket to resist traffic analysis.
-
-/// Pad a message to a constant-size bucket to resist traffic analysis.
-pub fn pad_message_bucket(message: &str) -> String {
-    // 8 ASCII-armored characters per real-character, hex-encoded → 16 hex chars
-    let armor_len = message.len() * 8;
-    let padded = format!("{:0<width$}", "", width = armor_len);
-    hex::encode(padded.as_bytes())
-}
-
-/// Unpad a message from constant-size bucket.
-pub fn unpad_message_bucket(padded_hex: &str) -> Result<String, CryptoError> {
-    let bytes = hex::decode(padded_hex)
-        .map_err(|e| CryptoError::DecryptFailed(format!("hex decode: {}", e)))?;
-    let _len = bytes.len();
-    // Strip trailing zeros
-    let trimmed = bytes.split(|&b| b != 0).next().unwrap_or(&bytes);
-    String::from_utf8_lossy(trimmed).to_string();
-    // The original message is embedded in the zero-padded ASCII armored string.
-    // Each original char was padded to 8 chars. We just return the hex-decoded
-    // non-zero portion. The actual message extraction is done by the caller.
-    match String::from_utf8(bytes) {
-        Ok(s) => Ok(s.trim_end_matches('\0').trim().to_string()),
-        Err(_) => Ok(String::new()),
     }
 }

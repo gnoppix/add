@@ -55,8 +55,7 @@ impl DeliveryMasterSecret {
 
     /// Derive a per-contact delivery key using HKDF-like construction
     pub fn derive_key(&self, contact_id: &str) -> DeliveryKey {
-        let mut mac = HmacSha256::new_from_slice(&self.bytes)
-            .expect("HMAC accepts any key size");
+        let mut mac = HmacSha256::new_from_slice(&self.bytes).expect("HMAC accepts any key size");
         mac.update(b"add-delivery-key-v1");
         mac.update(contact_id.as_bytes());
         let result = mac.finalize();
@@ -109,7 +108,7 @@ pub struct DeliveryKey {
 impl DeliveryKey {
     /// Derive a delivery token for a message ID
     pub fn derive_token(&self, message_id: u64) -> Result<DeliveryToken, CryptoError> {
-        derive_token_internal(&self, message_id)
+        derive_token_internal(self, message_id)
     }
 
     /// Verify a token for a message
@@ -175,10 +174,7 @@ impl DeliveryToken {
 }
 
 /// Internal: derive a token using HMAC-SHA256(key, message_id_be_bytes)
-fn derive_token_internal(
-    key: &DeliveryKey,
-    message_id: u64,
-) -> Result<DeliveryToken, CryptoError> {
+fn derive_token_internal(key: &DeliveryKey, message_id: u64) -> Result<DeliveryToken, CryptoError> {
     let mut mac = HmacSha256::new_from_slice(&key.bytes)
         .map_err(|_| CryptoError::EncryptFailed("HMAC init failed".into()))?;
     mac.update(b"add-delivery-token-v1");
@@ -186,9 +182,7 @@ fn derive_token_internal(
     let result = mac.finalize();
     let mut token_bytes = [0u8; DELIVERY_TOKEN_SIZE];
     token_bytes.copy_from_slice(&result.into_bytes());
-    Ok(DeliveryToken {
-        bytes: token_bytes,
-    })
+    Ok(DeliveryToken { bytes: token_bytes })
 }
 
 /// Wire format for a delivery token message
