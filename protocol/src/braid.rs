@@ -16,6 +16,7 @@
 // -------------------------------------------------------------------------------
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// A chunk in the braid protocol exchange.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +38,8 @@ pub struct BraidChunk {
 pub struct BraidHandshake {
     pub total_chunks: u32,
     pub received_chunks: Vec<BraidChunk>,
+    /// Set of chunk_num already received (O(1) duplicate detection).
+    seen_chunks: HashSet<u32>,
     pub ek_hash: Vec<u8>,
     pub complete: bool,
 }
@@ -48,6 +51,7 @@ impl BraidHandshake {
         Self {
             total_chunks: 0,
             received_chunks: Vec::new(),
+            seen_chunks: HashSet::new(),
             ek_hash: vec![0u8; 64],
             complete: false,
         }
@@ -56,13 +60,37 @@ impl BraidHandshake {
     /// CHUNK_SIZE: 64 bytes per chunk (allows parallel processing)
     pub const CHUNK_SIZE: usize = 64;
 
+    /// Hard upper bound on the number of chunks a peer may claim.
+    ///
+    /// SECURITY (C1): `total_chunks` arrives from the (untrusted) peer. An
+    /// attacker could claim an enormous value to force the receiver to allocate
+    /// a huge `received_chunks` vector and stall. ML-KEM-1024 keys are 1568
+    /// bytes → ceil(1568/64) = 25 chunks. We allow generous headroom (64) but
+    /// reject anything larger.
+    pub const MAX_TOTAL_CHUNKS: u32 = 64;
+
     /// Add a received chunk and return true if handshake is complete.
+    ///
+    /// SECURITY (C1): validates `chunk_num` bounds, a capped `total_chunks`,
+    /// `ek_hash` consistency across chunks, and rejects duplicates in O(1).
+    /// The `ek_hash` only provides *integrity* of the streamed key; the caller
+    /// MUST additionally bind the reassembled key to the authenticated inline
+    /// `kyber_enc_key` from the signed hello/ack (see `expected_ek_hash`).
     pub fn add_chunk(&mut self, chunk: BraidChunk) -> Result<bool, String> {
         // Validate chunk_num bounds
         if chunk.chunk_num >= chunk.total_chunks {
             return Err(format!(
                 "chunk_num {} >= total_chunks {}",
                 chunk.chunk_num, chunk.total_chunks
+            ));
+        }
+
+        // SECURITY (C1): reject absurd total_chunks claims (memory-DoS guard).
+        if chunk.total_chunks == 0 || chunk.total_chunks > Self::MAX_TOTAL_CHUNKS {
+            return Err(format!(
+                "total_chunks {} out of allowed range (1..={})",
+                chunk.total_chunks,
+                Self::MAX_TOTAL_CHUNKS
             ));
         }
 
@@ -77,13 +105,12 @@ impl BraidHandshake {
             return Err("ek_hash mismatch".to_string());
         }
 
-        // Check for duplicate
-        for c in &self.received_chunks {
-            if c.chunk_num == chunk.chunk_num {
-                return Err("duplicate chunk".to_string());
-            }
+        // Check for duplicate (O(1))
+        if self.seen_chunks.contains(&chunk.chunk_num) {
+            return Err("duplicate chunk".to_string());
         }
 
+        self.seen_chunks.insert(chunk.chunk_num);
         self.received_chunks.push(chunk);
 
         // Check if complete
@@ -92,6 +119,17 @@ impl BraidHandshake {
         }
 
         Ok(self.complete)
+    }
+
+    /// The SHA-512 of the streamed encapsulation key, as declared by the peer.
+    ///
+    /// SECURITY (C1): the caller must verify that
+    /// `SHA-512(reconstructed_ek) == expected_ek_hash()` AND that the
+    /// reconstructed EK equals the `kyber_enc_key` advertised inline in the
+    /// *signed* hello/ack. Without that binding an active MITM could substitute
+    /// their own EK during the braid stream.
+    pub fn expected_ek_hash(&self) -> &[u8] {
+        &self.ek_hash
     }
 
     /// Reconstruct the full encapsulation key from chunks.

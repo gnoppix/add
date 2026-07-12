@@ -3,7 +3,7 @@ members = ["protocol", "crypto", "crypto-pq", "crypto-utils", "dht-core", "relay
 resolver = "2"
 
 [workspace.package]
-version = "0.3.18"
+version = "0.3.19"
 edition = "2024"
 description = "Add P2P messenger (Rust)"
 license = "BUSL-1.1"
@@ -35,6 +35,7 @@ pem = "3"
 ml-kem = "0.1"
 futures = "0.3"
 zeroize = { version = "1", features = ["zeroize_derive"] }
+subtle = "2"
 age = { version = "0.11", features = ["armor"] }
 aes-gcm = "0.10"
 hkdf = "0.12"

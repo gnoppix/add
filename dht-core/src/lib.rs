@@ -19,9 +19,9 @@ pub mod types;
 pub mod util;
 
 // Re-exports for convenience
-pub use bootstrap_verify::{
-    cert_has_trusted_domain, cert_issuer_is_trusted, cert_issuer_name_is_trusted, domain_matches,
-};
+// SECURITY FIX (H3): dropped cert_issuer_is_trusted / cert_issuer_name_is_trusted
+// (the redundant CA-substring check was removed — trust rests on WebPKI + pin).
+pub use bootstrap_verify::{cert_has_trusted_domain, domain_matches};
 pub use crypto_helpers::{
     compute_null_id, sign_data, validate_fingerprint, validate_null_id, verify_signature,
     verify_signature_with_verifying_key,

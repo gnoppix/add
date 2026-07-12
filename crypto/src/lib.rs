@@ -113,6 +113,9 @@ pub fn null_id(fingerprint: &str) -> String {
 //  Double Ratchet Session                                            //
 // ------------------------------------------------------------------ //
 
+// SECURITY FIX (H1): `RatchetState` holds root/chain keys — no `Debug` derive
+// (would print key material on panic/log). `DoubleRatchetSession` provides a
+// redacted manual `Debug` below.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RatchetState {
     pub peer_fp: String,
@@ -130,6 +133,19 @@ pub struct RatchetState {
 
 pub struct DoubleRatchetSession {
     state: RatchetState,
+}
+
+impl std::fmt::Debug for DoubleRatchetSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DoubleRatchetSession")
+            .field("peer_fp", &self.state.peer_fp)
+            .field("peer_nid", &self.state.peer_nid)
+            .field("root_key", &"<secret redacted>")
+            .field("send_chain_key", &"<secret redacted>")
+            .field("recv_chain_key", &"<secret redacted>")
+            .field("skipped_keys", &self.state.skipped_keys.len())
+            .finish()
+    }
 }
 
 impl DoubleRatchetSession {
@@ -289,6 +305,7 @@ impl DoubleRatchetSession {
         &mut self,
         ciphertext_b64: &str,
         our_kyber: &MlKem1024Keypair,
+        seq: u64,
     ) -> Result<String, CryptoError> {
         let raw = base64::engine::general_purpose::STANDARD
             .decode(ciphertext_b64)
@@ -299,11 +316,32 @@ impl DoubleRatchetSession {
         let nonce = Nonce::from_slice(&raw[..NONCE_SIZE]);
         let body = &raw[NONCE_SIZE..];
 
+        // SECURITY FIX (M1): skipped-key lookup first. This handles
+        // out-of-order delivery and replays without re-advancing the chain
+        // (which would desync it). The key for `seq` was stored when first
+        // derived below.
+        let seq_key = seq.to_string();
+        if let Some(stored) = self.state.skipped_keys.get(&seq_key).cloned() {
+            let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&stored));
+            let pt = cipher
+                .decrypt(nonce, body)
+                .map_err(|e| CryptoError::DecryptFailed(format!("AES-GCM (skipped): {}", e)))?;
+            self.state.recv_message_number = self.state.recv_message_number.max(seq + 1);
+            return String::from_utf8(pt)
+                .map_err(|e| CryptoError::DecryptFailed(format!("utf8: {}", e)));
+        }
+
         // Check for Kyber CT appended (post-first-message format)
         let pt = if body.len() > 2 {
             let kyber_len =
                 u16::from_be_bytes([body[body.len() - 2], body[body.len() - 1]]) as usize;
             if kyber_len > 0 && kyber_len + 2 <= body.len() {
+                // Kyber path: each message independently derives its key from
+                // its own Kyber CT mixed into the recv chain. The Kyber CT is
+                // self-binding, so out-of-order messages simply fail to decrypt
+                // (the recv chain would be at the wrong position) — fail-closed,
+                // no explicit in-order enforcement needed. `seq` is stored below
+                // for replay handling via skipped_keys.
                 let aes_ct_end = body.len() - 2 - kyber_len;
                 let aes_ct = &body[..aes_ct_end];
                 let kyber_ct_bytes = &body[aes_ct_end..body.len() - 2];
@@ -327,14 +365,16 @@ impl DoubleRatchetSession {
                     .decrypt(nonce, aes_ct)
                     .map_err(|e| CryptoError::DecryptFailed(format!("AES-GCM: {}", e)))?;
                 self.state.recv_message_number += 1;
+                // Store for replay/out-of-order (M1)
+                self.state.skipped_keys.insert(seq_key, msg_key);
                 pt
             } else {
                 // Fallback: simple format
-                self.simple_decrypt(nonce, body)?
+                self.simple_decrypt(nonce, body, seq)?
             }
         } else {
             // Simple format (first message): nonce + AES ciphertext
-            self.simple_decrypt(nonce, body)?
+            self.simple_decrypt(nonce, body, seq)?
         };
         String::from_utf8(pt).map_err(|e| CryptoError::DecryptFailed(format!("utf8: {}", e)))
     }
@@ -346,7 +386,8 @@ impl DoubleRatchetSession {
     ) -> Result<String, CryptoError> {
         // First message: blob is nonce || AES-CT (NO Kyber appended).
         // recv_chain_key already derives from the root key (set in new()),
-        // which matches the initiator's send_chain_key. Use simple_decrypt.
+        // which matches the initiator's send_chain_key. Use simple_decrypt
+        // with seq 0.
         let raw = base64::engine::general_purpose::STANDARD
             .decode(ciphertext_b64)
             .map_err(|e| CryptoError::DecryptFailed(format!("base64 decode: {}", e)))?;
@@ -355,11 +396,32 @@ impl DoubleRatchetSession {
         }
         let nonce = Nonce::from_slice(&raw[..NONCE_SIZE]);
         let body = &raw[NONCE_SIZE..];
-        let pt = self.simple_decrypt(nonce, body)?;
+        let pt = self.simple_decrypt(nonce, body, 0)?;
         String::from_utf8(pt).map_err(|e| CryptoError::DecryptFailed(format!("utf8: {}", e)))
     }
 
-    fn simple_decrypt(&mut self, nonce: &Nonce<U12>, body: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    /// SECURITY FIX (M1): decrypt on the linear (no-Kyber) chain, supporting
+    /// out-of-order delivery via skipped-key storage. If `seq` is ahead of the
+    /// current position, the chain is advanced one step per skipped index,
+    /// storing each derived message key so a later-arriving message at that
+    /// index can be decrypted without re-advancing (which would desync).
+    fn simple_decrypt(
+        &mut self,
+        nonce: &Nonce<U12>,
+        body: &[u8],
+        seq: u64,
+    ) -> Result<Vec<u8>, CryptoError> {
+        // Skip forward, storing intermediate message keys (M1).
+        while self.state.recv_message_number < seq {
+            let (mk, new_ck) = Self::derive_message_key(&self.state.recv_chain_key)?;
+            if !self.state.self_mode {
+                self.state.recv_chain_key.zeroize();
+                self.state.recv_chain_key = new_ck;
+            }
+            let idx = self.state.recv_message_number;
+            self.state.skipped_keys.insert(idx.to_string(), mk);
+            self.state.recv_message_number += 1;
+        }
         let (msg_key, new_ck) = Self::derive_message_key(&self.state.recv_chain_key)?;
         if !self.state.self_mode {
             // Two-party mode: advance the chain for forward secrecy.
@@ -371,41 +433,22 @@ impl DoubleRatchetSession {
             .decrypt(nonce, body)
             .map_err(|e| CryptoError::DecryptFailed(format!("AES-GCM: {}", e)))?;
         self.state.recv_message_number += 1;
+        // Store this message's key for replay/out-of-order (M1)
+        self.state.skipped_keys.insert(seq.to_string(), msg_key);
         Ok(pt)
     }
 
-    pub fn serialize(&self) -> Result<String, CryptoError> {
-        Ok(serde_json::to_string(&self.state)?)
+    pub fn serialize(&self) -> Result<zeroize::Zeroizing<String>, CryptoError> {
+        // SECURITY FIX (H2): return a `Zeroizing<String>` so the plaintext JSON
+        // (which embeds root/chain keys) is zeroized as soon as the caller drops
+        // it after persisting — it never lingers in memory.
+        let json = serde_json::to_string(&self.state)?;
+        Ok(zeroize::Zeroizing::new(json))
     }
 
     pub fn deserialize(data: &str) -> Result<Self, CryptoError> {
         let state: RatchetState = serde_json::from_str(data)?;
         Ok(Self { state })
-    }
-}
-
-/// Pad a message to a constant-size bucket to resist traffic analysis.
-pub fn pad_message_bucket(message: &str) -> String {
-    // 8 ASCII-armored characters per real-character, hex-encoded → 16 hex chars
-    let armor_len = message.len() * 8;
-    let padded = format!("{:0<width$}", "", width = armor_len);
-    hex::encode(padded.as_bytes())
-}
-
-/// Unpad a message from constant-size bucket.
-pub fn unpad_message_bucket(padded_hex: &str) -> Result<String, CryptoError> {
-    let bytes = hex::decode(padded_hex)
-        .map_err(|e| CryptoError::DecryptFailed(format!("hex decode: {}", e)))?;
-    let _len = bytes.len();
-    // Strip trailing zeros
-    let trimmed = bytes.split(|&b| b != 0).next().unwrap_or(&bytes);
-    String::from_utf8_lossy(trimmed).to_string();
-    // The original message is embedded in the zero-padded ASCII armored string.
-    // Each original char was padded to 8 chars. We just return the hex-decoded
-    // non-zero portion. The actual message extraction is done by the caller.
-    match String::from_utf8(bytes) {
-        Ok(s) => Ok(s.trim_end_matches('\0').trim().to_string()),
-        Err(_) => Ok(String::new()),
     }
 }
 
@@ -478,28 +521,72 @@ mod tests {
         let pt1 = "hello from A";
         let ct1_raw = sess_a.encrypt_first(pt1, &[], &[]).unwrap();
         let ct1_b64 = ct_base64.encode(&ct1_raw);
-        let dec1 = sess_b.decrypt_message(&ct1_b64, &kp).unwrap();
+        let dec1 = sess_b.decrypt_message(&ct1_b64, &kp, 0).unwrap();
         assert_eq!(dec1, pt1, "first message decrypt failed");
 
         // B sends reply to A (kyber CT appended — the path we fixed)
         let pt2 = "reply from B";
         let ct2_raw = sess_b.encrypt_message(pt2, &enc_key).unwrap();
         let ct2_b64 = ct_base64.encode(&ct2_raw);
-        let dec2 = sess_a.decrypt_message(&ct2_b64, &kp).unwrap();
+        let dec2 = sess_a.decrypt_message(&ct2_b64, &kp, 1).unwrap();
         assert_eq!(dec2, pt2, "reply decrypt failed — WIRE FORMAT BUG");
 
         // A sends second message (continues the ratchet)
         let pt3 = "second from A";
         let ct3_raw = sess_a.encrypt_message(pt3, &enc_key).unwrap();
         let ct3_b64 = ct_base64.encode(&ct3_raw);
-        let dec3 = sess_b.decrypt_message(&ct3_b64, &kp).unwrap();
+        let dec3 = sess_b.decrypt_message(&ct3_b64, &kp, 2).unwrap();
         assert_eq!(dec3, pt3, "third message decrypt failed");
 
         // B replies again — multi-hop bidirectional ratchet
         let pt4 = "second reply from B";
         let ct4_raw = sess_b.encrypt_message(pt4, &enc_key).unwrap();
         let ct4_b64 = ct_base64.encode(&ct4_raw);
-        let dec4 = sess_a.decrypt_message(&ct4_b64, &kp).unwrap();
+        let dec4 = sess_a.decrypt_message(&ct4_b64, &kp, 3).unwrap();
         assert_eq!(dec4, pt4, "fourth message decrypt failed");
+    }
+
+    #[test]
+    fn test_ratchet_skipped_keys_out_of_order_and_replay() {
+        // SECURITY FIX (M1): the ratchet must recover out-of-order delivery and
+        // tolerate replays via the skipped_keys map, without desyncing.
+        use base64::Engine;
+        let kp_bytes = [0x42u8; 64];
+        let kp = MlKem1024Keypair::from_seed(&kp_bytes).unwrap();
+        let ct_base64 = base64::engine::general_purpose::STANDARD;
+
+        let shared_secret = [0x11u8; 32];
+        let mut sess_a =
+            DoubleRatchetSession::new("fp-a", "NN-AAAA-BBBB", "our-fp-a", true, &shared_secret)
+                .unwrap();
+        let mut sess_b =
+            DoubleRatchetSession::new("fp-b", "NN-CCCC-DDDD", "our-fp-b", false, &shared_secret)
+                .unwrap();
+        sess_a.state.send_chain_key = [0xABu8; 32].to_vec();
+        sess_a.state.recv_chain_key = [0xCDu8; 32].to_vec();
+        sess_b.state.send_chain_key = [0xCDu8; 32].to_vec();
+        sess_b.state.recv_chain_key = [0xABu8; 32].to_vec();
+
+        // B prepares a batch of messages (seq 0,1,2,3) on the SIMPLE chain
+        // (no Kyber CT) so that skip-forward / skipped_keys handling applies.
+        let mut cts = Vec::new();
+        for i in 0..4u64 {
+            let raw = sess_b.encrypt_first(&format!("m{}", i), &[], &[]).unwrap();
+            cts.push(ct_base64.encode(&raw));
+        }
+
+        // A receives them OUT OF ORDER: 2, 0, 3, 1, then replays 0 and 2.
+        let mut got = std::collections::HashMap::new();
+        for seq in [2u64, 0, 3, 1, 0, 2] {
+            let plain = sess_a.decrypt_message(&cts[seq as usize], &kp, seq).unwrap();
+            got.insert(seq, plain);
+        }
+        assert_eq!(got[&0], "m0");
+        assert_eq!(got[&1], "m1");
+        assert_eq!(got[&2], "m2");
+        assert_eq!(got[&3], "m3");
+        // Replays must decrypt identically (skipped_keys lookup, no chain advance).
+        let replay = sess_a.decrypt_message(&cts[1], &kp, 1).unwrap();
+        assert_eq!(replay, "m1");
     }
 }

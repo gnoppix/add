@@ -12,6 +12,7 @@ use add_crypto_pq::{
     MlDsa87Signature, MlDsa87VerifyingKey, sign as sign_ml_dsa87, verify as verify_ml_dsa87,
 };
 use base64::Engine;
+use crypto_common::KeyExport;
 use hmac::Hmac;
 use ml_dsa;
 use sha2::Sha256;
@@ -67,6 +68,65 @@ pub fn cache_verifying_key(fingerprint: &str, vk: &MlDsa87VerifyingKey) {
             .map(|(k, _)| k.clone())
     {
         cache.remove(&lru_key);
+    }
+}
+
+/// SECURITY FIX (C3): Pin a fingerprint→verifying-key binding.
+///
+/// Unlike `cache_verifying_key` (which silently overwrites), this enforces
+/// TOFU discipline: a fingerprint maps to exactly ONE verifying key. If the
+/// fingerprint is already bound to a *different* key, this returns an error
+/// (a hard fail, not a silent re-pin). The only permitted update is rewriting
+/// the same key (idempotent), which refreshes the access timestamp.
+///
+/// This closes the identity-substitution hole: an attacker who owns any
+/// ML-DSA-87 key cannot rebind `fingerprint F` (claimed by the victim) to their
+/// own `VK_MITM`, because the first honest binding wins and any later mismatch
+/// is rejected. The `Ok(false)` return means "conflict, not updated".
+pub fn pin_verifying_key(
+    fingerprint: &str,
+    vk: &MlDsa87VerifyingKey,
+) -> Result<bool, String> {
+    let key = fingerprint.to_uppercase();
+    let mut guard = verifying_key_cache_write();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    let cache = guard.as_mut().unwrap();
+    match cache.get(&key) {
+        Some((existing, _)) if existing == vk => {
+            // Same key already pinned — refresh access time, no-op.
+            if let Some(entry) = cache.get_mut(&key) {
+                entry.1 = Instant::now();
+            }
+            Ok(true)
+        }
+        Some((existing, _)) => {
+            // CONFLICT: fingerprint already bound to a different key.
+            let existing_b64 =
+                base64::engine::general_purpose::STANDARD.encode(existing.to_bytes());
+            let new_b64 = base64::engine::general_purpose::STANDARD.encode(vk.to_bytes());
+            Err(format!(
+                "SECURITY: fingerprint {} already bound to a different verifying key \
+                 (existing={}.., rejected={}..). Identity substitution blocked.",
+                key,
+                &existing_b64[..16.min(existing_b64.len())],
+                &new_b64[..16.min(new_b64.len())]
+            ))
+        }
+        None => {
+            cache.insert(key, (vk.clone(), Instant::now()));
+            // Enforce capacity
+            if cache.len() > CERT_CACHE_MAX_ENTRIES
+                && let Some(lru_key) = cache
+                    .iter()
+                    .min_by_key(|(_, (_, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+            {
+                cache.remove(&lru_key);
+            }
+            Ok(true)
+        }
     }
 }
 
@@ -278,5 +338,25 @@ mod tests {
         // Case-insensitive lookup
         assert!(get_cached_verifying_key("aabbccddeeff00112233445566778899aabbccdd").is_some());
         assert!(get_cached_verifying_key("DEADBEEF").is_none());
+    }
+
+    #[test]
+    fn test_pin_verifying_key_binding() {
+        // SECURITY FIX (C3): pin_verifying_key must bind a fingerprint to ONE
+        // verifying key and reject a later conflicting key (identity substitution).
+        let (_, vk_a) = add_crypto_pq::generate_keypair().unwrap();
+        let (_, vk_b) = add_crypto_pq::generate_keypair().unwrap();
+        assert_ne!(vk_a.to_bytes(), vk_b.to_bytes(), "test keys must differ");
+        let fp = "1111222233334444555566667777888899990000";
+
+        // First honest binding succeeds.
+        assert!(pin_verifying_key(fp, &vk_a).unwrap());
+        // Re-pinning the SAME key is idempotent (Ok(true)).
+        assert!(pin_verifying_key(fp, &vk_a).unwrap());
+        // A DIFFERENT key for the same fingerprint is rejected (hard fail).
+        let conflict = pin_verifying_key(fp, &vk_b);
+        assert!(conflict.is_err(), "identity substitution must be blocked");
+        // The original binding is preserved.
+        assert_eq!(get_cached_verifying_key(fp).unwrap().to_bytes(), vk_a.to_bytes());
     }
 }

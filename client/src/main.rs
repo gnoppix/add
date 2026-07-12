@@ -2914,6 +2914,12 @@ async fn relay_decrypt_message(
         .and_then(|c| c.as_str())
         .ok_or("no ciphertext in relay message")?;
 
+    // SECURITY FIX (M1): message sequence number drives skipped-key handling.
+    let seq = env
+        .get("seq")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
     // Check if this is a first-message (contains kyber_ciphertext for session init)
     let kyber_ct_hex = env.get("kyber_ciphertext").and_then(|c| c.as_str());
 
@@ -2980,7 +2986,7 @@ async fn relay_decrypt_message(
             .map_err(|e| format!("ratchet decrypt: {}", e))?
     } else {
         session
-            .decrypt_message(ciphertext, our_kyber)
+            .decrypt_message(ciphertext, our_kyber, seq)
             .map_err(|e| format!("ratchet decrypt: {}", e))?
     };
 
@@ -3173,7 +3179,15 @@ async fn send_message(
             && let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(vk_b64)
             && let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes)
         {
-            add_dht_core::crypto_helpers::cache_verifying_key(ack_fp, &vk);
+            // SECURITY FIX (C3): pin the fingerprint→VK binding (hard-fail on
+            // conflict) instead of silently overwriting via cache_verifying_key.
+            if let Err(e) = add_dht_core::crypto_helpers::pin_verifying_key(ack_fp, &vk) {
+                return Err(format!(
+                    "p2p-hello-ack identity binding conflict for {}: {}",
+                    ack_fp, e
+                )
+                .into());
+            }
         }
         if ack_sig.is_empty() {
             return Err("p2p-hello-ack has no signature — rejecting (MITM risk)".into());
@@ -3196,6 +3210,15 @@ async fn send_message(
             .get("braid")
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
+        // Authenticated inline Kyber public key from the ML-DSA-87-signed
+        // hello-ack payload (signature verified above at C3). Used directly when
+        // braid is NOT negotiated; used as the authentication binding when braid
+        // IS negotiated.
+        let inline_ek_b64 = ack_payload
+            .get("kyber_enc_key")
+            .and_then(|k| k.as_str())
+            .unwrap_or("")
+            .to_string();
         if peer_braid {
             let our_ek_b64 = add_crypto::kyber::encode_enc_key(&our_kyber.enc);
             let our_ek_bytes = base64::engine::general_purpose::STANDARD
@@ -3204,22 +3227,31 @@ async fn send_message(
             let peer_ek_bytes = add_p2p::braid_handshake::exchange_ek_braid(&mut ws, &our_ek_bytes)
                 .await
                 .map_err(|e| format!("braid EK exchange: {}", e))?;
+            // SECURITY (C1): bind the reassembled EK to the authenticated inline
+            // `kyber_enc_key` from the ML-DSA-87-signed hello-ack. The braid
+            // stream is only integrity-protected, so without this binding an
+            // active MITM could substitute their own EK during the stream.
+            let inline_ek = base64::engine::general_purpose::STANDARD
+                .decode(&inline_ek_b64)
+                .map_err(|e| format!("inline kyber_enc_key decode: {}", e))?;
+            let peer_ek_bytes = add_p2p::braid_handshake::verify_peer_ek_from_bytes(
+                &peer_ek_bytes,
+                &inline_ek,
+            )
+            .map_err(|e| format!("[braid] peer EK failed authentication ({}), aborting", e))?;
             let peer_ek_b64 = base64::engine::general_purpose::STANDARD.encode(&peer_ek_bytes);
             peer_kyber_enc = add_crypto::kyber::decode_enc_key(&peer_ek_b64).ok();
-            if peer_kyber_enc.is_none() {
-                println!(
-                    "[braid] Warning: reassembled peer EK invalid, falling back to plaintext (insecure)"
-                );
-            }
-        }
-        if let Some(kyber_b64) = ack_payload.get("kyber_enc_key").and_then(|k| k.as_str())
-            && peer_kyber_enc.is_none()
-        {
-            peer_kyber_enc = add_crypto::kyber::decode_enc_key(kyber_b64).ok();
+        } else if !inline_ek_b64.is_empty() {
+            // Non-braid path: the inline kyber_enc_key is a field of the
+            // ML-DSA-87-signed hello-ack payload, so it is authenticated by the
+            // verified responder identity (C3). This is NOT a plaintext fallback
+            // — it is the legitimate, signed key. Reject (fail-closed) if the key
+            // is absent or undecodable.
+            peer_kyber_enc = add_crypto::kyber::decode_enc_key(&inline_ek_b64).ok();
         }
         if peer_kyber_enc.is_none() {
-            println!(
-                "Warning: no Kyber public key from peer, falling back to plaintext (insecure)"
+            return Err(
+                "No authenticated Kyber public key from peer, aborting (fail-closed)".into(),
             );
         }
     } else {
@@ -3358,18 +3390,28 @@ async fn send_message(
 
                 if msg_type == "p2p-message" {
                     // Echoed message (e.g. reflector loopback). The reflector is a
-                    // P2P-only echo bot: it bounced our frame straight back, proving
-                    // the roundtrip. We display the message we sent (the sender always
-                    // holds its own plaintext in a loopback), tagged as an echo.
-                    let echo_display = msg_val
+                    // P2P-only echo bot: it bounced our *encrypted* frame straight
+                    // back. It never decapsulates, so the returned `ciphertext` is
+                    // opaque to us. In a loopback the sender already holds the
+                    // plaintext, so display that instead of dumping base64 garbage.
+                    let raw_ct = msg_val
                         .get("ciphertext")
                         .and_then(|c| c.as_str())
-                        .map(|ct| {
-                            // Strip a cosmetic prefix the reflector may prepend
-                            // (e.g. "🤖 [Reflector Echo]: "), keeping any real body.
-                            ct.rsplit_once(": ").map(|(_, b)| b).unwrap_or(ct).to_string()
-                        });
-                    let text = echo_display.filter(|s| !s.is_empty()).unwrap_or_else(|| message.to_string());
+                        .unwrap_or("");
+                    // Strip a cosmetic prefix the reflector may prepend (e.g. "/"
+                    // or "🤖 [Reflector Echo]: ").
+                    let stripped = raw_ct
+                        .rsplit_once(": ")
+                        .map(|(_, b)| b)
+                        .unwrap_or(raw_ct);
+                    // If the returned body equals what we sent, or is just the
+                    // opaque ciphertext (doesn't match our plaintext), show the
+                    // plaintext we already have — that's the real loopback content.
+                    let text = if stripped.is_empty() || stripped != message {
+                        message.to_string()
+                    } else {
+                        stripped.to_string()
+                    };
                     println!("Echo: {}", text);
                     echoed_text = Some(text);
                 }
@@ -3719,7 +3761,15 @@ async fn handle_incoming_connection(
                 && let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(vk_b64)
                 && let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes)
             {
-                add_dht_core::crypto_helpers::cache_verifying_key(peer_fp, &vk);
+                // SECURITY FIX (C3): pin the fingerprint→VK binding (hard-fail
+                // on conflict) instead of silently overwriting.
+                if let Err(e) = add_dht_core::crypto_helpers::pin_verifying_key(peer_fp, &vk) {
+                    return Err(format!(
+                        "p2p-hello identity binding conflict for {}: {}",
+                        peer_fp, e
+                    )
+                    .into());
+                }
             }
             if add_dht_core::crypto_helpers::get_cached_verifying_key(peer_fp).is_none() {
                 let (seed_url, _bootstraps, _relays) = discover_all_servers().await;
@@ -3781,11 +3831,26 @@ async fn handle_incoming_connection(
                 .map_err(|e| format!("braid EK exchange: {}", e))?;
         ws_tx = sink;
         ws_rx = rx;
+        // SECURITY (C1): bind the reassembled EK to the authenticated inline
+        // `kyber_enc_key` from the ML-DSA-87-signed hello. Fail-closed — no
+        // plaintext fallback.
+        let inline_ek_b64 = payload
+            .get("kyber_enc_key")
+            .and_then(|k| k.as_str())
+            .unwrap_or("");
+        let inline_ek = base64::engine::general_purpose::STANDARD
+            .decode(inline_ek_b64)
+            .map_err(|e| format!("inline kyber_enc_key decode: {}", e))?;
+        let peer_ek_bytes = add_p2p::braid_handshake::verify_peer_ek_from_bytes(
+            &peer_ek_bytes,
+            &inline_ek,
+        )
+        .map_err(|e| format!("[braid] peer EK failed authentication ({}), aborting", e))?;
         let peer_ek_b64 = base64::engine::general_purpose::STANDARD.encode(&peer_ek_bytes);
         peer_kyber_enc = add_crypto::kyber::decode_enc_key(&peer_ek_b64).ok();
         if peer_kyber_enc.is_none() {
-            println!(
-                "[braid] Warning: reassembled peer EK invalid, falling back to plaintext (insecure)"
+            return Err(
+                "[braid] reassembled peer EK invalid after authentication, aborting".into(),
             );
         }
     }
@@ -3826,25 +3891,55 @@ async fn handle_incoming_connection(
         }
     }
     if msg.get("msg_type").or_else(|| msg.get("type")).and_then(|t| t.as_str()) == Some("p2p-message") {
-        // SECURITY FIX (C2): Verify peer's message signature
+        // SECURITY FIX (C2): Verify the peer's message signature — FAIL-CLOSED.
+        // The message is rejected (never decrypted) if the signature is missing
+        // or fails to verify against the verified peer identity established by
+        // the signed hello (C3 binding). This closes the fail-open path that
+        // previously let a MITM or malicious relay inject/forge p2p-message frames.
         let msg_sig = msg.get("sig").and_then(|s| s.as_str()).unwrap_or("");
         if msg_sig.is_empty() {
-            println!("Warning: p2p-message has no signature, accepting but vulnerable to MITM");
-        } else {
-            let msg_sig_payload = format!(
-                "p2p-message:{}\n",
-                serde_json::to_string(&msg).unwrap_or_default()
-            );
-            if !add_dht_core::verify_signature(&msg_sig_payload, msg_sig, peer_fp) {
-                println!(
-                    "Warning: p2p-message signature verification failed for {}",
-                    peer_fp
-                );
-                // Don't reject, just warn - we still want to receive the message
-            } else {
-                println!("Verified p2p-message signature from {}", peer_fp);
-            }
+            return Err(format!(
+                "p2p-message from {} has no signature — rejecting (MITM risk)",
+                peer_fp
+            )
+            .into());
         }
+        // Reconstruct the EXACT signed payload the initiator produced:
+        //   "p2p-message:" + {"seq","ciphertext","msg_hash"}  (compact, no trailing newline)
+        // (The full envelope also carries init_kyber_ct/ttl/sig, but those are
+        // NOT part of the signed string.)
+        let p = msg
+            .get("payload")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let signed_inner = serde_json::json!({
+            "seq": p.get("seq").cloned().unwrap_or(serde_json::Value::Null),
+            "ciphertext": p.get("ciphertext").cloned().unwrap_or(serde_json::Value::Null),
+            "msg_hash": p.get("msg_hash").cloned().unwrap_or(serde_json::Value::Null),
+        });
+        let msg_sig_payload = format!(
+            "p2p-message:{}",
+            serde_json::to_string(&signed_inner).unwrap_or_default()
+        );
+        // Use the verifying key bound during the signed hello (C3). If for some
+        // reason it is not cached, fall back to the fingerprint-keyed cache, but
+        // never accept an unverifiable message.
+        let verified = match add_dht_core::crypto_helpers::get_cached_verifying_key(peer_fp) {
+            Some(vk) => add_dht_core::crypto_helpers::verify_signature_with_verifying_key(
+                &msg_sig_payload,
+                msg_sig,
+                &vk,
+            ),
+            None => add_dht_core::verify_signature(&msg_sig_payload, msg_sig, peer_fp),
+        };
+        if !verified {
+            return Err(format!(
+                "p2p-message signature verification failed for {} — possible MITM, rejecting",
+                peer_fp
+            )
+            .into());
+        }
+        println!("Verified p2p-message signature from {}", peer_fp);
 
         let payload = msg
             .get("payload")
@@ -3895,9 +3990,16 @@ async fn handle_incoming_connection(
             .map_err(|e| format!("ratchet serialize: {}", e))?;
         let _ = store.save_session(&peer_nid, &session_json).await;
 
+        // SECURITY FIX (M1): thread the message sequence number into the
+        // ratchet so skipped-key handling can recover out-of-order delivery.
+        let p2p_seq = payload
+            .get("seq")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
         // SECURITY FIX (C1): Decrypt using Double Ratchet + Kyber-768
         let padded_plaintext = ratchet_session
-            .decrypt_message(ciphertext, &our_kyber)
+            .decrypt_message(ciphertext, &our_kyber, p2p_seq)
             .map_err(|e| format!("decrypt failed: {}", e))?;
 
         // SECURITY FIX (M1): Strip message padding
@@ -4587,7 +4689,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // receive, we send back exactly the same text to its sender.
             let store = MessageStore::open().await?;
             let identity = Identity::load()?;
-            let seed_url = discover_servers().await.0;
+            // Honor the global --seed override (otherwise discover_servers()
+            // falls back to DNS SRV / public bootstrap, which is wrong for a
+            // locally-scoped reflector test or a non-default deployment).
+            let seed_url = match args.seed.clone() {
+                Some(s) => s,
+                None => discover_servers().await.0,
+            };
             // Allow scoping the reflector to a specific relay set (e.g. a single
             // healthy relay) for testing or to avoid broken peers.
             let relay_urls: Vec<String> = relay.clone().unwrap_or_else(|| relay_urls.clone());

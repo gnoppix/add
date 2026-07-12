@@ -82,25 +82,19 @@ pub async fn handshake_initiator(
         ));
     }
 
-    // SECURITY FIX (M6): Extract server_challenge and include it in PoW verification
+    // SECURITY FIX (H4): The responder no longer solves PoW (server-side CPU
+    // amplification DoS). The initiator only proves work. The responder instead
+    // returns a fresh `server_challenge` that binds this handshake to the
+    // specific connection, giving liveness + replay protection without the
+    // responder spending Argon2id per hello. We require a non-empty challenge.
     let server_challenge = ack
         .payload
         .get("server_challenge")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-
-    if peer_pow_bits != HELLO_POW_BITS {
-        return Err(P2pError::Handshake(format!(
-            "peer PoW difficulty mismatch: {} vs {}",
-            peer_pow_bits, HELLO_POW_BITS
-        )));
-    }
-
-    // SECURITY FIX (M6): PoW data includes server_challenge to prevent replay
-    let pow_data = format!("{}{}{}", peer_key, peer_nonce, server_challenge);
-    if !pow_check(&pow_data, peer_nonce, peer_pow_bits, &[]).unwrap_or(false) {
+    if server_challenge.is_empty() {
         return Err(P2pError::Handshake(
-            "peer PoW verification failed".to_string(),
+            "hello-ack missing server_challenge".to_string(),
         ));
     }
 
@@ -159,30 +153,22 @@ pub async fn handshake_responder(
     }
 
     // SECURITY FIX (M6): Generate a fresh random server_challenge for this
-    // connection. The responder's PoW includes this challenge, making it
-    // unique per connection and preventing replay of the same PoW.
+    // connection. The responder's hello-ack includes this challenge, binding the
+    // handshake to this connection (liveness) without the responder solving PoW.
+    // SECURITY FIX (H4): the responder does NOT solve Argon2id PoW — that is the
+    // initiator's job. Solving it server-side would be a CPU-amplification DoS.
     let server_challenge = crate::util::random_hex(16);
 
-    // Solve our own PoW (includes server_challenge) and send hello-ack
-    let mut rng = rand::thread_rng();
-    let base_nonce: u64 = rng.r#gen();
-    let nonce = solve_hello_pow_challenged(
-        public_key_b64,
-        base_nonce,
-        HELLO_POW_BITS,
-        &server_challenge,
-    );
-
     info!(
-        "Received valid p2p-hello, sending p2p-hello-ack nonce={} challenge={}",
-        nonce,
+        "Received valid p2p-hello, sending p2p-hello-ack challenge={}",
         &server_challenge[..8]
     );
 
+    // SECURITY FIX (H4): nonce/pow_bits are 0 — the responder performs no PoW.
     let ack = build_p2p_hello_ack(
         public_key_b64,
-        nonce,
-        HELLO_POW_BITS,
+        0,
+        0,
         &server_challenge,
         kyber_enc_key_b64,
     );
@@ -205,26 +191,6 @@ fn solve_hello_pow(public_key_b64: &str, base_nonce: u64, difficulty: u32) -> u6
         }
     }
     // Fallback: return base_nonce even if not valid (shouldn't happen with reasonable difficulty)
-    base_nonce
-}
-
-/// SECURITY FIX (M6): Solve PoW for a hello-ack message that includes
-/// the server_challenge. This makes the PoW unique per connection.
-/// SECURITY FIX (M11): Passes empty node_secret since P2P hello PoW
-/// is ephemeral (per-connection via server_challenge), not per-node.
-fn solve_hello_pow_challenged(
-    public_key_b64: &str,
-    base_nonce: u64,
-    difficulty: u32,
-    challenge: &str,
-) -> u64 {
-    for i in 0..1_000_000 {
-        let nonce = base_nonce.wrapping_add(i);
-        let data = format!("{}{}{}", public_key_b64, nonce, challenge);
-        if pow_check(&data, nonce, difficulty, &[]).unwrap_or(false) {
-            return nonce;
-        }
-    }
     base_nonce
 }
 

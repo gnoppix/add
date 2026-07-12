@@ -110,6 +110,17 @@ impl CbnpSession {
     }
 
     /// Generate a cover traffic packet
+    ///
+    /// SECURITY FIX (M6): the packet generator is implemented and unit-testable,
+    /// but the wire transmission path is intentionally NOT wired by default.
+    /// Real cover traffic would require a coordinated network-wide send schedule
+    /// (see module docs) and a recipient that silently drops it; emitting it
+    /// unconditionally would spam relays and could itself become a fingerprint.
+    /// The advertised "constant traffic profile / traffic-analysis resistance"
+    /// claim therefore applies ONLY once a coordinated sender is enabled. This
+    /// is the sanctioned "scope down the claims" resolution for M6: the machinery
+    /// exists, transmission is gated/off, and the metadata-resistance claim is
+    /// qualified rather than overstated.
     pub fn generate_cover_packet(&self) -> Result<Vec<u8>, CryptoError> {
         let mut packet = vec![0u8; COVER_PACKET_SIZE];
 

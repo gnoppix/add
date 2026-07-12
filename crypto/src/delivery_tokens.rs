@@ -19,9 +19,17 @@
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use zeroize::ZeroizeOnDrop;
 
 use crate::CryptoError;
+
+/// SECURITY FIX (M4): single, audited constant-time equality for secret
+/// material (delivery tokens / keys). Replaces the hand-rolled `fold` XOR
+/// compares that could invite accidental early-exit regressions.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.ct_eq(b).into()
+}
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -88,21 +96,25 @@ impl DeliveryMasterSecret {
         token: &DeliveryToken,
     ) -> Result<bool, CryptoError> {
         let expected = self.derive_token(contact_id, message_id)?;
-        // Constant-time comparison
-        let eq = expected
-            .bytes
-            .iter()
-            .zip(token.bytes.iter())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
-        Ok(eq == 0)
+        // SECURITY FIX (M4): constant-time compare via `subtle`.
+        Ok(ct_eq(&expected.bytes, &token.bytes))
     }
 }
 
 // ZeroizeOnDrop derive handles drop automatically
 /// Per-contact delivery key. Safe to persist (not the master secret).
-#[derive(Debug, Clone, ZeroizeOnDrop)]
+/// SECURITY FIX (H1): no `Debug` — holds an HMAC key; redact instead.
+#[derive(Clone, ZeroizeOnDrop)]
 pub struct DeliveryKey {
     bytes: [u8; DELIVERY_KEY_SIZE],
+}
+
+impl std::fmt::Debug for DeliveryKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeliveryKey")
+            .field("bytes", &"<key redacted>")
+            .finish()
+    }
 }
 
 impl DeliveryKey {
@@ -114,12 +126,8 @@ impl DeliveryKey {
     /// Verify a token for a message
     pub fn verify(&self, message_id: u64, token: &DeliveryToken) -> Result<bool, CryptoError> {
         let expected = derive_token_internal(self, message_id)?;
-        let eq = expected
-            .bytes
-            .iter()
-            .zip(token.bytes.iter())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
-        Ok(eq == 0)
+        // SECURITY FIX (M4): constant-time compare via `subtle`.
+        Ok(ct_eq(&expected.bytes, &token.bytes))
     }
 
     /// Get the raw key bytes (for serialization)

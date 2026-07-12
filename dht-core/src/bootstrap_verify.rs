@@ -143,44 +143,21 @@ pub fn cert_has_trusted_domain(cert_info: &CertInfo) -> bool {
     false
 }
 
-/// Check if the certificate issuer is a known trusted CA.
-/// Check if the certificate issuer is a known trusted CA.
-pub fn cert_issuer_is_trusted(cert_info: &CertInfo) -> bool {
-    cert_issuer_name_is_trusted(cert_info)
-}
-
-/// Check if the certificate issuer name matches known trusted CAs.
-pub fn cert_issuer_name_is_trusted(cert_info: &CertInfo) -> bool {
-    let cn = cert_info.issuer_cn.as_deref().unwrap_or("").to_lowercase();
-    let org = cert_info.issuer_org.as_deref().unwrap_or("").to_lowercase();
-
-    if org.contains("let's encrypt") || cn.contains("let's encrypt") {
-        return true;
-    }
-
-    if org.contains("isrg") || org.contains("internet security") {
-        return true;
-    }
-
-    warn!(
-        "bootstrap cert issuer NOT TRUSTED (CN={}, org={}) -- must chain to Let's Encrypt",
-        cert_info.issuer_cn.as_deref().unwrap_or("?"),
-        cert_info.issuer_org.as_deref().unwrap_or("?")
-    );
-    false
-}
-
 // ------------------------------------------------------------------ //
 //  Main verification function                                        //
 // ------------------------------------------------------------------ //
 
 /// Verify the TLS certificate of a bootstrap server.
 ///
-/// Performs a TLS handshake to extract the peer certificate fingerprint
-/// and validity dates, then checks it against pinned values.
+/// Performs a TLS handshake with a WebPKI verifier (chain + expiry validated by
+/// rustls against the native root store) and checks the certificate against the
+/// pinned fingerprint (TOFU, with an explicit warning on first contact and a
+/// hard-fail on pin mismatch).
 ///
-/// SECURITY: Also verifies the certificate belongs to a trusted domain
-/// (*.gnoppix.org or *.gnoppix.com) and chains to a trusted CA (Let's Encrypt).
+/// SECURITY FIX (H3): dropped the redundant issuer-substring ("Let's Encrypt")
+/// check. WebPKI already validates the chain; the substring check added no
+/// security and created a false sense of CA pinning. Trust now rests solely on
+/// WebPKI chain validation + the TOFU fingerprint pin.
 pub fn verify_bootstrap_cert(seed_url: &str) -> bool {
     let host_port = seed_url
         .strip_prefix("wss://")
@@ -285,14 +262,10 @@ pub fn verify_bootstrap_cert(seed_url: &str) -> bool {
         return false;
     }
 
-    // SECURITY: Verify the cert chains to a trusted CA (Let's Encrypt)
-    if !cert_issuer_is_trusted(&cert_info) {
-        warn!(
-            "bootstrap {} cert CA NOT TRUSTED (issuer={:?}) -- rejecting",
-            seed_url, cert_info.issuer_cn
-        );
-        return false;
-    }
+    // NOTE (H3): The redundant issuer-substring ("Let's Encrypt") check was
+    // removed. Chain validation is performed by the WebPKI verifier above; any
+    // self-signed or unchained cert already failed the handshake. Trust rests on
+    // WebPKI + the TOFU fingerprint pin below (which hard-fails on mismatch).
 
     // Check against pinned values
     bootstrap_pin_check(
@@ -336,38 +309,5 @@ mod tests {
             not_after: String::new(),
         };
         assert!(!cert_has_trusted_domain(&info_bad));
-    }
-
-    #[test]
-    fn test_cert_issuer_is_trusted_logic() {
-        let lets_encrypt = CertInfo {
-            subject_alt_names: vec![],
-            subject_cn: None,
-            issuer_cn: Some("Let's Encrypt Authority X3".to_string()),
-            issuer_org: Some("Let's Encrypt".to_string()),
-            not_before: String::new(),
-            not_after: String::new(),
-        };
-        assert!(cert_issuer_is_trusted(&lets_encrypt));
-
-        let isrg = CertInfo {
-            subject_alt_names: vec![],
-            subject_cn: None,
-            issuer_cn: Some("ISRG Root X1".to_string()),
-            issuer_org: Some("Internet Security Research Group".to_string()),
-            not_before: String::new(),
-            not_after: String::new(),
-        };
-        assert!(cert_issuer_is_trusted(&isrg));
-
-        let evil = CertInfo {
-            subject_alt_names: vec![],
-            subject_cn: None,
-            issuer_cn: Some("Evil CA".to_string()),
-            issuer_org: Some("Evil Corp".to_string()),
-            not_before: String::new(),
-            not_after: String::new(),
-        };
-        assert!(!cert_issuer_is_trusted(&evil));
     }
 }

@@ -356,7 +356,8 @@ impl MlKemVariant {
 /// for correct deserialization.
 /// SECURITY FIX (C2): Zeroize dec_bytes (private key seed) on drop.
 /// `variant` and `enc_bytes` are public/non-sensitive — skipped.
-#[derive(Debug, Clone, Serialize, Deserialize, ZeroizeOnDrop)]
+/// SECURITY FIX (H1): no `Debug` — `dec_bytes` is the private key seed (redacted on drop).
+#[derive(Clone, Serialize, Deserialize, ZeroizeOnDrop)]
 pub struct VariantKeypair {
     #[zeroize(skip)]
     pub variant: MlKemVariant,
