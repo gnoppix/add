@@ -619,7 +619,19 @@ impl Identity {
             return Err("no identity found — run 'add init' first".into());
         }
         let content = std::fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&content)?)
+        let mut identity: Identity = serde_json::from_str(&content)?;
+        // Backfill: identities created before ML-DSA-87 keys existed have
+        // `None`. Generate one now (deterministically tied to this identity)
+        // so relay transport signatures (purge/fetch) work without re-init.
+        if identity.ml_dsa87_signing_key.is_none() {
+            use ml_dsa::KeyExport;
+            let (sk, _vk) = add_crypto_pq::generate_keypair()
+                .map_err(|e| format!("ML-DSA-87 backfill generation failed: {}", e))?;
+            identity.ml_dsa87_signing_key =
+                Some(base64::engine::general_purpose::STANDARD.encode(sk.to_bytes()));
+            identity.save()?;
+        }
+        Ok(identity)
     }
 
     fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -941,7 +953,7 @@ impl MessageStore {
                 status INTEGER NOT NULL DEFAULT 0,
                 status_updated_at TEXT NOT NULL,
                 read_receipt_at TEXT,
-                message_id TEXT NOT NULL
+                message_id TEXT NOT NULL UNIQUE
             )",
         )
         .execute(&pool)
@@ -1034,7 +1046,7 @@ impl MessageStore {
         // ACS2.6 Part III.2: Encrypt ciphertext before writing to disk
         let encrypted_ct = self.db_key.encrypt(ciphertext)?;
         let result = sqlx::query(
-            "INSERT INTO messages (from_nid, to_nid, ciphertext, timestamp, delivered, status, status_updated_at, read_receipt_at, message_id)
+            "INSERT OR IGNORE INTO messages (from_nid, to_nid, ciphertext, timestamp, delivered, status, status_updated_at, read_receipt_at, message_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(from_nid)
@@ -2377,35 +2389,52 @@ async fn relay_purge(relay_url: &str, null_id: &str) -> Result<(), Box<dyn std::
 
     let req = serde_json::json!({
         "msg_type": "relay-purge",
-        "recipient_nid": null_id,
-        "requester_fp": identity.fingerprint,
-        "requester_verifying_key": sender_verifying_key_b64,
-        "sender_sig": sig,
-        "timestamp": timestamp,
-        "nonce": nonce,
-        "auth_hmac": "", // Optional: populated when client has relay shared_secret
+        "msg_id": uuid_hex(),
+        "ts": timestamp,
+        "sig": "",
+        "payload": {
+            "recipient_nid": null_id,
+            "requester_fp": identity.fingerprint,
+            "requester_verifying_key": sender_verifying_key_b64,
+            "sender_sig": sig,
+            "timestamp": timestamp,
+            "nonce": nonce,
+            "auth_hmac": "", // Optional: populated when client has relay shared_secret
+        },
     });
     ws.send(Message::Text(req.to_string().into()))
         .await
         .map_err(|e| format!("Relay purge send failed: {}", e))?;
 
-    // Wait for OK response
-    if let Some(Ok(Message::Text(resp))) = ws.next().await {
-        let resp_val: serde_json::Value = serde_json::from_str(&resp)?;
-        // Relay replies with a relay-purge-ack envelope: { msg_type, payload: {accepted, error} }
-        let accepted = resp_val
-            .get("payload")
-            .and_then(|p| p.get("accepted"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let err = resp_val
-            .get("payload")
-            .and_then(|p| p.get("error"))
-            .and_then(|e| e.as_str());
-        if accepted {
-            println!("  Relay mailbox purged successfully.");
-        } else if let Some(err) = err {
-            println!("  Relay purge warning: {}", err);
+    // Wait for the relay's purge acknowledgement and surface it verbatim so
+    // silent rejections are never hidden.
+    match ws.next().await {
+        Some(Ok(Message::Text(resp))) => {
+            let resp_val: serde_json::Value = serde_json::from_str(&resp).unwrap_or(serde_json::Value::Null);
+            let accepted = resp_val
+                .get("payload")
+                .and_then(|p| p.get("accepted"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if accepted {
+                println!("  Relay mailbox purged successfully.");
+            } else {
+                // Print the raw relay response so the user can see WHY (e.g.
+                // "purge denied: ML-DSA-87 signature verification failed").
+                println!("  Relay purge response: {}", resp.trim());
+            }
+        }
+        Some(Ok(Message::Binary(b))) => {
+            println!("  Relay purge response: <binary {} bytes>", b.len());
+        }
+        Some(Err(e)) => {
+            println!("  Relay purge error: {}", e);
+        }
+        None => {
+            println!("  Relay purge: no response (connection closed).");
+        }
+        _ => {
+            println!("  Relay purge: unexpected response frame.");
         }
     }
 
@@ -3111,7 +3140,13 @@ async fn send_message(
     let mut peer_kyber_enc: Option<add_crypto::kyber::KyberEncapsulationKey> = None;
     if let Some(Ok(Message::Text(resp))) = ws.next().await {
         let ack: serde_json::Value = serde_json::from_str(&resp)?;
-        if ack.get("type").and_then(|t| t.as_str()) != Some("p2p-hello-ack") {
+        // The reflector (and peers) send `msg_type` (WireEnvelope field);
+        // be tolerant of a bare `type` key too, for compatibility.
+        let ack_type = ack
+            .get("msg_type")
+            .or_else(|| ack.get("type"))
+            .and_then(|t| t.as_str());
+        if ack_type != Some("p2p-hello-ack") {
             return Err(format!("Unexpected response: {}", resp).into());
         }
 
@@ -3252,14 +3287,15 @@ async fn send_message(
     let delivery_token = generate_delivery_token(recipient_nid, 1)?;
     let token_msg = serde_json::to_string(&delivery_token)?;
     ws.send(Message::Text(token_msg.into())).await.ok();
-
     ws.send(Message::Text(serde_json::to_string(&p2p_msg)?.into()))
         .await
         .map_err(|e| format!("P2P send failed: {}", e))?;
-
     // Wait for ack (and optionally, p2p-receipt)
     let mut ack_received = false;
     let mut receipt_received = false;
+    // Capture an echoed message (e.g. from a reflector / loopback peer) so it
+    // can be displayed and returned to the caller (desktop UI).
+    let mut echoed_text: Option<String> = None;
 
     loop {
         let msg = tokio::time::timeout(std::time::Duration::from_secs(10), ws.next()).await;
@@ -3267,7 +3303,11 @@ async fn send_message(
         match msg {
             Ok(Some(Ok(Message::Text(resp)))) => {
                 let msg_val: serde_json::Value = serde_json::from_str(&resp)?;
-                let msg_type = msg_val.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                let msg_type = msg_val
+                    .get("msg_type")
+                    .or_else(|| msg_val.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
 
                 if msg_type == "p2p-ack" {
                     ack_received = true;
@@ -3314,6 +3354,24 @@ async fn send_message(
                         println!("Warning: p2p-receipt signature verification failed");
                     }
                     receipt_received = true;
+                }
+
+                if msg_type == "p2p-message" {
+                    // Echoed message (e.g. reflector loopback). The reflector is a
+                    // P2P-only echo bot: it bounced our frame straight back, proving
+                    // the roundtrip. We display the message we sent (the sender always
+                    // holds its own plaintext in a loopback), tagged as an echo.
+                    let echo_display = msg_val
+                        .get("ciphertext")
+                        .and_then(|c| c.as_str())
+                        .map(|ct| {
+                            // Strip a cosmetic prefix the reflector may prepend
+                            // (e.g. "🤖 [Reflector Echo]: "), keeping any real body.
+                            ct.rsplit_once(": ").map(|(_, b)| b).unwrap_or(ct).to_string()
+                        });
+                    let text = echo_display.filter(|s| !s.is_empty()).unwrap_or_else(|| message.to_string());
+                    println!("Echo: {}", text);
+                    echoed_text = Some(text);
                 }
 
                 if ack_received && receipt_received {
@@ -3626,7 +3684,12 @@ async fn handle_incoming_connection(
         _ => return Err("unexpected message type for hello".into()),
     };
     let hello: serde_json::Value = serde_json::from_str(&hello_text)?;
-    if hello.get("type").and_then(|t| t.as_str()) != Some("p2p-hello") {
+    // Peers send `msg_type` (WireEnvelope field); tolerate a bare `type` key too.
+    let hello_type = hello
+        .get("msg_type")
+        .or_else(|| hello.get("type"))
+        .and_then(|t| t.as_str());
+    if hello_type != Some("p2p-hello") {
         return Err("expected p2p-hello".into());
     }
 
@@ -3749,7 +3812,7 @@ async fn handle_incoming_connection(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if v.get("type").and_then(|x| x.as_str()) == Some("p2p-message") {
+                if v.get("msg_type").or_else(|| v.get("type")).and_then(|x| x.as_str()) == Some("p2p-message") {
                     msg = v;
                     break;
                 }
@@ -3762,7 +3825,7 @@ async fn handle_incoming_connection(
             _ => continue,
         }
     }
-    if msg.get("type").and_then(|t| t.as_str()) == Some("p2p-message") {
+    if msg.get("msg_type").or_else(|| msg.get("type")).and_then(|t| t.as_str()) == Some("p2p-message") {
         // SECURITY FIX (C2): Verify peer's message signature
         let msg_sig = msg.get("sig").and_then(|s| s.as_str()).unwrap_or("");
         if msg_sig.is_empty() {
@@ -3840,9 +3903,14 @@ async fn handle_incoming_connection(
         // SECURITY FIX (M1): Strip message padding
         let plaintext = unpad_message_bucket(&padded_plaintext)?;
 
+        // Emit a machine-parseable line (Null ID + fingerprint) so the desktop
+        // UI listener can attribute and display the message. Format:
+        //   [HH:MM:SS] From: <NULL_ID> (<FP>) | <text>
+        let sender_nid = add_crypto::null_id(peer_fp);
         println!(
-            "[{}] From: {} | {}",
+            "[{}] From: {} ({}) | {}",
             chrono::Utc::now().format("%H:%M:%S"),
+            sender_nid,
             peer_fp,
             plaintext
         );
@@ -4077,7 +4145,14 @@ enum Commands {
         ttl: Option<String>,
     },
     /// Read messages
-    Read,
+    Read {
+        /// Emit one JSON object per message ({"from":"<null_id>","text":"<msg>"}) for machine parsing
+        #[arg(long)]
+        json: bool,
+        /// Hide the locally "Stored messages" section (relay mailbox only)
+        #[arg(long)]
+        no_stored: bool,
+    },
     /// Always-online echo mode: fetch incoming messages and send back exactly
     /// the same text to the sender. Used by the Reflector Bot — reuses the
     /// normal receive + send paths (no bespoke crypto).
@@ -4391,7 +4466,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Read => {
+        Commands::Read { json, no_stored } => {
             let store = MessageStore::open().await?;
             let identity = Identity::load()?;
 
@@ -4405,7 +4480,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Decrypt and deduplicate messages
                 let our_kyber = load_or_generate_kyber(&identity.null_id, &store)?;
                 let mut seen_hashes = std::collections::HashSet::new();
-                let mut decrypted_messages = Vec::new();
+                let mut decrypted_messages: Vec<(String, String)> = Vec::new();
 
                 for (_source_url, signed_blob, entry_sender_nid, entry_sender_fp) in results {
                     match relay_decrypt_message(
@@ -4422,7 +4497,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let msg_hash = sha256_hex(decrypted.as_bytes());
                             if !seen_hashes.contains(&msg_hash) {
                                 seen_hashes.insert(msg_hash);
-                                decrypted_messages.push(decrypted);
+                                decrypted_messages.push((entry_sender_nid, decrypted));
                             }
                         }
                         Err(_) => { /* undecryptable (e.g. stale pre-fix mailbox cruft) */ }
@@ -4430,20 +4505,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if !decrypted_messages.is_empty() {
-                    println!("Messages ({}):", decrypted_messages.len());
-                    for (i, msg) in decrypted_messages.iter().enumerate() {
-                        println!("  [{}] {}", i + 1, msg);
-                        // Store with status 2 (delivered) and message ID
-                        let message_id = sha256_hex(msg.as_bytes());
-                        let _ = store
-                            .store_message(
-                                "relay",
-                                &identity.null_id,
-                                msg,
-                                2, // Delivered (✔️)
-                                &message_id,
-                            )
-                            .await;
+                    // Build a null_id -> alias reverse map so messages show the
+                    // sender's alias (or the raw Null ID when no alias exists).
+                    let aliases = load_aliases();
+                    let reverse_aliases: std::collections::HashMap<String, String> =
+                        aliases.iter().map(|(a, n)| (n.clone(), a.clone())).collect();
+
+                    if json {
+                        // Machine-readable: one JSON object per line, so the UI
+                        // can attribute each message to its sender conversation.
+                        for (from, msg) in &decrypted_messages {
+                            let line = serde_json::json!({ "from": from, "text": msg }).to_string();
+                            println!("{}", line);
+                        }
+                    } else {
+                        println!("Messages ({}):", decrypted_messages.len());
+                        for (i, (from, msg)) in decrypted_messages.iter().enumerate() {
+                            let label = reverse_aliases
+                                .get(from)
+                                .cloned()
+                                .unwrap_or_else(|| from.clone());
+                            println!("  [{}] [{}] [{}]", i + 1, label, msg);
+                            // Store with status 2 (delivered) and message ID
+                            let message_id = sha256_hex(msg.as_bytes());
+                            let _ = store
+                                .store_message(
+                                    "relay",
+                                    &identity.null_id,
+                                    msg,
+                                    2, // Delivered (✔️)
+                                    &message_id,
+                                )
+                                .await;
+                        }
                     }
                     // Purge from all connected relays
                     for url in &relay_urls {
@@ -4452,9 +4546,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // G5: Also show locally stored messages
+            // G5: Also show locally stored messages (unless --no-stored)
             let stored = store.get_messages(20).await?;
-            if !stored.is_empty() {
+            if !no_stored && !stored.is_empty() {
                 println!("\nStored messages (last 20):");
                 for (idx, msg) in stored.iter().enumerate() {
                     // Messages are stored encrypted - display ciphertext preview

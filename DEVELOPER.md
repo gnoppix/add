@@ -26,73 +26,89 @@ This document describes the internal architecture, module contracts, **ACS2.6 co
 ## Project layout
 
 ```
-messenger/
-├── rust/                           # Rust workspace (full implementation)
-│   ├── Cargo.toml                  # Workspace root (8 crates)
-│   ├── Makefile                    # Build system
-│   ├── protocol/                   # Wire protocol, PoW, envelope types
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs              # Module root
-│   │       ├── constants.rs        # DHT/relay/p2p constants
-│   │       ├── envelope.rs         # WireEnvelope, DHT message types, tests
-│   │       ├── pow.rs              # Argon2id/SHA-256 PoW solve/check, tests
-│   │       └── braid.rs            # SPQR braid protocol (chunked key exchange)
-│   ├── crypto/                     # ML-KEM-1024 KEM, DoubleRatchetSession, memory hardening
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs              # Module root
-│   │       ├── kyber.rs            # ML-KEM-1024 keypair, MlKemVariant enum
-│   │       ├── secure_mem.rs       # Guard pages, mlock, secure_zero
-│   │       ├── delivery_tokens.rs  # Sealed sender token derivation
-│   │       ├── cbnp.rs             # Covert Baseline Noise Protocol
-│   │       └── pir.rs              # PIR contact discovery
-│   ├── crypto-utils/               # Ed25519 operations, secure deletion
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       └── lib.rs
-│   ├── dht-core/                   # DHT storage layer (SQLite, K-bucket, TOFU)
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── sqlite_store.rs
-│   │       ├── types.rs
-│   │       ├── crypto_helpers.rs
-│   │       ├── pin_cache.rs
-│   │       ├── bootstrap_verify.rs
-│   │       ├── ratelimit.rs
-│   │       ├── bot_log.rs
-│   │       ├── dht_node.rs
-│   │       └── util.rs
-│   ├── p2p/                        # P2P client node library
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── handshake.rs
-│   │       ├── nat.rs
-│   │       ├── upnp.rs
-│   │       ├── braid_handshake.rs
-│   │       ├── peer.rs
-│   │       ├── protocol.rs
-│   │       ├── transport.rs
-│   │       ├── tor.rs
-│   │       └── util.rs
-│   ├── client/                     # CLI client binary
-│   │   ├── Cargo.toml
-│   │   └── src/main.rs
-│   ├── relay/                      # Relay server binary
-│   │   ├── Cargo.toml
-│   │   └── src/main.rs
-│   ├── bootstrap/                  # Bootstrap DHT server binary
-│   │   ├── Cargo.toml
-│   │   └── src/main.rs
-│   ├── bot/                        # Reflector/Echo Bot binary
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── main.rs           # CLI entry point (run, config)
-│   │       ├── config.rs         # BotConfig, ReflectorConfig structs
-│   │       └── message_store.rs  # Volatile in-memory message store with TTL cleanup
-│   └── doc/                        # Generated man pages
+Add/                                 # Repo root (Cargo workspace)
+├── Cargo.toml                       # Workspace root (crates below)
+├── Makefile                         # Build system (make test/lint/check/fmt)
+├── protocol/                       # Wire protocol, PoW, envelope types
+│   ├── Cargo.toml                   # crate: add-protocol
+│   └── src/
+│       ├── lib.rs                   # Module root
+│       ├── constants.rs             # DHT/relay/p2p constants
+│       ├── envelope.rs              # WireEnvelope, DHT message types, tests
+│       ├── pow.rs                   # Argon2id/SHA-256 PoW solve/check, tests
+│       ├── braid.rs                 # SPQR braid protocol (chunked key exchange)
+│       └── gpg.rs                   # Sequoia OpenPGP detached sign/verify (active)
+├── crypto/                         # ML-KEM-1024 KEM, DoubleRatchetSession, memory hardening
+│   ├── Cargo.toml                   # crate: add-crypto
+│   └── src/
+│       ├── lib.rs                   # Module root
+│       ├── kyber.rs                 # ML-KEM-1024 keypair, MlKemVariant enum
+│       ├── secure_mem.rs            # Guard pages, mlock, secure_zero
+│       ├── delivery_tokens.rs       # Sealed sender token derivation
+│       ├── cbnp.rs                  # Covert Baseline Noise Protocol
+│       └── pir.rs                   # PIR contact discovery
+├── crypto-utils/                   # OpenPGP (Sequoia) + secure utilities
+│   ├── Cargo.toml                   # crate: add-crypto-utils
+│   └── src/lib.rs                   # export_pubkey/import_pubkey/validate_fingerprint/...
+├── crypto-pq/                      # Post-quantum crypto (ML-DSA-87 / ML-KEM-1024 wrappers)
+│   ├── Cargo.toml                   # crate: add-crypto-pq
+│   └── src/
+│       ├── signature.rs            # ML-DSA-87 (FIPS 204)
+│       └── kem.rs                   # ML-KEM-1024 (FIPS 203) wrapping add-crypto::kyber
+├── dht-core/                       # DHT storage layer (SQLite, K-bucket, TOFU)
+│   ├── Cargo.toml                   # crate: add-dht-core
+│   └── src/
+│       ├── lib.rs
+│       ├── sqlite_store.rs
+│       ├── types.rs
+│       ├── crypto_helpers.rs
+│       ├── pin_cache.rs
+│       ├── bootstrap_verify.rs
+│       ├── ratelimit.rs
+│       ├── bot_log.rs
+│       ├── dht_node.rs
+│       └── util.rs
+├── p2p/                            # P2P client node library
+│   ├── Cargo.toml                   # crate: add-p2p
+│   └── src/
+│       ├── lib.rs
+│       ├── handshake.rs
+│       ├── nat.rs
+│       ├── upnp.rs
+│       ├── braid_handshake.rs
+│       ├── peer.rs
+│       ├── protocol.rs
+│       ├── transport.rs
+│       ├── tor.rs
+│       └── util.rs
+├── client/                         # CLI client binary
+│   ├── Cargo.toml                   # crate: add-client (bin: add)
+│   └── src/main.rs
+├── relay/                          # Relay server binary
+│   ├── Cargo.toml                   # crate: add-relay (bin: add-relay)
+│   └── src/main.rs
+├── bootstrap/                      # Bootstrap DHT server binary
+│   ├── Cargo.toml                   # crate: add-bootstrap (bin: add-bootstrap)
+│   └── src/main.rs
+├── bot/                            # Reflector/Echo Bot binary
+│   ├── Cargo.toml                   # crate: add-bot (bin: add-reflector, add-bot)
+│   └── src/
+│       ├── main.rs                 # CLI entry point (run, config)
+│       ├── config.rs               # BotConfig, ReflectorConfig structs
+│       └── message_store.rs        # Volatile in-memory message store with TTL cleanup
+├── desktop-ui/                     # Electron + React + TypeScript desktop client
+│   ├── electron/
+│   │   ├── main.js                 # Main process: spawns bundled `add` CLI, IPC handlers
+│   │   └── preload.js              # contextBridge → window.addAPI
+│   ├── src/
+│   │   ├── components/sidebar/     # Sidebar, SidebarHeader, ConversationList, ConversationRow
+│   │   ├── components/chat/        # ChatPane, ChatHeader, MessageList, MessageInput, ...
+│   │   ├── store/chatStore.ts      # Zustand: conversations, messages, actions
+│   │   ├── types/                  # index.ts + electron.d.ts (window.addAPI typings)
+│   │   ├── App.tsx
+│   │   └── main.tsx
+│   ├── electron-builder.json       # Packages add-desktop_<ver>_amd64.deb
+│   └── package.json
 ├── LICENSE.md
 ├── CHANGELOG.md
 ├── DEVELOPER.md                    # This file
@@ -499,6 +515,48 @@ if state.allow_relay {
 - First byte: `0xC0` tag prefix (identifies as cover traffic)
 - Remaining 3200 bytes: Pseudo-random padding derived from session secret
 - Recipients detect and silently drop cover packets via `is_cover_traffic()` check
+
+---
+
+## Desktop UI (Electron + React)
+
+The desktop client lives in `desktop-ui/`. It is a thin UI over the `add` CLI: the Electron main process shells out to the bundled `add` binary and exposes a typed bridge to the renderer.
+
+### Process / IPC model
+- **`electron/main.js`** (Node main process):
+  - Resolves the CLI binary: `ADD_CLI_PATH` env → packaged `resources/add` → `../../target/release/add` (dev) → `./add`.
+  - Spawns it with **real argv arrays** (`spawn(ADD_CLI, args, {shell:false})`), never a shell string. This is required because aliases and message text can contain spaces — `args.split(' ')` would mangle them.
+  - Serializes CLI calls through a promise queue (`queuedCommand`) to avoid PID-lock contention.
+  - Registers `ipcMain.handle('add-*', ...)` handlers. Key ones:
+    - `add-add-contact` → `['add-contact', nullId, fingerprint]` (positional args — **not** `--fingerprint`)
+    - `add-contacts` → parses `NN-xxxx -> FINGERPRINT` lines
+    - `add-aliases` → parses `NAME -> NN-xxxx` lines (separate CLI command; `contacts` output has no alias field)
+    - `add-alias` → `['alias', name, nullId]`
+    - `add-send` → `['send', nullId, message]` + optional `['--ttl', ttl]`
+    - `add-init` / `add-id` → parse `Null ID:` / `Fingerprint:` from stdout
+    - `add-check-contact-status` → parses `NN-xxxx - ONLINE|OFFLINE`
+- **`electron/preload.js`**: `contextBridge.exposeInMainWorld('addAPI', { ... })` exposing the same methods to `window.addAPI` (typed in `src/types/electron.d.ts`).
+- **`src/store/chatStore.ts`** (Zustand): `loadContacts()` calls `api.contacts()` **and** `api.aliases()`, merges the alias map, and stores `name = aliasMap[nullId] || nullId`. `renameAlias(nullId, alias)` updates local state immediately.
+- **`src/components/sidebar/ConversationRow.tsx`**: right-click (`onContextMenu`) opens a context menu showing the NN-ID with a **"Rename alias"** action; selecting it opens an inline input (Enter commits, Escape/blur cancels). Commit calls `renameAlias()` + `window.addAPI.alias(next, nullId)`.
+- **`src/components/sidebar/SidebarHeader.tsx`**: the Add-Contact modal (Null ID + fingerprint + optional alias). On failure it shows the real CLI error in a red banner (previously swallowed silently).
+
+### CLI contract notes (verified against `add --help`)
+- `add-contact <NULL_ID> <FINGERPRINT>` — positional, no `--fingerprint` flag.
+- `contacts` prints `NN-xxxx-xxxx -> <40-hex fingerprint>` (no alias column).
+- `aliases` prints `NAME -> NN-xxxx-xxxx` (insertion order; `alias` appends, there is no delete).
+- `read <TO> <MESSAGE> [--ttl <2h|12h|24h|48h|5d|7d|14d>] [--pir]` — and `read --json` emits one `{"from":"<null_id>","text":"<msg>"}` per line for the UI (includes sender NID so messages route to the right conversation).
+
+### Build / package
+```bash
+cd desktop-ui
+npm install
+npm run build        # vite (react) + electron-builder → add-desktop_<ver>_amd64.deb
+```
+`electron-builder.json` embeds `../target/release/add` as `extraResources` → `resources/add`. The deb version is the `package.json` `version` (bump +1 per release). Current: **0.2.2**.
+
+### Known gaps
+- `add alias` appends with no removal; renaming leaves stale aliases in the CLI store (UI shows the latest).
+- No automated test harness for the IPC layer — verified via `node --check` + manual CLI reproduction.
 
 ---
 
@@ -965,7 +1023,7 @@ OnMessageReceived -> SendReadReceipt (Double Check ✔️✔️)
 ```
 
 **Default contact integration:**
-- Null ID: `NN-B0T-REFL`
+- Null ID: `NN-UFtv-8fHu`
 - Auto-added during `add init` in client
 - Auto-added in desktop-ui contact list
 - Use for latency testing: send any message, receive echo

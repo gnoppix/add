@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.3.19 — Reflector P2P Echo Fix (2026-07-12)
+
+### Root cause: reflector dropped every inbound P2P message
+The reflector (`add-bot`) accepted the client `p2p-hello` and replied with
+`p2p-hello-ack`, but then read **only one** WebSocket frame before the actual
+message. The client sends a `delivery-token` envelope (153 bytes, sealed-sender
+ACS2.6 I.2) *before* the real `p2p-message` frame. The reflector consumed the
+token as the "message", saw it was not `p2p-message`, and closed the connection
+→ the client observed `WebSocket protocol error: Connection reset without
+closing handshake` and the echo was never returned.
+
+A second, latent bug: the handshake used `msg_type` (the `WireEnvelope` field)
+on the wire, but `handle_connection` checked the bare `type` key — so even a
+correctly-ordered single-frame message would have been rejected.
+
+### Fixes
+- `bot/src/main.rs` `handle_connection`: replaced the single `if let` read with a
+  `loop` that skips any frame that is not `p2p-message` (e.g. the delivery-token)
+  and only echoes once it receives the real message; tolerant of both `msg_type`
+  and bare `type` keys.
+- `client/src/main.rs`: made the outgoing hello-ack check and the incoming
+  listen path (hello, p2p-message, p2p-ack, p2p-receipt) tolerant of `msg_type`
+  vs `type`, matching the on-wire `WireEnvelope` shape. This also fixes ordinary
+  user-to-user P2P, which had the same `type`/`msg_type` mismatch.
+
+### Verification
+- `cargo test -p add-bot`: `test_reflector_echo_roundtrip` + `test_reflector_rejects_non_hello` pass.
+- Live: `add send NN-UFtv-8fHu "hi"` → `Message delivered successfully!` (full
+  p2p-hello → p2p-hello-ack → p2p-message → p2p-ack → p2p-receipt roundtrip).
+- Deployed `add-reflector` to `nl` (fixed port 44089) with the fix.
+
+### Packaging
+- `desktop-ui` bumped to **0.2.9**; rebuilt deb bundles the fixed `add` client
+  binary (verified: `resources/add` md5 matches `target/release/add`, 0 debug
+  strings). Install with `sudo dpkg -i dist-electron/add-desktop_0.2.9_amd64.deb`.
+
+### Files Changed
+- `bot/src/main.rs`, `client/src/main.rs`
+- `desktop-ui/package.json` (0.2.8 → 0.2.9)
+
+
 ## 0.3.18 — Lint & Build Hygiene (2026-07-12)
 
 ### Clippy clean across the whole workspace (`make lint`)

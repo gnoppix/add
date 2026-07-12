@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld('addAPI', {
 
   // Messaging
   send: (nullId, message, ttl) => ipcRenderer.invoke('add-send', nullId, message, ttl),
-  read: () => ipcRenderer.invoke('add-read'),
+  read: (json) => ipcRenderer.invoke('add-read', json),
   delete: (id) => ipcRenderer.invoke('add-delete', id),
 
   // Verification (G6)
@@ -44,4 +44,12 @@ contextBridge.exposeInMainWorld('addAPI', {
   stopListen: () => ipcRenderer.invoke('add-stop-listen'),
   restartListen: () => ipcRenderer.invoke('add-restart-listen'),
   listenStatus: () => ipcRenderer.invoke('add-listen-status'),
+
+  // Subscribe to main-process push events (e.g. live P2P inbound messages
+  // from the background listener). Returns an unsubscribe function.
+  on: (channel, callback) => {
+    const listener = (_event, ...args) => callback(...args)
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
 })

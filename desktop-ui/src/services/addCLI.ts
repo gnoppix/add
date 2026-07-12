@@ -10,10 +10,10 @@
  *-------------------------------------------------------------------------------
  */
 
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 // Path to the Add CLI binary
 const ADD_CLI = process.env.ADD_CLI_PATH || 'add'
@@ -26,7 +26,6 @@ export interface NullId {
 export interface Contact {
   nullId: string
   fingerprint: string
-  alias?: string
 }
 
 export class AddCLI {
@@ -36,9 +35,11 @@ export class AddCLI {
     this.cliPath = cliPath || ADD_CLI
   }
 
-  async runCommand(args: string): Promise<string> {
+  async runCommand(args: string[]): Promise<string> {
     try {
-      const { stdout } = await execAsync(`${this.cliPath} ${args}`)
+      // Pass args as a real array so values with spaces (aliases, messages)
+      // are not mangled. `add-contact` and `alias` take positional args, NOT flags.
+      const { stdout } = await execFileAsync(this.cliPath, args)
       return stdout.trim()
     } catch (error) {
       throw new Error(`CLI error: ${error}`)
@@ -46,49 +47,53 @@ export class AddCLI {
   }
 
   async init(): Promise<NullId> {
-    const output = await this.runCommand('init')
+    const output = await this.runCommand(['init'])
     const idMatch = output.match(/Null ID:\s*(NN-[A-Z0-9-]+)/)
     const fpMatch = output.match(/Fingerprint:\s*([A-Z0-9]+)/)
     return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
   }
 
   async getMyId(): Promise<NullId> {
-    const output = await this.runCommand('id')
+    const output = await this.runCommand(['id'])
     const idMatch = output.match(/Null ID:\s*(NN-[A-Z0-9-]+)/)
     const fpMatch = output.match(/Fingerprint:\s*([A-Z0-9]+)/)
     return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
   }
 
   async register(): Promise<void> {
-    await this.runCommand('register')
+    await this.runCommand(['register'])
   }
 
   async addContact(nullId: string, fingerprint: string): Promise<void> {
-    await this.runCommand(`add-contact ${nullId} --fingerprint ${fingerprint}`)
+    // CLI: `add-contact <NULL_ID> <FINGERPRINT>` (positional, no --fingerprint flag)
+    await this.runCommand(['add-contact', nullId, fingerprint])
   }
 
   async contacts(): Promise<Contact[]> {
-    const output = await this.runCommand('contacts')
+    const output = await this.runCommand(['contacts'])
     const contacts: Contact[] = []
     const lines = output.split('\n')
     for (const line of lines) {
-      const match = line.match(/(NN-[A-Z0-9-]+)\s+([A-Z0-9]+)/)
+      // CLI format: "  NN-xxxx-xxxx -> FINGERPRINT"
+      const match = line.match(/(NN-[A-Z0-9-]+)\s*->\s*([A-Z0-9]+)/)
       if (match) contacts.push({ nullId: match[1], fingerprint: match[2] })
     }
     return contacts
   }
 
   async alias(name: string, nullId: string): Promise<void> {
-    await this.runCommand(`alias ${name} ${nullId}`)
+    await this.runCommand(['alias', name, nullId])
   }
 
-  async send(nullId: string, message: string): Promise<void> {
-    await this.runCommand(`send ${nullId} ${JSON.stringify(message)}`)
+  async send(nullId: string, message: string, ttl?: string): Promise<void> {
+    const args = ['send', nullId, message]
+    if (ttl) args.push('--ttl', ttl)
+    await this.runCommand(args)
   }
 
   async read(): Promise<Array<{id: string; content: string; timestamp: string}>> {
     // TODO: Parse CLI output format
-    await this.runCommand('read')
+    await this.runCommand(['read'])
     return []
   }
 }

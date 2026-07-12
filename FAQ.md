@@ -364,7 +364,7 @@ cargo build -p add-bot
 ./target/debug/add-reflector --once
 ```
 
-Send any message to `NN-B0T-REFL` (or use the "🤖 Reflector Bot" contact in the desktop UI) to test end-to-end delivery.
+Send any message to `NN-UFtv-8fHu` (or use the "🤖 Reflector Bot" contact in the desktop UI) to test end-to-end delivery.
 
 ---
 

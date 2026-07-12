@@ -1,6 +1,6 @@
 {
   "name": "add-desktop",
-  "version": "0.2.1",
+  "version": "0.2.9",
   "description": "Cross-platform desktop messaging application",
   "main": "electron/main.js",
   "author": "Add Team <team@gnoppix.org>",
@@ -10,14 +10,20 @@
     "dev": "VITE_DEV_SERVER_URL=http://localhost:5173 concurrently \"npm run dev:react\" \"npm run dev:electron\"",
     "dev:react": "vite",
     "dev:electron": "wait-on http://localhost:5173 && electron .",
-    "build": "npm run build:react && npm run build:electron",
+    "build": "npm run build:react && npm run fix:index && npm run build:electron",
     "build:react": "vite build",
     "build:electron": "electron-builder",
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.tsx",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "fix:index": "node -e \"const fs=require('fs');const f='dist/index.html';let h=fs.readFileSync(f,'utf8');h=h.replace(/\\scrossorigin/g,'');fs.writeFileSync(f,h);console.log('stripped crossorigin from '+f)\""
   },
-  "keywords": ["messaging", "signal", "electron", "desktop"],
+  "keywords": [
+    "messaging",
+    "signal",
+    "electron",
+    "desktop"
+  ],
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

@@ -14,11 +14,11 @@
 import { useEffect } from 'react'
 import Sidebar from './components/sidebar/Sidebar'
 import ChatPane from './components/chat/ChatPane'
-import { useChatStore } from './store/chatStore'
+import { useChatStore, getEvaAPI } from './store/chatStore'
 import { useThemeStore } from './store/themeStore'
 
 function App() {
-  const { initialize, loadContacts, checkContactsOnlineStatus } = useChatStore()
+  const { initialize, loadContacts, checkContactsOnlineStatus, loadMessages } = useChatStore()
   const { theme } = useThemeStore()
 
   // Initialize on mount
@@ -47,6 +47,43 @@ function App() {
     }, 30000)
     return () => clearInterval(interval)
   }, [checkContactsOnlineStatus])
+
+  // Periodic relay poll: pull messages you've received (every 10 seconds)
+  useEffect(() => {
+    loadMessages()
+    const interval = setInterval(() => {
+      loadMessages()
+    }, 10000)
+    return () => clearInterval(interval)
+  }, [loadMessages])
+
+  // Live P2P inbound messages from the background listener (e.g. reflector
+  // echo). The main process parses the listener stdout and pushes each
+  // message here; we attribute it to the sender conversation and insert it.
+  useEffect(() => {
+    const api = getEvaAPI()
+    if (!api?.on) return
+    const off = api.on('add-incoming-message', (msg: { from: string; text: string }) => {
+      const { from, text } = msg
+      const state = useChatStore.getState()
+      const myId = state.myId
+      if (myId && from === myId) return // never show self-echoes
+      if (!state.conversations.some((c) => c.id === from)) {
+        state.addConversation({
+          id: from,
+          name: from,
+          avatarUrl: `https://i.pravatar.cc/150?u=${from}`,
+          lastMessage: '',
+          lastMessageTimestamp: new Date(),
+          unreadCount: 0,
+          isOnline: false,
+          isGroup: false,
+        })
+      }
+      state.addIncomingMessage(from, text)
+    })
+    return off
+  }, [])
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-light-background dark:bg-dark-background">

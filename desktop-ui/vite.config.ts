@@ -22,5 +22,5 @@ export default defineConfig({
   build: {
     outDir: 'dist',
   },
-  base: './',
+  base: '',  // empty base -> relative 'assets/...' that resolves under Electron file://
 })

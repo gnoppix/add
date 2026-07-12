@@ -21,16 +21,17 @@ declare global {
       registerAllBootstraps: () => Promise<void>
       checkRegister: () => Promise<void>
       status: () => Promise<string>
+      checkContactStatus: () => Promise<Array<{ nullId: string; isOnline: boolean }>>
 
       // Contacts
       addContact: (nullId: string, fingerprint: string) => Promise<void>
       contacts: () => Promise<Array<{ nullId: string; fingerprint: string; alias?: string }>>
       alias: (name: string, nullId: string) => Promise<void>
-      aliases: () => Promise<string>
+      aliases: () => Promise<Array<{ alias: string; nullId: string }>>
 
       // Messaging
       send: (nullId: string, message: string, ttl?: string) => Promise<void>
-      read: () => Promise<string>
+      read: (json?: boolean) => Promise<Array<{ from: string; text: string }> | string>
       delete: (id: number) => Promise<string>
 
       // Verification (G6)

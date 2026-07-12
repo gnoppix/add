@@ -63,7 +63,7 @@ let listenProcess = null
 
 function runCliCommand(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(ADD_CLI, args.split(' '), {
+    const child = spawn(ADD_CLI, args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -156,20 +156,45 @@ function startListenProcess() {
     detached: false,
   })
   
+  // Buffer stdout (data arrives in chunks) and forward inbound P2P messages
+  // to the renderer. The client emits one line per received message:
+  //   [HH:MM:SS] From: <NULL_ID> (<FP>) | <text>
+  let listenBuf = ''
+  const INBOUND_RE = /^\[.*?\] From: (NN-[A-Z0-9-]+) \(([A-F0-9]+)\) \| (.*)$/
+  const forwardInbound = (line) => {
+    const m = line.match(INBOUND_RE)
+    if (!m) return
+    const [, nullId, fp, text] = m
+    const win = mainWindow
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('add-incoming-message', { from: nullId, fingerprint: fp, text })
+    }
+  }
   listenProcess.stdout?.on('data', (data) => {
-    console.log(`[listen] ${data.toString().trim()}`)
+    const chunk = data.toString()
+    console.log(`[listen] ${chunk.trim()}`)
+    listenBuf += chunk
+    let nl
+    while ((nl = listenBuf.indexOf('\n')) !== -1) {
+      const line = listenBuf.slice(0, nl).trim()
+      listenBuf = listenBuf.slice(nl + 1)
+      if (line) forwardInbound(line)
+    }
+  })
+  // Flush any trailing line on close
+  listenProcess.on('close', (code) => {
+    if (listenBuf.trim()) forwardInbound(listenBuf.trim())
+    listenBuf = ''
+    console.log(`Listen process exited with code ${code}`)
+    listenProcess = null
+    removeListenPidFile()
   })
   
   listenProcess.stderr?.on('data', (data) => {
     console.error(`[listen] ${data.toString().trim()}`)
   })
   
-  listenProcess.on('close', (code) => {
-    console.log(`Listen process exited with code ${code}`)
-    listenProcess = null
-    removeListenPidFile()
-  })
-  
+
   listenProcess.on('error', (err) => {
     console.error('Listen process error:', err)
     listenProcess = null
@@ -226,29 +251,34 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
+  // Surface load failures instead of a silent white window.
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
+    console.error('Window failed to load:', code, desc)
+  })
+
   return mainWindow
 }
 
 // IPC Handlers
 ipcMain.handle('add-init', async () => {
-  const output = await queuedCommand('init')
+  const output = await queuedCommand(['init'])
   const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
   const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
   return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
 })
 
 ipcMain.handle('add-id', async () => {
-  const output = await queuedCommand('id')
+  const output = await queuedCommand(['id'])
   const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
   const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
   return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
 })
 
-ipcMain.handle('add-register', async () => queuedCommand('register'))
-ipcMain.handle('add-register-all-bootstraps', async () => queuedCommand('register-all-bootstraps'))
-ipcMain.handle('add-check-register', async () => queuedCommand('check-register'))
+ipcMain.handle('add-register', async () => queuedCommand(['register']))
+ipcMain.handle('add-register-all-bootstraps', async () => queuedCommand(['register-all-bootstraps']))
+ipcMain.handle('add-check-register', async () => queuedCommand(['check-register']))
 ipcMain.handle('add-check-contact-status', async () => {
-  const output = await queuedCommand('contact-status')
+  const output = await queuedCommand(['contact-status'])
   // CLI prints one line per contact:
   //   "  ✓ <fp8> (NN-xxxx-xxxx) - ONLINE at <addr>"
   //   "  ✗ <fp8> (NN-xxxx-xxxx) - OFFLINE"
@@ -262,27 +292,57 @@ ipcMain.handle('add-check-contact-status', async () => {
 })
 
 ipcMain.handle('add-add-contact', async (_, nullId, fingerprint) =>
-  queuedCommand(`add-contact ${nullId} --fingerprint ${fingerprint}`))
+  queuedCommand(['add-contact', nullId, fingerprint]))
 
 ipcMain.handle('add-contacts', async () => {
-  const output = await queuedCommand('contacts')
+  const output = await queuedCommand(['contacts'])
   const contacts = []
   for (const line of output.split('\n')) {
-    const match = line.match(/(NN-[A-Za-z0-9-]+)\s+([A-Fa-f0-9]+)/)
+    // CLI format: "  NN-xxxx-xxxx -> FINGERPRINT"
+    const match = line.match(/(NN-[A-Za-z0-9-]+)\s*->\s*([A-Fa-f0-9]+)/)
     if (match) contacts.push({ nullId: match[1], fingerprint: match[2] })
   }
   return contacts
 })
 
 ipcMain.handle('add-alias', async (_, name, nullId) =>
-  queuedCommand(`alias ${name} ${nullId}`))
+  queuedCommand(['alias', name, nullId]))
 
-ipcMain.handle('add-send', async (_, nullId, message) =>
-  queuedCommand(`send ${nullId} ${JSON.stringify(message)}`))
+ipcMain.handle('add-aliases', async () => {
+  const output = await queuedCommand(['aliases'])
+  const aliases = []
+  for (const line of output.split('\n')) {
+    // CLI format: "  NAME -> NN-xxxx-xxxx"  (insertion order, oldest first)
+    const match = line.match(/\s*(.+?)\s*->\s*(NN-[A-Za-z0-9-]+)/)
+    if (match) aliases.push({ alias: match[1], nullId: match[2] })
+  }
+  return aliases
+})
 
-ipcMain.handle('add-read', async () => queuedCommand('read'))
+ipcMain.handle('add-send', async (_, nullId, message, ttl) => {
+  const args = ['send', nullId, message]
+  if (ttl) args.push('--ttl', ttl)
+  return queuedCommand(args)
+})
 
-ipcMain.handle('add-listen', async () => queuedCommand('listen'))
+ipcMain.handle('add-read', async (_, json) => {
+  const output = await queuedCommand(json ? ['read', '--json'] : ['read'])
+  if (!json) return output
+  // Parse one JSON object per line: {"from":"<null_id>","text":"<msg>"}
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('{') && line.endsWith('}'))
+    .map((line) => {
+      try {
+        return JSON.parse(line)
+      } catch {
+        return null
+      }
+    })
+    .filter((m) => m && m.from && typeof m.text === 'string')
+})
+ipcMain.handle('add-listen', async () => queuedCommand(['listen']))
 
 ipcMain.handle('add-start-listen', async () => {
   startListenProcess()

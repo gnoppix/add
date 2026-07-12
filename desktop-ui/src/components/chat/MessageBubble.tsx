@@ -22,8 +22,10 @@ interface MessageBubbleProps {
 function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
   const [showTimestamp, setShowTimestamp] = useState(false)
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const formatTime = (date: Date | string | number) => {
+    // Tolerate deserialized timestamps (plain strings from localStorage).
+    const d = date instanceof Date ? date : new Date(date)
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
   const getStatusIcon = () => {

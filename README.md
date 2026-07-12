@@ -66,6 +66,12 @@ Sessions persist across restarts — if you receive a message while offline, it 
 - TOFU (Trust On First Use) uses ML-DSA-87 verifying keys (base64-encoded) instead of armored GPG certs
 - Relay `cert_cache` → `ml_dsa87_verifying_key_cache` (fingerprint → base64 verifying key)
 
+> **NOTE (accuracy vs. shipping source):** As of the current tree, GPG/Sequoia is **still present and active** —
+> `protocol/src/gpg.rs` is compiled in and used by `envelope.rs` for detached signing/verification, and
+> `client/src/main.rs` still loads/creates Sequoia `Cert`s (`own_cert.asc`). The ML-DSA-87 migration described
+> above is **not yet reflected in the shipping binary**. Treat the GPG-based key model in FAQ.md as current until
+> this migration lands. See FAQ.md "Is my GPG private key stored safely on disk?"
+
 ### Desktop App Fixes
 
 - **CLI binary spawn (ENOENT)** — Embedded `add` binary via `electron-builder.json` `extraResources` (bundles 11.4 MB binary at `/opt/Add Desktop/resources/add`)
@@ -162,8 +168,10 @@ Share your Null ID with friends so they can send you messages. Share your **fing
 ### 4. Add a contact
 
 ```bash
-./target/release/add add-contact NN-E5F6-G7H8 --fingerprint THEIR_FINGERPRINT
+./target/release/add add-contact NN-E5F6-G7H8 67902E417B528A287CE75D893EC503E34DEC46E0
 ```
+
+The `add-contact` command takes the Null ID and fingerprint as **positional arguments** (not flags). The fingerprint is the 40-hex-char string printed by `add id` / `add init`.
 
 ### 5. Add an alias (optional, for convenience)
 
@@ -173,7 +181,7 @@ Share your Null ID with friends so they can send you messages. Share your **fing
 
 Aliases map a short human-readable name to a Null ID. You can then use the alias everywhere a Null ID is expected.
 
-### 6. Send a message
+### 7. Send a message
 
 ```bash
 # Using the Null ID directly (always works)
@@ -189,13 +197,13 @@ Aliases map a short human-readable name to a Null ID. You can then use the alias
 
 TTL options: `2h`, `12h`, `24h`, `48h`, `5d`, `7d`, `14d`
 
-### 6. Read your messages
+### 8. Read your messages
 
 ```bash
 ./target/release/add read
 ```
 
-### 6b. Delete a message
+### 9. Delete a message
 
 After reading, messages are shown with position numbers. Delete a message by position (1 = newest):
 
@@ -205,7 +213,7 @@ After reading, messages are shown with position numbers. Delete a message by pos
 
 This removes the message from your local store.
 
-### 7. Register identity with DHT
+### 10. Register identity with DHT
 
 If your identity was created while the bootstrap was unreachable, register it explicitly:
 
@@ -215,7 +223,7 @@ If your identity was created while the bootstrap was unreachable, register it ex
 
 This sends your Null ID and fingerprint to the bootstrap DHT so others can find you.
 
-### 8. Listen for incoming P2P connections
+### 11. Listen for incoming P2P connections
 
 ```bash
 ./target/release/add listen
@@ -331,8 +339,10 @@ See [TRANSLATIONS.md](desktop-ui/TRANSLATIONS.md) to add a new language.
 ### Install Desktop on Debian/Ubuntu
 
 ```bash
-sudo dpkg -i desktop-ui/dist-electron/Add\ Desktop-0.1.0.deb
+sudo dpkg -i desktop-ui/dist-electron/add-desktop_0.2.2_amd64.deb
 ```
+
+The package name is `add-desktop` and the version increments with each build (the bundled `add` CLI is embedded via `electron-builder.json` `extraResources`). Check the actual filename in `desktop-ui/dist-electron/`.
 
 ---
 

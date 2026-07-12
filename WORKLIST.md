@@ -294,6 +294,34 @@
 
 ---
 
+## Desktop UI (Electron) — Status
+
+The desktop client lives in `desktop-ui/` (Electron + React + TypeScript, Zustand store).
+
+### Architecture (as built)
+- `electron/main.js` — Node main process. Resolves the bundled `add` CLI (`extraResources` → `resources/add`, or `ADD_CLI_PATH`), spawns it with **real argv arrays** (no shell string-splitting, so aliases/messages with spaces survive), and exposes IPC handlers (`ipcMain.handle('add-*', ...)`).
+- `electron/preload.js` — `contextBridge` exposes `window.addAPI` with typed methods (`init`, `getMyId`, `register`, `addContact`, `contacts`, `alias`, `aliases`, `send`, `read`, `verify`, `safetyNumber`, `startListen`/`stopListen`/`restartListen`, `listenStatus`, `checkContactStatus`, `registerAllBootstraps`, `checkRegister`, ...).
+- `src/store/chatStore.ts` — Zustand store: `loadContacts()` fetches `contacts` **and** `aliases`, merges the alias map, and shows the alias as the display name (falls back to the NN-ID). `renameAlias(nullId, alias)` updates local state.
+- `src/components/sidebar/ConversationRow.tsx` — Renders each contact. **Right-click** opens a context menu showing the NN-ID with a "Rename alias" action; that opens an inline input (Enter commits, Escape/blur cancels) which updates local state and calls `api.alias(next, nullId)`.
+- `src/components/sidebar/SidebarHeader.tsx` — Add-Contact modal (Null ID + fingerprint + optional alias). On error it now shows the failure banner instead of failing silently.
+
+### Completed (desktop-ui)
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| D1 | **Contact add actually works** | ✅ | `add-contact` was called with `--fingerprint` flag; CLI takes positional args. Fixed to `['add-contact', nullId, fingerprint]`. |
+| D2 | **Aliases shown instead of IDs** | ✅ | `loadContacts` merges `aliases` (separate CLI command) — `contacts` output carries no alias field. Added missing `add-aliases` IPC handler in `main.js`. |
+| D3 | **Right-click → rename alias** | ✅ | `ConversationRow` context menu + inline rename; writes via `api.alias()`. |
+| D4 | **Message send preserves spaces / TTL** | ✅ | `send` passes message as a single argv element and forwards `--ttl`. |
+| D5 | **Add-Contact error visibility** | ✅ | Modal shows the real CLI error. |
+| D6 | **Deb packaging** | ✅ | `electron-builder` → `add-desktop_<ver>_amd64.deb` (currently 0.2.3). Version bumps +1 per build. |
+| D7 | **Received messages now load (split-screen)** | ✅ | Added `add read --json` to the CLI (emits `{"from","text"}` per message, with sender NID). `loadMessages()` polls it every 10s + on conversation open, routing each message to its conversation. `MessageList` is now a two-column split: **left = Sent**, **right = Received**. Fixes the "2 messages not shown" bug (UI never called `read` and `read` had no sender attribution). |
+
+### Known gaps
+- `add alias` **appends** (no delete); renaming leaves the old alias in the CLI store. UI shows the latest. CLI has no alias-remove command yet.
+- DEVELOPER.md / FAQ.md still describe the GPG/Sequoia key model — which **is** still the live code (see README v0.3.14 note).
+
+---
+
 ## Summary
 
 **ACS2.6 Compliance: 11/11 Core Requirements Implemented**
@@ -337,7 +365,7 @@
 
 **Completed 2026-07-06 (Reflector Bot):**
 23. ✅ Reflector Bot — Headless echo bot with TTL inheritance, loop prevention, zero-footprint storage
-24. ✅ Default contact integration — `NN-B0T-REFL` auto-added in CLI and desktop UI
+24. ✅ Default contact integration — `NN-UFtv-8fHu` auto-added in CLI and desktop UI (Reflector Bot)
 
 **Completed 2026-07-09 (v0.3.16 — SPQR Braid fully wired):**
 25. ✅ SPQR Braid wired into live P2P handshake + ratchet — `p2p/src/braid_handshake.rs` streams the 1568B ML-KEM-1024 EK as `p2p-braid-chunk` frames; `send_message` + `handle_incoming_connection` negotiate `braid:true` and feed the reassembled key into KEM + Double Ratchet. Inline `kyber_enc_key` kept as fallback.

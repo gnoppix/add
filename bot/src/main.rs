@@ -293,7 +293,13 @@ async fn handle_connection(stream: tokio::net::TcpStream, config: BotConfig) -> 
     if let Some(Ok(Message::Text(hello_text))) = ws_rx.next().await {
         let hello: serde_json::Value = serde_json::from_str(&hello_text)?;
 
-        if hello.get("type").and_then(|t| t.as_str()) != Some("p2p-hello") {
+        // The client sends `msg_type` (WireEnvelope field); be tolerant of a
+        // bare `type` key too, for compatibility.
+        let hello_type = hello
+            .get("msg_type")
+            .or_else(|| hello.get("type"))
+            .and_then(|t| t.as_str());
+        if hello_type != Some("p2p-hello") {
             return Err(anyhow!("expected p2p-hello"));
         }
 
@@ -301,7 +307,6 @@ async fn handle_connection(stream: tokio::net::TcpStream, config: BotConfig) -> 
             .get("public_key")
             .and_then(|k| k.as_str())
             .unwrap_or("unknown");
-        debug!("P2P hello from {}", peer_fp);
 
         // Send hello-ack (signed, mirroring the client handshake C3 fix).
         // The client requires a non-empty `sig` over `p2p-hello-ack:{payload}`
@@ -354,45 +359,76 @@ async fn handle_connection(stream: tokio::net::TcpStream, config: BotConfig) -> 
             .send(Message::Text(serde_json::to_string(&ack)?.into()))
             .await?;
 
-        // Read message and echo back
-        if let Some(Ok(Message::Text(msg_text))) = ws_rx.next().await {
-            let msg: serde_json::Value = serde_json::from_str(&msg_text)?;
+        // Read messages and echo back. The client may send additional
+        // frames before/around the actual message (e.g. a `delivery-token`
+        // envelope for sealed-sender). Loop and skip any frame that is not a
+        // `p2p-message` so we don't drop the real message and reset the peer.
+        let mut echoed = false;
+        while let Some(frame) = ws_rx.next().await {
+            let msg_text = match frame {
+                Ok(Message::Text(t)) => t,
+                Ok(Message::Close(_)) | Err(_) => break,
+                _ => continue,
+            };
+            let msg: serde_json::Value = match serde_json::from_str(&msg_text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
 
-            if msg.get("type").and_then(|t| t.as_str()) == Some("p2p-message") {
-                let ciphertext = msg.get("ciphertext").and_then(|c| c.as_str()).unwrap_or("");
-
-                // Echo back with prefix
-                let echoed = format!("{}{}", config.reflector.prefix, ciphertext);
-
-                let echo_msg = serde_json::json!({
-                    "type": "p2p-message",
-                    "ciphertext": echoed,
-                    "recipient": peer_fp,
-                });
-                ws_tx
-                    .send(Message::Text(echo_msg.to_string().into()))
-                    .await?;
-
-                // Send ack
-                let ack_msg = serde_json::json!({
-                    "type": "p2p-ack",
-                    "seq": 1,
-                });
-                ws_tx
-                    .send(Message::Text(ack_msg.to_string().into()))
-                    .await?;
-
-                // Send read receipt
-                let receipt_msg = serde_json::json!({
-                    "type": "p2p-receipt",
-                    "msg_hash": sha256_hex(ciphertext),
-                    "received_at": chrono::Utc::now().timestamp() as f64,
-                    "seq": 1,
-                });
-                ws_tx
-                    .send(Message::Text(receipt_msg.to_string().into()))
-                    .await?;
+            // Tolerant of `msg_type` (WireEnvelope) or bare `type`.
+            let msg_type = msg
+                .get("msg_type")
+                .or_else(|| msg.get("type"))
+                .and_then(|t| t.as_str());
+            if msg_type != Some("p2p-message") {
+                // Not the message we echo (e.g. delivery-token); keep reading.
+                continue;
             }
+
+            // The client sends ciphertext inside `payload.ciphertext` (WireEnvelope);
+            // fall back to a top-level `ciphertext` for compatibility.
+            let ciphertext = msg
+                .get("payload")
+                .and_then(|p| p.get("ciphertext"))
+                .and_then(|c| c.as_str())
+                .or_else(|| msg.get("ciphertext").and_then(|c| c.as_str()))
+                .unwrap_or("");
+
+            // Echo back with prefix
+            let echoed_text = format!("{}{}", config.reflector.prefix, ciphertext);
+
+            let echo_msg = serde_json::json!({
+                "type": "p2p-message",
+                "ciphertext": echoed_text,
+                "recipient": peer_fp,
+            });
+            ws_tx
+                .send(Message::Text(echo_msg.to_string().into()))
+                .await?;
+
+            // Send ack
+            let ack_msg = serde_json::json!({
+                "type": "p2p-ack",
+                "seq": 1,
+            });
+            ws_tx
+                .send(Message::Text(ack_msg.to_string().into()))
+                .await?;
+
+            // Send read receipt
+            let receipt_msg = serde_json::json!({
+                "type": "p2p-receipt",
+                "msg_hash": sha256_hex(ciphertext),
+                "received_at": chrono::Utc::now().timestamp() as f64,
+                "seq": 1,
+            });
+            ws_tx
+                .send(Message::Text(receipt_msg.to_string().into()))
+                .await?;
+            echoed = true;
+            break;
+        }
+        if echoed {
         }
     }
 

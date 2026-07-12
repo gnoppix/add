@@ -180,8 +180,11 @@ function SidebarHeader() {
       })
       setContactForm({ nullId: '', fingerprint: '', alias: '' })
       setShowAddContact(false)
+      setErrorMessage('')
     } catch (err) {
-      console.error('Add contact failed:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('Add contact failed:', msg)
+      setErrorMessage(`Add contact failed: ${msg}`)
     }
   }
 
@@ -194,7 +197,10 @@ function SidebarHeader() {
       <div className="flex items-center gap-1">
         {/* New Message / Compose Button */}
         <button
-          onClick={() => setShowAddContact(true)}
+          onClick={() => {
+            setShowAddContact(true)
+            setErrorMessage('')
+          }}
           className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors hover:bg-gray-100"
           aria-label="New Message"
           title="Add Contact"
@@ -345,6 +351,12 @@ function SidebarHeader() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-80 rounded-lg bg-white p-6 shadow-xl">
             <h2 className="mb-4 text-lg font-semibold">Add Contact</h2>
+
+            {errorMessage && (
+              <div className="mb-3 rounded bg-red-100 p-2 text-xs text-red-700">
+                {errorMessage}
+              </div>
+            )}
 
             <div className="space-y-3">
               <input

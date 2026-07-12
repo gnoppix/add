@@ -73,6 +73,26 @@
   color: var(--color-text-secondary);
 }
 
+/* Chat bubble colors (Signal-inspired; mirror tailwind.config.js light/dark palette) */
+.bg-color-bubble-sent {
+  background-color: #007AFF;
+}
+.dark .bg-color-bubble-sent {
+  background-color: #0A84FF;
+}
+.bg-color-bubble-received {
+  background-color: #E9E9EB;
+}
+.dark .bg-color-bubble-received {
+  background-color: #2C2C2E;
+}
+.text-color-text {
+  color: var(--color-text);
+}
+.text-color-text-secondary {
+  color: var(--color-text-secondary);
+}
+
 /* Custom scrollbar - light */
 ::-webkit-scrollbar {
   width: 6px;

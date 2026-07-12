@@ -10,52 +10,37 @@
  *-------------------------------------------------------------------------------
  */
 
-/** Virtualized message list with auto-scroll to bottom */
-import { useEffect, useRef, useMemo } from 'react'
+/**
+ * Split-screen message list:
+ *  - Left column  → messages I send (outgoing)
+ *  - Right column → messages I receive (incoming)
+ * Each column keeps its own chronological order and auto-scrolls to bottom.
+ */
+import { useEffect, useRef } from 'react'
 import { useChatStore } from '../../store/chatStore'
 import MessageBubble from './MessageBubble'
 
+// Outgoing messages are authored by the local user (senderId === 'me').
+const OUTGOING_ID = 'me'
+
 function MessageList() {
   const { activeConversationId, messages } = useChatStore()
-  const listRef = useRef<HTMLDivElement>(null)
 
-  // Get current user ID (in real app, this would come from auth)
-  const currentUserId = 'current-user'
+  const sentRef = useRef<HTMLDivElement>(null)
+  const receivedRef = useRef<HTMLDivElement>(null)
 
   const conversationMessages = activeConversationId ? messages[activeConversationId] || [] : []
 
-  // Group messages by date
-  const groupedMessages = useMemo(() => {
-    const groups: { date: string; messages: typeof conversationMessages }[] = []
-    let currentDate = ''
-    let currentGroup: typeof conversationMessages = []
+  const sent = conversationMessages.filter((m) => m.senderId === OUTGOING_ID)
+  const received = conversationMessages.filter((m) => m.senderId !== OUTGOING_ID)
 
-    conversationMessages.forEach((msg) => {
-      const dateStr = msg.timestamp.toDateString()
-      if (dateStr !== currentDate) {
-        if (currentGroup.length > 0) {
-          groups.push({ date: currentDate, messages: currentGroup })
-        }
-        currentDate = dateStr
-        currentGroup = [msg]
-      } else {
-        currentGroup.push(msg)
-      }
-    })
-
-    if (currentGroup.length > 0) {
-      groups.push({ date: currentDate, messages: currentGroup })
-    }
-
-    return groups
-  }, [conversationMessages])
-
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll both columns to the bottom when their content changes.
   useEffect(() => {
-    if (listRef.current) {
-      listRef.current.scrollTop = listRef.current.scrollHeight
-    }
-  }, [conversationMessages])
+    if (sentRef.current) sentRef.current.scrollTop = sentRef.current.scrollHeight
+  }, [sent])
+  useEffect(() => {
+    if (receivedRef.current) receivedRef.current.scrollTop = receivedRef.current.scrollHeight
+  }, [received])
 
   if (conversationMessages.length === 0) {
     return (
@@ -65,24 +50,39 @@ function MessageList() {
     )
   }
 
-  return (
-    <div ref={listRef} className="flex-1 overflow-y-auto p-4 bg-light-background dark:bg-dark-background">
-      {groupedMessages.map((group) => (
-        <div key={group.date} className="mb-4">
-          <div className="mb-2 text-center">
-            <span className="rounded-full bg-gray-200 dark:bg-gray-700 px-2 py-0.5 text-xs text-gray-600 dark:text-gray-300">
-              {group.date}
-            </span>
-          </div>
-          {group.messages.map((message) => (
+  const Column = ({
+    title,
+    list,
+    refEl,
+  }: {
+    title: string
+    list: typeof conversationMessages
+    refEl: React.RefObject<HTMLDivElement>
+  }) => (
+    <div className="flex h-full min-w-0 flex-1 flex-col border-x border-gray-200 dark:border-gray-700">
+      <div className="border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
+        {title} ({list.length})
+      </div>
+      <div ref={refEl} className="flex-1 overflow-y-auto p-4 bg-light-background dark:bg-dark-background">
+        {list.length === 0 ? (
+          <p className="text-xs text-gray-400 dark:text-gray-500">—</p>
+        ) : (
+          list.map((message) => (
             <MessageBubble
               key={message.id}
               message={message}
-              isOutgoing={message.senderId === currentUserId}
+              isOutgoing={message.senderId === OUTGOING_ID}
             />
-          ))}
-        </div>
-      ))}
+          ))
+        )}
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="flex flex-1 overflow-hidden">
+      <Column title="Sent" list={sent} refEl={sentRef} />
+      <Column title="Received" list={received} refEl={receivedRef} />
     </div>
   )
 }
