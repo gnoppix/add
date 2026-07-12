@@ -1,9 +1,9 @@
-Package: eva-desktop
+Package: add-desktop
 Architecture: amd64
-Version: 0.3.12-1
+Version: 0.3.18-1
 Maintainer: Andreas Mueller <amu@gnoppix.com>
-Description: Eva Desktop - Electron GUI client for Eva messenger
- Electron-based desktop client with Signal-inspired interface for Eva
+Description: Add Desktop - Electron GUI client for Add messenger
+ Electron-based desktop client with Signal-inspired interface for Add
  post-quantum encrypted messaging.
  .
  Features:

@@ -1,9 +1,9 @@
-Package: eva
+Package: add
 Architecture: amd64
-Version: 0.3.12-1
+Version: 0.3.18-1
 Maintainer: Andreas Mueller <amu@gnoppix.com>
-Description: Eva P2P Messenger Client - Post-quantum encrypted messaging
- Eva is a decentralized messaging system using ML-KEM-1024 post-quantum
+Description: Add P2P Messenger Client - Post-quantum encrypted messaging
+ Add is a decentralized messaging system using ML-KEM-1024 post-quantum
  encryption (US government standard). No phone number or email required.
  .
  Features:

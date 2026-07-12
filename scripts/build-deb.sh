@@ -14,24 +14,22 @@ mkdir -p "$BUILD_DIR"
 echo "Building binaries..."
 cargo build --release --workspace
 
-# Create package directories
+# Create package bin directories (control files live in debian/<pkg>/DEBIAN/)
 for pkg in add add-relay add-bootstrap add-bot; do
     mkdir -p "$PKG_DIR/$pkg/DEBIAN"
     mkdir -p "$PKG_DIR/$pkg/usr/bin"
 done
 
-# Copy binaries and install control files
+# Copy binaries into place (control is already committed under DEBIAN/)
 for pkg in add add-relay add-bootstrap; do
     if [ -f "$BUILD_DIR/$pkg" ]; then
         cp "$BUILD_DIR/$pkg" "$PKG_DIR/$pkg/usr/bin/"
-        cp "$PKG_DIR/$pkg/control" "$PKG_DIR/$pkg/DEBIAN/control"
     fi
 done
 
 # Bot binary has different name
 if [ -f "$BUILD_DIR/add-reflector" ]; then
     cp "$BUILD_DIR/add-reflector" "$PKG_DIR/add-bot/usr/bin/add-bot"
-    cp "$PKG_DIR/add-bot/control" "$PKG_DIR/add-bot/DEBIAN/control"
 fi
 
 # Desktop UI uses electron-builder (npm)

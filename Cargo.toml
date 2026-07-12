@@ -3,7 +3,7 @@ members = ["protocol", "crypto", "crypto-pq", "crypto-utils", "dht-core", "relay
 resolver = "2"
 
 [workspace.package]
-version = "0.3.17"
+version = "0.3.18"
 edition = "2024"
 description = "Add P2P messenger (Rust)"
 license = "BUSL-1.1"

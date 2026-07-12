@@ -1,9 +1,9 @@
-Package: eva-relay
+Package: add-relay
 Architecture: amd64
-Version: 0.3.12-1
+Version: 0.3.18-1
 Maintainer: Andreas Mueller <amu@gnoppix.com>
-Description: Eva Relay Server - Store-and-forward message relay
- Eva relay server for offline message delivery. Stores encrypted messages
+Description: Add Relay Server - Store-and-forward message relay
+ Add relay server for offline message delivery. Stores encrypted messages
  until recipients come online.
  .
  Features:
