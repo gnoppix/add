@@ -60,6 +60,10 @@ struct RelayReadReceipt {
     signature: String,            // GPG signature over message_id + recipient_nid + timestamp
     timestamp: f64,               // Unix timestamp
     nonce: String,                // Unique nonce for replay protection
+    /// Recipient's ML-DSA-87 verifying key (base64) — required by the relay to
+    /// verify the read-receipt signature (TOFU). Without it the receipt is
+    /// rejected and the message stays undelivered (re-fetched → echo loop).
+    recipient_verifying_key: String,
     /// Optional: list of other relay URLs that should also delete this message
     other_relays: Vec<String>,
 }
@@ -82,13 +86,13 @@ const FALLBACK_RELAY_EU: &str = "wss://relay-eu.gnoppix.org/ws";
 const FALLBACK_RELAY_ASIA: &str = "wss://relay-asia.gnoppix.org/ws";
 
 /// SRV record service prefixes for auto-discovery.
-const BOOTSTRAP_SRV: &str = "_eva-bootstrap._tcp.gnoppix.org";
-const RELAY_SRV: &str = "_eva-relay._tcp.gnoppix.org";
+const BOOTSTRAP_SRV: &str = "_add-bootstrap._tcp.gnoppix.org";
+const RELAY_SRV: &str = "_add-relay._tcp.gnoppix.org";
 
 /// Discover bootstrap and relay server URLs via DNS SRV records.
 ///
-/// Queries `_eva-bootstrap._tcp.gnoppix.org` and
-/// `_eva-relay._tcp.gnoppix.org` for SRV records, selects the
+/// Queries `_add-bootstrap._tcp.gnoppix.org` and
+/// `_add-relay._tcp.gnoppix.org` for SRV records, selects the
 /// highest-priority (lowest number) / highest-weight entry, and returns
 /// a `wss://<target>:<port>` URL for each.
 ///
@@ -1082,6 +1086,20 @@ impl MessageStore {
         .await?;
 
         Ok(row.map(|(data,)| self.db_key.decrypt(&data)).transpose()?)
+    }
+
+    /// Delete a DoubleRatchet session for a peer (so the next send re-bootstraps
+    /// via a fresh Kyber encapsulation). Used by the reflector so every bounce is
+    /// an independent first-message and the recipient never desyncs.
+    async fn delete_session(
+        &self,
+        peer_nid: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query("DELETE FROM ratchet_sessions WHERE peer_nid = ?")
+            .bind(peer_nid)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -2101,6 +2119,7 @@ async fn relay_fetch_all(
                         "timestamp": timestamp,
                         "nonce": nonce,
                         "auth_hmac": "",
+                        "requester_verifying_key": my_verifying_key_b64().unwrap_or_default(),
                     },
                 });
                 ws.send(Message::Text(req.to_string().into())).await?;
@@ -2189,6 +2208,16 @@ async fn relay_purge(
         .map_err(|e| format!("Relay connect failed for purge: {}", e))?;
 
     let identity = Identity::load()?;
+    let sender_verifying_key_b64 = if let Some(sk_b64) = identity.ml_dsa87_signing_key {
+        let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
+        use ml_dsa::{KeyInit, Keypair, KeyExport};
+        let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
+            .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
+        let vk = Keypair::verifying_key(&sk).clone();
+        base64::engine::general_purpose::STANDARD.encode(vk.to_bytes())
+    } else {
+        String::new()
+    };
     let nonce = uuid_hex();
     let timestamp = chrono::Utc::now().timestamp() as f64;
     let sig_data = format!("relay-purge:{}:{}:{}", null_id, timestamp, nonce);
@@ -2198,6 +2227,7 @@ async fn relay_purge(
         "msg_type": "relay-purge",
         "recipient_nid": null_id,
         "requester_fp": identity.fingerprint,
+        "requester_verifying_key": sender_verifying_key_b64,
         "sender_sig": sig,
         "timestamp": timestamp,
         "nonce": nonce,
@@ -2276,6 +2306,7 @@ async fn send_via_relay(
     store: &MessageStore,
     relay_url: &str,
     ttl: Option<&str>,
+    force_first: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ws_url = relay_url.replace("http://", "ws://").replace("https://", "wss://");
     let mut ws = ws_connect(&ws_url).await
@@ -2290,7 +2321,10 @@ async fn send_via_relay(
 
     // Create or load DoubleRatchet session with recipient
     let is_self = recipient_nid == identity.null_id;
-    let session_json = store.load_session(recipient_nid).await?;
+    // When force_first is set (reflector bounce), always start a fresh
+    // first-message so the recipient can bootstrap independently — no
+    // shared ratchet state to desync across repeated bounces.
+    let session_json = if force_first { None } else { store.load_session(recipient_nid).await? };
     let (mut ratchet_session, kyber_ct_hex_opt, shared_secret_opt) = if is_self {
         // Self-message: a single fixed-key shared session (no per-message
         // Kyber re-encapsulation). Reuse the persisted self-session if present;
@@ -2421,17 +2455,19 @@ async fn send_via_relay(
         },
     });
     let req_json = serde_json::to_string(&req)?;
-    tracing::info!("relay-store sending {} bytes...", req_json.len());
+    let _sb = req.get("payload").and_then(|p| p.get("signed_blob")).and_then(|s| s.as_str()).unwrap_or("");
+    tracing::info!("DBG send blob_has_kc={} sb_len={}", _sb.contains("kyber_ciphertext"), _sb.len());
     ws.send(Message::Text(req_json.into()))
         .await
         .map_err(|e| format!("relay-store send failed: {}", e))?;
-    tracing::info!("relay-store sent, waiting for response...");
+    tracing::info!("relay-store sent, waiting for response... (relay={})", ws_url);
 
     // Wait for relay-ok response, skipping Ping/Pong heartbeats
     loop {
         match ws.next().await {
             Some(Ok(Message::Text(resp))) => {
                 let resp_val: serde_json::Value = serde_json::from_str(&resp)?;
+                tracing::info!("DBG store resp: {}", resp.chars().take(200).collect::<String>());
                 if resp_val.get("ok").and_then(|v| v.as_bool()) == Some(true) {
                     // Persist updated ratchet session
                     let session_json = ratchet_session.serialize()
@@ -2773,17 +2809,26 @@ async fn send_message(
 
     // If DHT lookup failed, skip P2P and go straight to relay delivery
     if recipient_addr.is_none() {
-        return send_via_relay(identity, recipient_nid, recipient_fp, message, store, relay_url, ttl).await;
+        return send_via_relay(identity, recipient_nid, recipient_fp, message, store, relay_url, ttl, true).await;
     }
 
     println!("Establishing P2P connection...");
 
-    // G1: Try direct P2P connection, fall back to relay delivery
-    let (mut ws, _) = match tokio_tungstenite::connect_async(&ws_url).await {
-        Ok(result) => result,
-        Err(e) => {
-            println!("Direct P2P failed, using relay delivery...");
-            return send_via_relay(identity, recipient_nid, recipient_fp, message, store, relay_url, ttl).await;
+    // G1: Try direct P2P connection, fall back to relay delivery.
+    // Wrap the connect in a timeout so an unreachable peer (offline / NAT
+    // with no hole punch) fails fast and we fall back to relay instead of
+    // hanging on a dead TCP endpoint (per architecture: relay is the fallback
+    // when the peer is not directly reachable).
+    let connect_fut = tokio_tungstenite::connect_async(&ws_url);
+    let (mut ws, _) = match tokio::time::timeout(std::time::Duration::from_secs(8), connect_fut).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            println!("Direct P2P failed ({}), using relay delivery...", e);
+            return send_via_relay(identity, recipient_nid, recipient_fp, message, store, relay_url, ttl, true).await;
+        }
+        Err(_) => {
+            println!("Direct P2P timed out, using relay delivery...");
+            return send_via_relay(identity, recipient_nid, recipient_fp, message, store, relay_url, ttl, true).await;
         }
     };
 
@@ -3057,6 +3102,23 @@ fn lan_address(local_addr: std::net::SocketAddr) -> String {
     format!("ws://{}:{}", advertise_ip, local_addr.port())
 }
 
+/// Extract the host portion of a `ws://host:port` (or bare `host:port`) address.
+/// Used to detect a *real* address change (public IP) while ignoring the
+/// ephemeral port churn that symmetric NATs produce on every STUN probe.
+fn addr_host(addr: &str) -> String {
+    let s = addr
+        .strip_prefix("ws://")
+        .or_else(|| addr.strip_prefix("wss://"))
+        .unwrap_or(addr);
+    // Strip any path, then split host:port on the last ':' (IPv6-safe enough
+    // for our ws://ip:port form; bracketed IPv6 keeps its brackets as host).
+    let hostport = s.split('/').next().unwrap_or(s);
+    match hostport.rsplit_once(':') {
+        Some((host, _port)) => host.to_string(),
+        None => hostport.to_string(),
+    }
+}
+
 /// Attempt NAT traversal so a remote peer can reach our LAN listener:
 ///   1. UPnP/IGD — ask the router to port-map external:internal (TCP),
 ///      then advertise the router's public IP:external_port.
@@ -3156,6 +3218,9 @@ async fn run_listener(
     let bind_ip = local_addr.ip();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30 * 60)); // 30 minutes
+        // interval fires its first tick immediately; consume it so we don't
+        // re-register seconds after the initial registration above.
+        interval.tick().await;
         let mut last_registered_address = initial_address;
         loop {
             interval.tick().await;
@@ -3175,8 +3240,12 @@ async fn run_listener(
                 }
             };
 
-            // Only re-register if address actually changed
-            if current_addr != last_registered_address {
+            // Re-register only when the public HOST changes. Under symmetric NAT
+            // STUN hands back a fresh ephemeral port on every probe; that port is
+            // useless for inbound anyway, so treating a port-only delta as a
+            // "change" just burns PoW. Compare host (IP) only.
+            let host_changed = addr_host(&current_addr) != addr_host(&last_registered_address);
+            if host_changed {
                 tracing::info!("Address changed from {} to {}, re-registering...", last_registered_address, current_addr);
                 if let Err(e) = dht_register_addr_record_all(&identity_clone, &current_addr, 3600).await {
                     tracing::warn!("Failed to re-register address record after IP change: {}", e);
@@ -3185,8 +3254,9 @@ async fn run_listener(
                     last_registered_address = current_addr;
                 }
             } else {
-                // Address same, just refresh TTL (no PoW needed, just update)
-                if let Err(e) = dht_register_addr_record_all(&identity_clone, &current_addr, 3600).await {
+                // Host unchanged: refresh the record's TTL. Keep advertising the
+                // already-registered address (not the churned port).
+                if let Err(e) = dht_register_addr_record_all(&identity_clone, &last_registered_address, 3600).await {
                     tracing::warn!("Failed to refresh address record: {}", e);
                 } else {
                     tracing::debug!("Address record refreshed (no change): {}", identity_clone.null_id);
@@ -3505,6 +3575,7 @@ async fn handle_incoming_connection(
                 signature: receipt_sig,
                 timestamp: chrono::Utc::now().timestamp() as f64,
                 nonce: uuid_hex(),
+                recipient_verifying_key: my_verifying_key_b64()?,
                 other_relays: relay_urls.clone(),
             };
             for url in &relay_urls {
@@ -3679,6 +3750,27 @@ enum Commands {
     },
     /// Read messages
     Read,
+    /// Always-online echo mode: fetch incoming messages and send back exactly
+    /// the same text to the sender. Used by the Reflector Bot — reuses the
+    /// normal receive + send paths (no bespoke crypto).
+    Reflect {
+        /// Auto-destruct timer for the returned echo (e.g. 2h, 24h)
+        #[arg(long)]
+        ttl: Option<String>,
+        /// Poll interval in seconds between mailbox checks
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
+        /// Override relay servers to poll (repeatable). Defaults to discovered relays.
+        #[arg(long)]
+        relay: Option<Vec<String>>,
+    },
+    /// (TEMP DEBUG) one-shot relay fetch for self, print count + senders
+    RawFetch {
+        #[arg(long, default_value = "wss://relay-us.gnoppix.org/ws")]
+        relay: String,
+    },
+    /// (TEMP DEBUG) purge own mailbox on all relays
+    Purge,
     /// List contacts
     Contacts,
     /// Add a contact
@@ -3909,12 +4001,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Null ID:     {}", identity.null_id);
             println!("\nShare your Null ID with contacts to receive messages.");
 
-            // Add Reflector Bot as a default contact (for testing)
+            // Add Reflector Bot as a default contact (for testing).
+            // NOTE: the contact key MUST be the reflector's real Null ID
+            // (derive via compute_null_id of its fingerprint), because the
+            // reflector registers its DHT addr_record under that same key.
+            // A vanity label here would never resolve to an addr_record.
             let mut contacts = load_contacts();
-            if !contacts.contains_key("NN-B0T-REFL") {
-                contacts.insert("NN-B0T-REFL".to_string(), "3957378550B111F2678DC1B4A58C27B22091D5CF".to_string());
+            if !contacts.contains_key("NN-UFtv-8fHu") {
+                contacts.insert("NN-UFtv-8fHu".to_string(), "3957378550B111F2678DC1B4A58C27B22091D5CF".to_string());
                 save_contacts(&contacts)?;
-                println!("\nAdded Reflector Bot (NN-B0T-REFL) as ECHO contact for latency testing.");
+                println!("\nAdded Reflector Bot (NN-UFtv-8fHu) as ECHO contact for latency testing.");
             }
         }
         Commands::Id => {
@@ -4020,6 +4116,223 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  [{}] {} {} -> {}: {}", idx + 1, checkmark, msg.from_nid, msg.to_nid, preview);
                 }
                 println!("  (use 'add delete <position>' to delete a message)");
+            }
+        }
+        Commands::Reflect { ttl, interval, relay } => {
+            // Always-online echo mode (Reflector Bot). Reuses the normal
+            // receive + send paths — no bespoke crypto. For every message we
+            // receive, we send back exactly the same text to its sender.
+            let store = MessageStore::open().await?;
+            let identity = Identity::load()?;
+            let seed_url = discover_servers().await.0;
+            // Allow scoping the reflector to a specific relay set (e.g. a single
+            // healthy relay) for testing or to avoid broken peers.
+            let relay_urls: Vec<String> = relay.clone().unwrap_or_else(|| relay_urls.clone());
+            println!(
+                "Reflector echo mode active as {} (poll every {}s). Sending back whatever arrives.",
+                identity.null_id, interval
+            );
+
+            // Register our DHT addr-record so contacts see us ONLINE and direct
+            // P2P works for non-NAT peers. Advertise the host's primary IP.
+            let advertised = match primary_ipv4() {
+                Some(ip) => format!("ws://{}:8765", ip),
+                None => format!("ws://{}:8765", "0.0.0.0"),
+            };
+            if let Err(e) = dht_register_addr_record_all(&identity, &advertised, 3600).await {
+                tracing::warn!("initial DHT register failed: {}", e);
+            }
+            // Refresh the record every 30 min (no IP re-detection churn).
+            let identity_refresh = identity.clone();
+            let advertised_refresh = advertised.clone();
+            tokio::spawn(async move {
+                let mut interval_timer = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
+                interval_timer.tick().await; // consume immediate first tick
+                loop {
+                    interval_timer.tick().await;
+                    if let Err(e) =
+                        dht_register_addr_record_all(&identity_refresh, &advertised_refresh, 3600).await
+                    {
+                        tracing::warn!("DHT register refresh failed: {}", e);
+                    }
+                }
+            });
+
+            loop {
+                // G2: fetch from ALL relay mailboxes and decrypt.
+                let results = match relay_fetch_all(&relay_urls, &identity.null_id).await {
+                    Ok(r) => {
+                        if !r.is_empty() {
+                            tracing::info!("reflect fetch: {} message(s) retrieved", r.len());
+                        }
+                        r
+                    }
+                    Err(e) => {
+                        tracing::warn!("relay fetch failed: {}", e);
+                        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                        continue;
+                    }
+                };
+
+                if !results.is_empty() {
+                    let our_kyber = match load_or_generate_kyber(&identity.null_id, &store) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            tracing::warn!("kyber load failed: {}", e);
+                            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                            continue;
+                        }
+                    };
+                    let mut seen_hashes = std::collections::HashSet::new();
+                    let my_vk_b64 = my_verifying_key_b64()?;
+
+                    // Collect every fetched blob (whether we can decrypt it or not)
+                    // so we can ACK all of them at the end of the poll. Marking them
+                    // delivered (read-receipt) is what stops the reflector from
+                    // re-fetching + re-processing the same message forever — including
+                    // stale undecryptable cruft that has no kyber_ciphertext / session.
+                    let mut ack_blobs: Vec<String> = Vec::new();
+                    for (_source_url, signed_blob, entry_sender_nid, entry_sender_fp) in results {
+                        ack_blobs.push(signed_blob.clone());
+                        let decrypted = match relay_decrypt_message(
+                            &signed_blob,
+                            &entry_sender_nid,
+                            &entry_sender_fp,
+                            &identity.fingerprint,
+                            &store,
+                            &our_kyber,
+                        )
+                        .await
+                        {
+                            Ok(d) => d,
+                            Err(_) => continue, // undecryptable (e.g. stale cruft): skip echo, but still ACK below
+                        };
+                        // Deduplicate within this poll cycle.
+                        let msg_hash = sha256_hex(decrypted.as_bytes());
+                        if !seen_hashes.insert(msg_hash) {
+                            continue;
+                        }
+                        println!("echo -> {} : {}", entry_sender_nid, decrypted);
+                        // Force a fresh ratchet session for this recipient so the
+                        // bounce is always an independent first-message (Kyber-
+                        // encapsulated). This prevents ratchet desync when the same
+                        // peer is bounced repeatedly or at different fetch cadences.
+                        let _ = store.delete_session(&entry_sender_nid).await;
+                        // Send the echo back. Per architecture the reflector is always
+                        // online and the original sender is online, so we try a direct
+                        // P2P return first; only fall back to relay when the peer is
+                        // unreachable (offline / NAT with no hole punch).
+                        let echo_sent = if let Ok(()) = send_message(
+                            &identity,
+                            &entry_sender_nid,
+                            &decrypted,
+                            &store,
+                            true,
+                            &seed_url,
+                            &select_fastest_relay(&relay_urls).await.unwrap_or_default(),
+                            ttl.as_deref(),
+                        ).await {
+                            true
+                        } else {
+                            send_via_relay(
+                                &identity,
+                                &entry_sender_nid,
+                                &entry_sender_fp,
+                                &decrypted,
+                                &store,
+                                &select_fastest_relay(&relay_urls).await.unwrap_or_default(),
+                                ttl.as_deref(),
+                                true,
+                            ).await.is_ok()
+                        };
+                        if echo_sent {
+                            // ACK the source message on the relay (message_id == the
+                            // signed_blob we just echoed) so it is marked delivered and
+                            // will NOT be re-fetched on the next poll.
+                            let rts = chrono::Utc::now().timestamp() as f64;
+                            let rnonce = uuid_hex();
+                            if let Ok(rsig) = sign_for_transport(
+                                &format!("{}|{}|{}", signed_blob, identity.null_id, rts),
+                            ) {
+                                let receipt = RelayReadReceipt {
+                                    message_id: signed_blob.clone(),
+                                    recipient_nid: identity.null_id.clone(),
+                                    recipient_fp: identity.fingerprint.clone(),
+                                    signature: rsig,
+                                    timestamp: rts,
+                                    nonce: rnonce,
+                                    recipient_verifying_key: my_vk_b64.clone(),
+                                    other_relays: relay_urls.clone(),
+                                };
+                                let _ = send_read_receipt_to_relay(
+                                    &select_fastest_relay(&relay_urls).await.unwrap_or_default(),
+                                    &receipt,
+                                ).await;
+                            }
+                        }
+                    }
+                    // ACK every fetched message (delivered=1) so nothing is re-fetched.
+                    // This is the loop-stopper even for undecryptable stale entries.
+                    for blob in &ack_blobs {
+                        let rts = chrono::Utc::now().timestamp() as f64;
+                        let rnonce = uuid_hex();
+                        if let Ok(rsig) = sign_for_transport(
+                            &format!("{}|{}|{}", blob, identity.null_id, rts),
+                        ) {
+                            let receipt = RelayReadReceipt {
+                                message_id: blob.clone(),
+                                recipient_nid: identity.null_id.clone(),
+                                recipient_fp: identity.fingerprint.clone(),
+                                signature: rsig,
+                                timestamp: rts,
+                                nonce: rnonce,
+                                recipient_verifying_key: my_vk_b64.clone(),
+                                other_relays: relay_urls.clone(),
+                            };
+                            let _ = send_read_receipt_to_relay(
+                                &select_fastest_relay(&relay_urls).await.unwrap_or_default(),
+                                &receipt,
+                            ).await;
+                        }
+                    }
+                    // Purge delivered echoes from the mailbox so we don't loop.
+                    for url in &relay_urls {
+                        let _ = relay_purge(url, &identity.null_id).await;
+                    }
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+            }
+        }
+        Commands::RawFetch { relay } => {
+            let identity = Identity::load()?;
+            let _store = MessageStore::open().await?;
+            // Use the decrypting fetch path so we can confirm end-to-end
+            // decryption of relay-stored (kyber_ciphertext) echoes.
+            let mut all = relay_fetch_all(&relay_urls, &identity.null_id).await?;
+            if !relay_urls.iter().any(|u| u == &relay) {
+                match relay_fetch_all(&[relay.clone()], &identity.null_id).await {
+                    Ok(mut more) => all.append(&mut more),
+                    Err(e) => println!("  (relay {} error: {})", relay, e),
+                }
+            }
+            println!("RAWFETCH count={}", all.len());
+            let store = MessageStore::open().await?;
+            let our_kyber = load_or_generate_kyber(&identity.null_id, &store)?;
+            for (i, (src, blob, snd, sfp)) in all.iter().enumerate() {
+                match relay_decrypt_message(blob, snd, sfp, &identity.fingerprint, &store, &our_kyber).await {
+                    Ok(plaintext) => println!("  [{}] from {}: {}", i, snd, plaintext),
+                    Err(e) => println!("  [{}] from {}: <decrypt-failed: {}> blob={}", i, snd, e, blob),
+                }
+            }
+        }
+        Commands::Purge => {
+            let identity = Identity::load()?;
+            for r in &relay_urls {
+                match relay_purge(r, &identity.null_id).await {
+                    Ok(()) => println!("purged {}", r),
+                    Err(e) => println!("purge failed {}: {}", r, e),
+                }
             }
         }
         Commands::Contacts => {
