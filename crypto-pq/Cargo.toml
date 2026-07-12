@@ -16,10 +16,6 @@ hex = "0.4"
 sha2 = "0.10"
 add-crypto = { path = "../crypto" }
 
-[[bin]]
-name = "gen_ml_dsa87_key"
-path = "examples/gen_ml_dsa87_key.rs"
-
 [features]
 default = ["std"]
 std = []

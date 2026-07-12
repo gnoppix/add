@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------ #
-#  Eva P2P Messenger — Build System                             #
+#  Add Messenger — Build System                                      #
 #  Date: 2002-2026 by Gnoppix Linux                                  #
 #  Author: Andreas Mueller                                           #
 #  Licence: Business Source License (BSL / BUSL)                     #
@@ -8,14 +8,17 @@
 # ------------------------------------------------------------------ #
 
 # ---- Configuration ----
-CARGO      ?= cargo
+# Cargo wrapper: drop cargo's future-incompat advisory for 3rd-party
+# build-only deps (age -> proc-macro-error2). Real errors/warnings pass
+# through and the cargo exit code is preserved.
+CARGO      ?= bash -c 'exec 2> >(grep -vE "future version of Rust|future-incompat-report" >&2); exec cargo "$$@"' bash
 BUILD_MODE  ?= release
 TARGET_DIR  := target/$(BUILD_MODE)
 
 # Binary names
-BIN_CLIENT   := eva
-BIN_RELAY    := eva-relay
-BIN_BOOTSTRAP := eva-bootstrap
+BIN_CLIENT   := add
+BIN_RELAY    := add-relay
+BIN_BOOTSTRAP := add-bootstrap
 
 # Source directories
 SRC_DIR      := src
@@ -40,22 +43,22 @@ RUSTFLAGS   ?=
 ## Build all binaries (release)
 all: client relay bootstrap
 
-## Build client binary (eva)
+## Build client binary (add)
 client:
-	@echo "Building eva client ($(BUILD_MODE))..."
-	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --package eva-client --$(BUILD_MODE)
+	@echo "Building add client ($(BUILD_MODE))..."
+	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --package add-client --$(BUILD_MODE)
 	@echo "  -> $(TARGET_DIR)/$(BIN_CLIENT)"
 
-## Build relay binary (eva-relay)
+## Build relay binary (add-relay)
 relay:
-	@echo "Building eva relay ($(BUILD_MODE))..."
-	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --package eva-relay --$(BUILD_MODE)
+	@echo "Building add relay ($(BUILD_MODE))..."
+	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --package add-relay --$(BUILD_MODE)
 	@echo "  -> $(TARGET_DIR)/$(BIN_RELAY)"
 
-## Build bootstrap binary (eva-bootstrap)
+## Build bootstrap binary (add-bootstrap)
 bootstrap:
-	@echo "Building eva bootstrap ($(BUILD_MODE))..."
-	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --package eva-bootstrap --$(BUILD_MODE)
+	@echo "Building add bootstrap ($(BUILD_MODE))..."
+	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --package add-bootstrap --$(BUILD_MODE)
 	@echo "  -> $(TARGET_DIR)/$(BIN_BOOTSTRAP)"
 
 ## Build all in debug mode
@@ -89,22 +92,22 @@ test:
 
 ## Run tests for a specific package
 test-client:
-	$(CARGO) test --package eva-client
+	$(CARGO) test --package add-client
 
 test-relay:
-	$(CARGO) test --package eva-relay
+	$(CARGO) test --package add-relay
 
 test-p2p:
-	$(CARGO) test --package eva-p2p
+	$(CARGO) test --package add-p2p
 
 test-dht:
-	$(CARGO) test --package eva-dht-core
+	$(CARGO) test --package add-dht-core
 
 test-crypto:
-	$(CARGO) test --package eva-crypto
+	$(CARGO) test --package add-crypto
 
 test-protocol:
-	$(CARGO) test --package eva-protocol
+	$(CARGO) test --package add-protocol
 
 ## Check compilation (fast, no code generation)
 check:
@@ -138,8 +141,8 @@ docs:
 man:
 	@echo "Building man pages..."
 	@mkdir -p $(DOC_DIR)
-	$(CARGO) run --package eva-client -- --help > $(DOC_DIR)/eva.1 2>/dev/null || true
-	@echo "  -> $(DOC_DIR)/eva.1"
+	$(CARGO) run --package add-client -- --help > $(DOC_DIR)/add.1 2>/dev/null || true
+	@echo "  -> $(DOC_DIR)/add.1"
 
 ## Clean build artifacts
 clean:
@@ -149,7 +152,7 @@ clean:
 
 ## Show build info
 info:
-	@echo "Eva P2P Messenger"
+	@echo "Add Messenger"
 	@echo "  Version:   $(VERSION)"
 	@echo "  Git hash:  $(GIT_HASH)"
 	@echo "  Build:     $(BUILD_DATE)"
@@ -158,40 +161,40 @@ info:
 
 ## Build Debian package (relay)
 deb-relay: relay
-	@echo "Building eva-relay Debian package..."
-	$(CARGO) deb --package eva-relay --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
-	@echo "  -> $(TARGET_DIR)/eva-relay_*.deb"
+	@echo "Building add-relay Debian package..."
+	$(CARGO) deb --package add-relay --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
+	@echo "  -> $(TARGET_DIR)/add-relay_*.deb"
 
 ## Build Debian package (bootstrap)
 deb-bootstrap: bootstrap
-	@echo "Building eva-bootstrap Debian package..."
-	$(CARGO) deb --package eva-bootstrap --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
-	@echo "  -> $(TARGET_DIR)/eva-bootstrap_*.deb"
+	@echo "Building add-bootstrap Debian package..."
+	$(CARGO) deb --package add-bootstrap --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
+	@echo "  -> $(TARGET_DIR)/add-bootstrap_*.deb"
 
 ## Build Debian package
 deb: client
-	@echo "Building eva Debian package..."
-	$(CARGO) deb --package eva-client --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
-	@echo "  -> $(TARGET_DIR)/eva_*.deb"
+	@echo "Building add Debian package..."
+	$(CARGO) deb --package add-client --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
+	@echo "  -> $(TARGET_DIR)/add_*.deb"
 
 ## Build static binary (musl target required)
 static:
 	@echo "Building static binary (musl)..."
-	$(CARGO) build --package eva-client --$(BUILD_MODE) --target x86_64-unknown-linux-musl
+	$(CARGO) build --package add-client --$(BUILD_MODE) --target x86_64-unknown-linux-musl
 	@echo "  -> target/x86_64-unknown-linux-musl/$(BUILD_MODE)/$(BIN_CLIENT)"
 
 ## Build Docker image
 docker:
-	@echo "Building Docker image eva:latest..."
-	docker build -t eva:latest .
-	@echo "  -> eva:latest"
+	@echo "Building Docker image add:latest..."
+	docker build -t add:latest .
+	@echo "  -> add:latest"
 
 # Debian package for desktop (Electron)
 deb-desktop:
 	@echo "Building desktop Debian package..."
 	cd desktop-ui && npm run build
 	cd desktop-ui && npm run build:electron
-	@echo "  -> desktop-ui/dist-electron/eva-desktop_*.deb"
+	@echo "  -> desktop-ui/dist-electron/add-desktop_*.deb"
 
 ## Build all Debian packages
 deb-all: client deb-relay deb-bootstrap deb-desktop
@@ -199,15 +202,15 @@ deb-all: client deb-relay deb-bootstrap deb-desktop
 
 ## Show this help
 help:
-	@echo "Eva P2P Messenger — Build System"
+	@echo "Add Messenger — Build System"
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  all          Build all binaries (default: release)"
-	@echo "  client       Build eva client binary"
-	@echo "  relay        Build eva relay binary"
-	@echo "  bootstrap    Build eva bootstrap server binary"
+	@echo "  client       Build add client binary"
+	@echo "  relay        Build add relay binary"
+	@echo "  bootstrap    Build add bootstrap server binary"
 	@echo "  debug        Build in debug mode"
 	@echo "  release      Build in release mode (optimized)"
 	@echo "  static       Build static binary (requires musl target)"
@@ -224,15 +227,15 @@ help:
 	@echo "Install targets:"
 	@echo "  install      Install binaries to $(PREFIX)/bin"
 	@echo "  uninstall    Remove installed binaries"
-	@echo "  deb          Build eva Debian package"
-	@echo "  deb-all      Build all Debian packages (eva, eva-relay, eva-bootstrap, eva-desktop)"
+	@echo "  deb          Build add Debian package"
+	@echo "  deb-all      Build all Debian packages (add, add-relay, add-bootstrap, add-desktop)"
 	@echo "  deb-desktop  Build desktop Electron .deb"
 	@echo ""
-	Utility targets:
-	  clean        Remove build artifacts
-	  info         Show build metadata
-	  docker       Build Docker image
-	  help         Show this help
+	@echo "Utility targets:"
+	@echo "  clean        Remove build artifacts"
+	@echo "  info         Show build metadata"
+	@echo "  docker       Build Docker image"
+	@echo "  help         Show this help"
 	@echo ""
 	@echo "Variables:"
 	@echo "  BUILD_MODE=release|debug   (default: release)"
