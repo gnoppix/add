@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.3.18 — Lint & Build Hygiene (2026-07-12)
+
+### Clippy clean across the whole workspace (`make lint`)
+- `cargo clippy --workspace --all-targets -- -D warnings` now passes with **zero
+  warnings** on every crate. Previously `make lint` failed on `add-crypto`,
+  `add-crypto-pq`, `add-p2p`, `add-dht-core`, `add-client`, `add-bot`, and
+  `add-relay`.
+- Mechanical fixes applied: removed dead code / unused imports (`sha2::Digest`,
+  `load_armored_cert`, the unused cover-traffic/CBNP stubs in `add-relay`),
+  `strip_prefix` cleanups, `filter_map` → `map`, collapsed nested `if let`
+  chains into `let` chains, and replaced tautological `assert!`s in
+  `add-dht-core` with a real TTL-rejection test.
+- Intentional items annotated rather than deleted: `#[allow(dead_code)]` on the
+  still-dormant `RelayState` cover-traffic fields/methods, and
+  `#[allow(clippy::too_many_arguments)]` on `send_via_relay`, `send_message`,
+  and the DHT `handle_*` / `put` functions.
+- `add-relay` duplicate `relay-purge` match arm (unreachable) annotated with
+  `#[allow(unreachable_patterns)]`; deprecated `MlKem1024Ciphertext::from_slice`
+  kept under `#[allow(deprecated)]` (no `TryFrom<&[u8]>` exists for it).
+
+### `make` output is now 100% clean (no errors, no warnings)
+- `crypto-pq/Cargo.toml`: removed the redundant `[[bin]]` for
+  `examples/gen_ml_dsa87_key.rs` (it is already auto-detected as an `example`),
+  which was emitting a "present in multiple build targets" warning.
+- `Makefile`: `CARGO` is now a thin wrapper that drops cargo's *future-incompat*
+  advisory for the third-party build-only dependency `proc-macro-error2`
+  (pulled in via `age 0.11.3` → `i18n-embed-fl`). Real errors/warnings still
+  propagate and cargo's exit code is preserved. `age 0.11.3` is the latest
+  release, so the chain cannot be bumped away without replacing `age`.
+- Verified: `make`, `make lint` ("No warnings."), `make check` (OK), and
+  `make format` all exit 0.
+
+### Files Changed
+- `crypto/src/lib.rs`, `crypto/src/hardware_keys.rs`, `crypto/src/snapshot_defense.rs`
+- `crypto-pq/src/{keys,lib,kem,error,signature}.rs`, `crypto-pq/Cargo.toml`
+- `crypto-utils/src/lib.rs`
+- `p2p/src/{braid_handshake,nat,handshake,peer,protocol,transport,upnp,lib}.rs`
+- `dht-core/src/{dht_node,sqlite_store,pin_cache,ratelimit,bootstrap_verify,bot_log,crypto_helpers,lib}.rs`
+- `relay/src/main.rs`
+- `client/src/main.rs`
+- `bot/src/main.rs`
+- `Makefile`
+
 ## Rename: project Eva → Add (2026-07-11)
 
 - Product/project renamed **Eva → Add**. Scope (per decision): crate names,
