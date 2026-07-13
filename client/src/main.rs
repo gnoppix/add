@@ -1833,14 +1833,10 @@ async fn dht_register_addr_record(
         .await
         .map_err(|e| format!("DHT connect failed: {}", e))?;
 
-    // Create address record key: "addr:{null_id}"
-    let addr_key = format!("addr:{}", identity.null_id);
-    let value_b64 = base64::engine::general_purpose::STANDARD.encode(address.as_bytes());
-
-    // Solve PoW for addr-record (difficulty 12)
-    let salt = uuid_hex();
-    let seq = chrono::Utc::now().timestamp();
-    let pow_data = format!("{}|{}|{}|{}", addr_key, value_b64, salt, seq);
+    // Solve PoW for addr-record
+    // Server expects: {null_id}|{address}|{ttl}
+    let ttl = 3600i64;
+    let pow_data = format!("{}|{}|{}", identity.null_id, address, ttl);
     // Owned copy of the per-node secret for the spawned blocking task
     // (spawn_blocking requires 'static; `identity` is only borrowed here).
     let publisher_fp_secret = identity.fingerprint.clone();
@@ -1873,7 +1869,9 @@ async fn dht_register_addr_record(
     };
 
     // Sign the put request with ML-DSA-87
-    let sign_data = format!("{}|{}|{}|{}|{}", addr_key, value_b64, salt, seq, pow_nonce);
+    // Server expects: {null_id}|{address}|{ttl}
+    let ttl = add_protocol::constants::ADDR_TTL;
+    let sign_data = format!("{}|{}|{}", identity.null_id, address, ttl);
     let sig = sign_for_transport(&sign_data)?;
 
     // Include ML-DSA-87 verifying key in the payload for the DHT to verify
@@ -1891,23 +1889,18 @@ async fn dht_register_addr_record(
     };
 
     let req = WireEnvelope {
-        msg_type: "dht-put".to_string(),
+        msg_type: "dht-addr-record".to_string(),
         msg_id: uuid_hex(),
         ts: chrono::Utc::now().timestamp() as f64,
         sig,
         payload: {
             let mut m = serde_json::Map::new();
             m.insert(
-                "key".to_string(),
-                serde_json::Value::String(addr_key.clone()),
+                "null_id".to_string(),
+                serde_json::Value::String(identity.null_id.clone()),
             );
-            m.insert("value".to_string(), serde_json::Value::String(value_b64));
-            m.insert("salt".to_string(), serde_json::Value::String(salt));
-            m.insert("seq".to_string(), serde_json::Value::Number(seq.into()));
-            m.insert(
-                "nonce".to_string(),
-                serde_json::Value::Number(pow_nonce.into()),
-            );
+            m.insert("address".to_string(), serde_json::Value::String(address.to_string()));
+            m.insert("ttl".to_string(), serde_json::Value::Number(3600.into()));
             m.insert(
                 "publisher_fp".to_string(),
                 serde_json::Value::String(identity.fingerprint.clone()),
@@ -1916,6 +1909,7 @@ async fn dht_register_addr_record(
                 "publisher_verifying_key".to_string(),
                 serde_json::Value::String(vk_b64),
             );
+            m.insert("nonce".to_string(), serde_json::Value::Number(pow_nonce.into()));
             serde_json::Value::Object(m)
         },
     };
