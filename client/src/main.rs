@@ -1919,7 +1919,7 @@ async fn dht_register_addr_record(
                 serde_json::Value::String(identity.null_id.clone()),
             );
             m.insert("address".to_string(), serde_json::Value::String(address.to_string()));
-            m.insert("ttl".to_string(), serde_json::Value::Number(3600.into()));
+            m.insert("ttl".to_string(), serde_json::json!(add_protocol::constants::ADDR_TTL));
             m.insert(
                 "publisher_fp".to_string(),
                 serde_json::Value::String(identity.fingerprint.clone()),
