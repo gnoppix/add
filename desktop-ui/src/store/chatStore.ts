@@ -99,7 +99,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     get().persist()
   },
 
-  addMessage: (conversationId, message) =>
+  addMessage: (conversationId, message) => {
     set((state) => {
       const existingMessages = state.messages[conversationId] || []
       return {
@@ -113,7 +113,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             : conv
         ),
       }
-    }),
+    })
+    get().persist()
+  },
 
   updateMessageStatus: (conversationId, messageId, status) =>
     set((state) => ({
@@ -376,15 +378,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     try {
       const result = await api.send(activeConversationId, content, ttl)
-      updateMessageStatus(activeConversationId, message.id, 'sent')
-      // Reflector / loopback peers bounce the message back as an "Echo: ..." line.
-      // Surface it as an incoming message in this conversation.
       if (typeof result === 'string') {
         const m = result.match(/^Echo: (.*)$/m)
         if (m) {
           get().addIncomingMessage(activeConversationId, m[1])
         }
       }
+      updateMessageStatus(activeConversationId, message.id, 'sent')
     } catch (error) {
       console.error('Failed to send message:', error)
       updateMessageStatus(activeConversationId, message.id, 'error')
