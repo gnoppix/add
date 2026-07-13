@@ -558,6 +558,70 @@ fn decrypt_cert_armored(
     String::from_utf8(plaintext).map_err(|e| format!("decrypted cert utf8: {}", e).into())
 }
 
+/// Change the passphrase protecting the GPG secret key (own_cert.age)
+/// Decrypts with old passphrase, re-encrypts with new passphrase.
+/// If encrypt=true and only plaintext exists, encrypt it without prompting for old password.
+fn change_passphrase(encrypt_plaintext: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let cert_dir = home_dir().join(GPG_HOME);
+    let enc_path = cert_dir.join("own_cert.age");
+    let plain_path = cert_dir.join("own_cert.asc");
+
+    // If --encrypt flag and plaintext cert exists, encrypt it without old password
+    if encrypt_plaintext && plain_path.exists() {
+        let armored = std::fs::read_to_string(&plain_path)?;
+        println!("Enter passphrase to encrypt with (empty to cancel):");
+        let new_pass = rpassword::read_password().unwrap_or_default();
+        if new_pass.is_empty() {
+            return Ok(());
+        }
+        let encrypted = encrypt_cert_armored(&armored, &new_pass)?;
+        std::fs::write(&enc_path, &encrypted)?;
+        std::fs::remove_file(&plain_path)?;
+        return Ok(());
+    }
+
+    // Normal flow: decrypt + re-encrypt
+    if !enc_path.exists() {
+        return Err("No encrypted cert found (run 'add init' with a passphrase to create one)".into());
+    }
+
+    // Prompt for current passphrase
+    let old_pass = prompt_passphrase()?;
+    if old_pass.is_empty() {
+        return Err("Current passphrase cannot be empty for encrypted cert".into());
+    }
+
+    // Load and decrypt existing cert
+    let armored = std::fs::read_to_string(&enc_path)?;
+    let cert_armored = decrypt_cert_armored(&armored, &old_pass)?;
+
+    // Prompt for new passphrase (twice to confirm)
+    println!("Enter new passphrase (empty for no encryption):");
+    let new_pass = rpassword::read_password().unwrap_or_default();
+    println!("Confirm new passphrase:");
+    let confirm_pass = rpassword::read_password().unwrap_or_default();
+
+    if new_pass != confirm_pass {
+        return Err("Passphrases do not match".into());
+    }
+
+    if new_pass.is_empty() {
+        // Save as plaintext, remove encrypted version
+        std::fs::write(&plain_path, &cert_armored)?;
+        std::fs::remove_file(&enc_path)?;
+        println!("Cert saved as plaintext (not encrypted)");
+    } else {
+        // Re-encrypt with new passphrase
+        let encrypted = encrypt_cert_armored(&cert_armored, &new_pass)?;
+        std::fs::write(&enc_path, &encrypted)?;
+        // Remove plaintext if it exists
+        let _ = std::fs::remove_file(&plain_path);
+    }
+
+    println!("Passphrase changed successfully");
+    Ok(())
+}
+
 /// Sign data with our ML-DSA-87 key for P2P/relay authentication.
 fn sign_for_transport(data: &str) -> Result<String, String> {
     let identity = Identity::load().map_err(|e| format!("Failed to load identity: {}", e))?;
@@ -4331,6 +4395,12 @@ enum Commands {
         /// Position number of message to delete (1 = first/newest in list)
         id: i64,
     },
+    /// Change or set the passphrase protecting your GPG secret key
+    Passwd {
+        /// Encrypt a plaintext cert (run without password to create new encrypted cert)
+        #[arg(long)]
+        encrypt: bool,
+    },
 }
 
 #[tokio::main]
@@ -5254,6 +5324,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     true => println!("Message {} (ID {}) deleted.", pos, msg_id),
                     false => println!("No message found with ID {}.", msg_id),
                 }
+            }
+        }
+        Commands::Passwd { encrypt } => {
+            match change_passphrase(encrypt) {
+                Ok(()) => println!("Passphrase changed successfully."),
+                Err(e) => eprintln!("Failed to change passphrase: {}", e),
             }
         }
     }
