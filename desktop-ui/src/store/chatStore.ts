@@ -319,17 +319,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (!api) return
 
     try {
-      const contacts = await api.contacts()
+      const [contacts, aliases] = await Promise.all([api.contacts(), api.aliases()])
       const { addConversation } = get()
       
-      // Add Reflector Bot as default contact for testing
+      // Build alias map for display names
+      const aliasMap = new Map(aliases.map(a => [a.nullId, a.alias]))
+      
+      // Add Reflector Bot as default contact (ensures NN-UFtv-8fHu exists)
       const reflectorBot = {
         nullId: 'NN-UFtv-8fHu',
         fingerprint: '3957378550B111F2678DC1B4A58C27B22091D5CF',
-        alias: '🤖 Reflector Bot'
       }
       
-      // Add reflector if not already in contacts
+      // Merge contacts with reflector, using aliases for display names
       const allContacts = contacts.find(c => c.nullId === reflectorBot.nullId) 
         ? contacts 
         : [...contacts, reflectorBot]
@@ -337,7 +339,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       allContacts.forEach((contact) =>
         addConversation({
           id: contact.nullId,
-          name: contact.alias || contact.nullId,
+          name: aliasMap.get(contact.nullId) || contact.nullId,
           avatarUrl: `https://i.pravatar.cc/150?u=${contact.nullId}`,
           lastMessage: '',
           lastMessageTimestamp: new Date(),
