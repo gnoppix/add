@@ -10,12 +10,11 @@
  *-------------------------------------------------------------------------------
  */
 
-/** Sidebar Header with profile avatar, compose button, and settings */
 import { useState, useEffect } from 'react'
 import { useChatStore } from '../../store/chatStore'
 import ThemeToggle from './ThemeToggle'
 import ProfileAvatar from './ProfileAvatar'
-import { generateIdenticon } from '../../lib/identicon'
+import { generateInitialsAvatar } from '../../lib/identicon'
 
 interface AddContactForm {
   nullId: string
@@ -183,7 +182,7 @@ function SidebarHeader() {
         id: contactForm.nullId,
         name: contactForm.alias || contactForm.nullId,
         fingerprint: contactForm.fingerprint,
-        avatarUrl: generateIdenticon(contactForm.nullId),
+        avatarUrl: generateInitialsAvatar(contactForm.nullId),
         lastMessage: '',
         lastMessageTimestamp: new Date(),
         unreadCount: 0,
