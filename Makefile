@@ -11,7 +11,7 @@
 # Cargo wrapper: drop cargo's future-incompat advisory for 3rd-party
 # build-only deps (age -> proc-macro-error2). Real errors/warnings pass
 # through and the cargo exit code is preserved.
-CARGO      ?= bash -c 'exec 2> >(grep -vE "future version of Rust|future-incompat-report" >&2); exec cargo "$$@"' bash
+CARGO      ?= bash -c 'exec 2> >(grep -vE "future version of Rust|future-incompat-report|proc-macro-error" >&2); exec cargo "$$@"' bash
 BUILD_MODE  ?= release
 TARGET_DIR  := target/$(BUILD_MODE)
 

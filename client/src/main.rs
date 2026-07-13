@@ -3389,9 +3389,6 @@ async fn send_message(
     // Wait for ack (and optionally, p2p-receipt)
     let mut ack_received = false;
     let mut receipt_received = false;
-    // Capture an echoed message (e.g. from a reflector / loopback peer) so it
-    // can be displayed and returned to the caller (desktop UI).
-    let mut echoed_text: Option<String> = None;
 
     loop {
         let msg = tokio::time::timeout(std::time::Duration::from_secs(10), ws.next()).await;
@@ -3477,7 +3474,6 @@ async fn send_message(
                         stripped.to_string()
                     };
                     println!("Echo: {}", text);
-                    echoed_text = Some(text);
                 }
 
                 if ack_received && receipt_received {
