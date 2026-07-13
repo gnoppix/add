@@ -1853,8 +1853,8 @@ async fn dht_register_addr_record(
         .map_err(|e| format!("DHT connect failed: {}", e))?;
 
     // Solve PoW for addr-record
-    // Server expects: {null_id}|{address}|{ttl}
-    let ttl = 3600i64;
+    // Server expects: {null_id}|{address}|{ttl} (PoW uses same format for verification)
+    let ttl = add_protocol::constants::ADDR_TTL;
     let pow_data = format!("{}|{}|{}", identity.null_id, address, ttl);
     // Owned copy of the per-node secret for the spawned blocking task
     // (spawn_blocking requires 'static; `identity` is only borrowed here).
