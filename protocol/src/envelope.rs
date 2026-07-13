@@ -71,6 +71,36 @@ pub struct WireEnvelope {
     pub sig: String,
 }
 
+/// SECURITY FIX (L1): Per-message-type domain-separation context string used
+/// when signing/verifying a `WireEnvelope`. Prefixing the signed data with a
+/// type-specific tag prevents cross-type signature replay (e.g. a `dht-put`
+/// signature being replayed as a `dht-get`). Unknown types get a safe,
+/// explicit "unknown" tag rather than an empty string, so they still cannot
+/// collide with any known type.
+pub fn signing_context(msg_type: &str) -> &'static str {
+    match msg_type {
+        "dht-put" => "add-dht-put-v1",
+        "dht-get" => "add-dht-get-v1",
+        "dht-found" => "add-dht-found-v1",
+        "dht-error" => "add-dht-error-v1",
+        "dht-addr-record" => "add-dht-addr-record-v1",
+        "p2p-hello" => "add-p2p-hello-v1",
+        "p2p-hello-ack" => "add-p2p-hello-ack-v1",
+        "relay-store" => "add-relay-store-v1",
+        "relay-fetch" => "add-relay-fetch-v1",
+        "relay-ack" => "add-relay-ack-v1",
+        "relay-delete" => "add-relay-delete-v1",
+        "relay-purge" => "add-relay-purge-v1",
+        "relay-read-receipt" => "add-relay-read-receipt-v1",
+        "route-advertise" => "add-fed-route-advertise-v1",
+        "peer-auth" => "add-fed-peer-auth-v1",
+        "peer-auth-reply" => "add-fed-peer-auth-reply-v1",
+        "relay-forward" => "add-fed-relay-forward-v1",
+        "relay-forward-ack" => "add-fed-relay-forward-ack-v1",
+        _ => "add-unknown-v1",
+    }
+}
+
 impl WireEnvelope {
     /// Serialize to JSON string.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -99,13 +129,21 @@ impl WireEnvelope {
 
     /// Compute the canonical signing data for this envelope.
     ///
-    /// SECURITY FIX (C3): The signature covers msg_type + payload + msg_id + ts,
-    /// preventing an attacker from modifying any routing or security-relevant
-    /// field without invalidating the signature.
+    /// SECURITY FIX (L1): A fixed, versioned context tag is prepended per
+    /// message type so that a signature over one message type cannot be
+    /// cross-replayed as a different type even if the payloads collide.
+    /// (Previously the signature covered only `msg_type|payload|msg_id|ts`,
+    /// where two different types with identical payloads would yield the same
+    /// signed string.) The tag is stable across sign+verify, so this is a
+    /// strict hardening with no wire-format change for legitimate peers.
     pub fn signing_data(&self) -> String {
         format!(
-            "{}|{}|{}|{}",
-            self.msg_type, self.payload, self.msg_id, self.ts
+            "{}|{}|{}|{}|{}",
+            signing_context(&self.msg_type),
+            self.msg_type,
+            self.payload,
+            self.msg_id,
+            self.ts
         )
     }
 

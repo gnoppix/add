@@ -1705,7 +1705,15 @@ async fn handle_message(
             Ok(())
         }
         // --- Federation message handlers ---
+        // SECURITY FIX (L4): federation is only active when a shared secret is
+        // configured. Without it, federation auth (HMAC peer auth) is not wired,
+        // so cross-relay trust is single-relay. Ignore federation traffic
+        // silently when disabled to avoid advertising the surface as live and to
+        // prevent unauthenticated peers from injecting routing-table entries.
         "route-advertise" => {
+            if state.federation.read().await.shared_secret.is_none() {
+                return Ok(());
+            }
             let adv: RouteAdvertise = serde_json::from_value(env.payload.clone())
                 .map_err(|e| format!("invalid route-advertise: {}", e))?;
             let peer_url = env.payload["relay_url"].as_str().unwrap_or("").to_string();
@@ -1834,6 +1842,9 @@ async fn handle_message(
             Ok(())
         }
         "peer-auth" => {
+            if state.federation.read().await.shared_secret.is_none() {
+                return Ok(());
+            }
             let auth: PeerAuth = serde_json::from_value(env.payload.clone())
                 .map_err(|e| format!("invalid peer-auth: {}", e))?;
             let mut fed = state.federation.write().await;
@@ -1874,6 +1885,9 @@ async fn handle_message(
             Ok(())
         }
         "peer-auth-reply" => {
+            if state.federation.read().await.shared_secret.is_none() {
+                return Ok(());
+            }
             let reply: PeerAuthReply = serde_json::from_value(env.payload.clone())
                 .map_err(|e| format!("invalid peer-auth-reply: {}", e))?;
             let mut fed = state.federation.write().await;
@@ -1902,6 +1916,11 @@ async fn handle_message(
             Ok(())
         }
         "relay-forward" => {
+            // SECURITY FIX (L4): federation is only active when a shared secret
+            // is configured; ignore transit forwarding otherwise.
+            if state.federation.read().await.shared_secret.is_none() {
+                return Ok(());
+            }
             // ACS2.6 Part II.1: Edge-core mode — reject transit forwarding
             // if this relay is not configured as a core node.
             if !state.allow_relay {

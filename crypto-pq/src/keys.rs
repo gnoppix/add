@@ -53,12 +53,17 @@ impl MlDsa87KeyPair {
         Ok(Self { sk, vk })
     }
 
-    pub fn signing_key(&self) -> &MlDsaSigningKey<MlDsa87> {
-        &self.sk
+    pub fn signing_key(&self) -> MlDsaSigningKey<MlDsa87> {
+        self.sk.clone()
     }
 
-    pub fn verifying_key(&self) -> &MlDsaVerifyingKey<MlDsa87> {
-        &self.vk
+    pub fn verifying_key(&self) -> MlDsaVerifyingKey<MlDsa87> {
+        self.vk.clone()
+    }
+
+    /// Export the seed used to derive this signing key (for persistent storage)
+    pub fn to_seed(&self) -> [u8; 32] {
+        self.sk.to_seed().into()
     }
 
     pub fn to_bytes(&self) -> ([u8; 32], Vec<u8>) {

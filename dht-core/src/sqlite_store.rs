@@ -16,6 +16,12 @@ use crate::DhtResult;
 /// Default value for max encrypted blob size.
 const MAX_VALUE_SIZE: usize = 4096;
 
+/// Retention window for the DHT nonce-replay log (seconds). Entries older than
+/// this are pruned by the background task (SECURITY FIX L5). 7 days keeps a
+/// wide-enough window for legitimate replay detection across restarts without
+/// unbounded SQLite growth.
+pub const NONCE_RETENTION_SECS: u64 = 7 * 24 * 3600;
+
 /// A single DHT key-value record.
 #[derive(Debug, Clone)]
 pub struct KvRecord {

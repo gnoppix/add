@@ -27,8 +27,8 @@ use add_protocol::pow::pow_check;
 use crate::DhtResult;
 use crate::bot_log::BotLogger;
 use crate::crypto_helpers::{
-    compute_null_id, validate_fingerprint, validate_null_id, verify_signature,
-    verify_signature_with_verifying_key,
+    compute_null_id, constant_time_compare, validate_fingerprint, validate_null_id,
+    verify_signature, verify_signature_with_verifying_key,
 };
 use crate::ratelimit::RateLimiter;
 use crate::sqlite_store::DhtStore;
@@ -205,6 +205,26 @@ impl DhtNodeRuntime {
                     }
                     // Remove keys with empty sets
                     nonces.retain(|_, set| !set.is_empty());
+                }
+            });
+        }
+
+        // SECURITY FIX (L5): Ensure the DHT nonce log is actually pruned.
+        // `prune_old_nonces` exists but was only exercised in tests; without a
+        // running task the SQLite nonce table grows without bound and replay
+        // protection degrades. This background task prunes nonces older than the
+        // retention window every 10 minutes.
+        {
+            let prune_store = store.clone();
+            tokio::spawn(async move {
+                let interval = std::time::Duration::from_secs(600);
+                loop {
+                    tokio::time::sleep(interval).await;
+                    let cutoff = chrono::Utc::now().timestamp()
+                        - crate::sqlite_store::NONCE_RETENTION_SECS as i64;
+                    if let Err(e) = prune_store.prune_old_nonces(cutoff).await {
+                        tracing::warn!("DHT nonce prune failed: {}", e);
+                    }
                 }
             });
         }
@@ -943,8 +963,7 @@ fn verify_dht_put_signature(
     publisher_fp: &str,
     env: &WireEnvelope,
 ) -> bool {
-    // Try verifying key-based verification first (preferred path)
-    // Try verifying key-based verification first (preferred path)
+    // Prefer verifying-key-based verification (C3-style pin binding).
     if let Some(vk_b64) = env.payload_str("publisher_verifying_key") {
         let vk_bytes = match base64::engine::general_purpose::STANDARD.decode(vk_b64) {
             Ok(bytes) => bytes,
@@ -956,6 +975,15 @@ fn verify_dht_put_signature(
             Ok(vk) => vk,
             Err(_) => return false,
         };
+        // SECURITY FIX (L2): the verifying key was self-asserted in the
+        // envelope. Bind it to the publisher fingerprint (TOFU pin) the same
+        // way C3 binds bootstrap certs: the VK must derive to `publisher_fp`.
+        // Without this an attacker who controls the envelope could assert an
+        // arbitrary VK and sign with it, defeating the publisher_fp check.
+        let derived_fp = add_crypto_pq::fingerprint_from_verifying_key(&vk);
+        if !constant_time_compare(&derived_fp, publisher_fp) {
+            return false;
+        }
         return verify_signature_with_verifying_key(sign_data, sig, &vk);
     }
     verify_signature(sign_data, sig, publisher_fp)

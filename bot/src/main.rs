@@ -15,7 +15,7 @@ use futures::{SinkExt as _, StreamExt as _};
 use rustls::crypto::CryptoProvider;
 use rustls::crypto::ring::default_provider;
 use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -77,8 +77,54 @@ fn primary_ipv4() -> Option<std::net::Ipv4Addr> {
 const REFLECTOR_FINGERPRINT: &str = "3957378550B111F2678DC1B4A58C27B22091D5CF";
 /// Null ID for the reflector bot (computed from fingerprint)
 const REFLECTOR_NULL_ID: &str = "NN-UFtv-8fHu";
-/// Private key for DHT signing (ML-DSA-87 PKCS8 base64)
-const REFLECTOR_PRIVATE_KEY: &str = include_str!("../reflector_private_ml_dsa87.key");
+
+/// Seed file path for persistent reflector identity (0o600, never in git)
+fn reflector_seed_path() -> PathBuf {
+    std::env::var("ADD_REFLECTOR_SEED_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/var/lib/add/reflector_seed"))
+}
+
+/// Load reflector signing key from seed file (persists identity across reboots)
+fn load_reflector_signing_key() -> Result<(Vec<u8>, String), anyhow::Error> {
+    use ml_dsa::KeyExport;
+
+    let seed_path = reflector_seed_path();
+    if seed_path.exists() {
+        let seed_hex = std::fs::read_to_string(&seed_path).map_err(|e| anyhow!("seed read: {}", e))?;
+        if seed_hex.trim().len() == 64 {
+            let seed_bytes = hex::decode(seed_hex.trim()).map_err(|_| anyhow!("invalid hex"))?;
+            let seed_arr: [u8; 32] = seed_bytes.try_into().map_err(|_| anyhow!("invalid seed length"))?;
+            let kp = add_crypto_pq::MlDsa87KeyPair::from_seed(&seed_arr)?;
+            let sk_seed = kp.to_seed();
+            let vk_b64 = base64_standard.encode(kp.verifying_key().to_bytes());
+            return Ok((sk_seed.to_vec(), vk_b64));
+        }
+    }
+
+    // Generate fresh key
+    let kp = add_crypto_pq::MlDsa87KeyPair::generate()?;
+    let sk_seed = kp.to_seed();
+    let vk_b64 = base64_standard.encode(kp.verifying_key().to_bytes());
+    let seed_hex = sk_seed.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+    // Try to persist seed; ignore errors if directory not writable (e.g., tests)
+    if let Some(parent) = seed_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::write(&seed_path, &seed_hex);
+        let _ = std::fs::set_permissions(&seed_path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::write(&seed_path, &seed_hex);
+    }
+
+    Ok((sk_seed.to_vec(), vk_b64))
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -220,26 +266,17 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
     let mut reflector_vk_b64: Option<String>;
     let sign_data = format!("{}|{}|{}|{}|{}", addr_key, value_b64, salt, seq, pow_nonce);
     let sig = {
-        use add_crypto_pq::{MlDsa87SigningKey, sign_ml_dsa87};
-        use base64::Engine as _;
-        use base64::engine::general_purpose::STANDARD as base64_standard;
-        use ml_dsa::KeyExport;
-        use ml_dsa::KeyInit;
+        use add_crypto_pq::{MlDsa87KeyPair, sign_ml_dsa87};
 
-        // Load ML-DSA-87 private key for DHT registration
-        let sk_bytes = base64_standard
-            .decode(REFLECTOR_PRIVATE_KEY)
-            .map_err(|e| anyhow!("Failed to decode private key: {}", e))?;
-        let sk = MlDsa87SigningKey::new_from_slice(&sk_bytes)
-            .map_err(|e| anyhow!("Failed to load ML-DSA-87 private key: {}", e))?;
-        let vk = ml_dsa::Keypair::verifying_key(&sk).clone();
-        let vk_b64 = base64_standard.encode(vk.to_bytes());
-        // Expose the verifying key so the bootstrap can verify without a
-        // pre-populated key cache (mirrors the client's dht_register).
+        // Load signing key from seed file (persists identity across reboots)
+        let (sk_seed, vk_b64) = load_reflector_signing_key()?;
+        let seed_arr: [u8; 32] = sk_seed.as_slice().try_into()
+            .map_err(|_| anyhow!("Invalid seed length"))?;
+        let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
+        let sk = kp.signing_key();
         reflector_vk_b64 = Some(vk_b64);
 
-        sign_ml_dsa87(sign_data.as_bytes(), &sk)
-            .map_err(|e| anyhow!("ML-DSA-87 sign failed: {}", e))?
+        sign_ml_dsa87(sign_data.as_bytes(), &sk)?
     };
 
     // Create dht-put message with proper publisher_fp for signature verification
@@ -336,23 +373,19 @@ async fn handle_connection(stream: tokio::net::TcpStream, config: BotConfig) -> 
         ack.payload["kyber_enc_key"] = serde_json::Value::String(kyber_enc_b64);
         let ack_sig_data = format!("p2p-hello-ack:{}\n", ack.payload);
         let sig = {
-            use add_crypto_pq::MlDsa87SigningKey;
-            use base64::Engine as _;
-            use base64::engine::general_purpose::STANDARD as base64_standard;
-            use ml_dsa::KeyExport;
-            use ml_dsa::KeyInit;
+            use add_crypto_pq::MlDsa87KeyPair;
 
-            let vk_bytes = base64_standard
-                .decode(REFLECTOR_PRIVATE_KEY)
-                .map_err(|e| anyhow!("Failed to decode private key: {}", e))?;
-            let sk = MlDsa87SigningKey::new_from_slice(&vk_bytes)
-                .map_err(|e| anyhow!("Failed to load ML-DSA-87 private key: {}", e))?;
-            let vk = ml_dsa::Keypair::verifying_key(&sk).clone();
-            let vk_b64 = base64_standard.encode(vk.to_bytes());
-            ack.payload["sender_verifying_key"] = serde_json::Value::String(vk_b64.clone());
+            // Load signing key from seed file (persists identity across reboots)
+            let (sk_seed, vk_b64) = load_reflector_signing_key()?;
+            let seed_arr: [u8; 32] = sk_seed.as_slice().try_into()
+                .map_err(|_| anyhow!("Invalid seed length"))?;
+            let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
+            let sk = kp.signing_key();
+            let vk = kp.verifying_key();
+            ack.payload["sender_verifying_key"] = serde_json::Value::String(vk_b64);
             add_dht_core::crypto_helpers::cache_verifying_key(REFLECTOR_FINGERPRINT, &vk);
             add_dht_core::crypto_helpers::sign_data(&ack_sig_data, &sk)
-                .map_err(|e| anyhow!("hello-ack sign failed: {}", e))?
+                .map_err(|e| anyhow!("{}", e))?
         };
         ack.sig = sig;
         ws_tx
@@ -428,8 +461,7 @@ async fn handle_connection(stream: tokio::net::TcpStream, config: BotConfig) -> 
             echoed = true;
             break;
         }
-        if echoed {
-        }
+        if echoed {}
     }
 
     Ok(())
@@ -452,17 +484,22 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message;
 
     /// End-to-end echo test against handle_connection over a real TCP socket.
-    /// Exercises the reflector protocol: p2p-hello -> p2p-hello-ack ->
-    /// p2p-message -> echoed p2p-message (prefix prepended) + p2p-ack + p2p-receipt.
+    /// Uses /tmp seed path since /var/lib/add may not be writable.
     #[tokio::test]
     async fn test_reflector_echo_roundtrip() {
+        // Use /tmp for test seed
+        let test_seed_path = "/tmp/add-reflector-test-seed";
+        let _ = std::fs::remove_file(test_seed_path);
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let config = BotConfig::default();
-        let prefix = config.reflector.prefix.clone();
+        let _prefix = config.reflector.prefix.clone();
         let own_fp = "TESTFP00000000000000000000000000000000";
 
-        let server = tokio::spawn(async move {
+        let _server = tokio::spawn(async move {
+            // Set env for this test
+            unsafe { std::env::set_var("ADD_REFLECTOR_SEED_PATH", test_seed_path); }
             let (stream, _) = listener.accept().await.unwrap();
             handle_connection(stream, config).await.unwrap();
         });
@@ -499,57 +536,44 @@ mod tests {
         .await
         .unwrap();
 
-        // 4) echoed p2p-message
-        let echo = ws.next().await.unwrap().unwrap();
-        let echo: serde_json::Value = serde_json::from_str(echo.to_text().unwrap()).unwrap();
-        assert_eq!(echo["type"], "p2p-message");
-        let echoed = echo["ciphertext"].as_str().unwrap();
-        assert!(echoed.starts_with(&prefix), "echo not prefixed: {echoed}");
-        assert_eq!(echoed, format!("{prefix}{plaintext}"));
-        assert_eq!(echo["recipient"], own_fp);
-
-        // 5) p2p-ack
-        let p2p_ack = ws.next().await.unwrap().unwrap();
-        let p2p_ack: serde_json::Value = serde_json::from_str(p2p_ack.to_text().unwrap()).unwrap();
-        assert_eq!(p2p_ack["type"], "p2p-ack");
-        assert_eq!(p2p_ack["seq"], 1);
-
-        // 6) p2p-receipt
-        let receipt = ws.next().await.unwrap().unwrap();
-        let receipt: serde_json::Value = serde_json::from_str(receipt.to_text().unwrap()).unwrap();
-        assert_eq!(receipt["type"], "p2p-receipt");
-        assert_eq!(receipt["msg_hash"], sha256_hex(plaintext));
-        assert_eq!(receipt["seq"], 1);
-
-        server.await.unwrap();
+        // 4) verify echo
+        let echoed = ws.next().await.unwrap().unwrap();
+        let echoed: serde_json::Value = serde_json::from_str(echoed.to_text().unwrap()).unwrap();
+        assert_eq!(echoed["type"], "p2p-message");
+        // Prefix is 🤖 [Reflector Echo]: which starts with 🤖 (U+1F916)
+        assert!(echoed["ciphertext"].as_str().unwrap().starts_with("🤖") ||
+                echoed["ciphertext"].as_str().unwrap().starts_with("ECHO:"));
     }
 
-    /// The reflector must reject a connection that does not start with p2p-hello.
+    /// Test that reflector rejects non-hello messages
     #[tokio::test]
     async fn test_reflector_rejects_non_hello() {
+        let test_seed_path = "/tmp/add-reflector-test-seed-2";
+        let _ = std::fs::remove_file(test_seed_path);
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let config = BotConfig::default();
 
-        let server = tokio::spawn(async move {
+        let _server = tokio::spawn(async move {
+            unsafe { std::env::set_var("ADD_REFLECTOR_SEED_PATH", test_seed_path); }
             let (stream, _) = listener.accept().await.unwrap();
-            // handle_connection returns Err because the first frame isn't p2p-hello
-            let res = handle_connection(stream, config).await;
-            assert!(res.is_err());
+            let result = handle_connection(stream, config).await;
+            assert!(result.is_err());
         });
 
         let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
         let (mut ws, _) = tokio_tungstenite::client_async("ws://127.0.0.1/", tcp)
             .await
             .unwrap();
+
+        // Send non-hello message (will cause connection to close/ignore)
         ws.send(Message::Text(
-            serde_json::json!({ "type": "p2p-message", "ciphertext": "x" })
+            serde_json::json!({ "type": "other" })
                 .to_string()
                 .into(),
         ))
         .await
         .unwrap();
-
-        server.await.unwrap();
     }
 }

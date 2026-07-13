@@ -40,7 +40,14 @@ pub async fn handshake_initiator(
     let base_nonce: u64 = rng.r#gen();
 
     // Solve PoW: find nonce such that Argon2id(public_key || nonce) has enough leading zero bits
-    let nonce = solve_hello_pow(public_key_b64, base_nonce, HELLO_POW_BITS);
+    let nonce = match solve_hello_pow(public_key_b64, base_nonce, HELLO_POW_BITS) {
+        Some(n) => n,
+        None => {
+            return Err(P2pError::Handshake(
+                "failed to solve PoW within attempt budget".to_string(),
+            ));
+        }
+    };
 
     info!("Sending p2p-hello with PoW nonce={}", nonce);
 
@@ -181,17 +188,21 @@ pub async fn handshake_responder(
 /// Uses a simple brute-force approach starting from base_nonce.
 /// SECURITY FIX (M11): Passes empty node_secret since P2P hello PoW
 /// is ephemeral (per-connection via server_challenge), not per-node.
-fn solve_hello_pow(public_key_b64: &str, base_nonce: u64, difficulty: u32) -> u64 {
+///
+/// SECURITY FIX (L3): Returns `None` if no valid nonce is found within the
+/// attempt budget. The caller must fail loudly — returning an unsolved nonce
+/// would let a handshake proceed with a PoW that fails verification later.
+fn solve_hello_pow(public_key_b64: &str, base_nonce: u64, difficulty: u32) -> Option<u64> {
     // Try up to 1M attempts
     for i in 0..1_000_000 {
         let nonce = base_nonce.wrapping_add(i);
         let data = format!("{}{}", public_key_b64, nonce);
         if pow_check(&data, nonce, difficulty, &[]).unwrap_or(false) {
-            return nonce;
+            return Some(nonce);
         }
     }
-    // Fallback: return base_nonce even if not valid (shouldn't happen with reasonable difficulty)
-    base_nonce
+    // No valid nonce found: fail loudly (caller rejects the handshake).
+    None
 }
 
 /// Verify a received handshake message's PoW.
