@@ -234,20 +234,23 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
     // Send on the unified stream, mirroring the client's working ws_connect() path.
     let mut ws_tx = ws_stream;
 
-    // Calculate key for addr_record: "addr:{null_id}"
-    let addr_key = format!("addr:{}", REFLECTOR_NULL_ID);
-    let value_b64 = base64_standard.encode(listen_address);
-    let salt = uuid_hex();
-    // Monotonic seq (timestamp) so re-registration after a restart updates the
-    // record instead of being rejected as a stale (duplicate) seq=0 put.
-    let seq: i64 = chrono::Utc::now().timestamp();
+    // SECURITY FIX (M11): PoW salted with the publisher's own fingerprint
+    let sign_data = format!("{}|{}|{}", REFLECTOR_NULL_ID, listen_address, add_protocol::constants::ADDR_TTL);
+    let sig = {
+        use add_crypto_pq::{MlDsa87KeyPair, sign_ml_dsa87};
 
-    // Solve PoW (difficulty 8 for addr records; bounded internally by wall-clock).
+        // Load signing key from seed file (persists identity across reboots)
+        let (sk_seed, _vk_b64) = load_reflector_signing_key()?;
+        let seed_arr: [u8; 32] = sk_seed.as_slice().try_into()
+            .map_err(|_| anyhow!("Invalid seed length"))?;
+        let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
+        let sk = kp.signing_key();
+
+        sign_ml_dsa87(sign_data.as_bytes(), &sk)?
+    };
+
     let pow_nonce: u64 = {
-        // SECURITY FIX (M11): salt PoW with the publisher's own fingerprint so
-        // the server (which validates with the same publisher_fp) reproduces
-        // the identical Argon2id salt.
-        let pow_data = format!("{}|{}|{}|{}", addr_key, value_b64, salt, seq);
+        let pow_data = format!("{}|{}|{}", REFLECTOR_NULL_ID, listen_address, add_protocol::constants::ADDR_TTL);
         tokio::task::spawn_blocking(move || {
             add_dht_core::pow_solve(
                 &pow_data,
@@ -262,49 +265,19 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
         .ok_or_else(|| anyhow!("Could not solve PoW in time"))?
     };
 
-    // Sign the DHT put request with ML-DSA-87
-    let mut reflector_vk_b64: Option<String>;
-    let sign_data = format!("{}|{}|{}|{}|{}", addr_key, value_b64, salt, seq, pow_nonce);
-    let sig = {
-        use add_crypto_pq::{MlDsa87KeyPair, sign_ml_dsa87};
-
-        // Load signing key from seed file (persists identity across reboots)
-        let (sk_seed, vk_b64) = load_reflector_signing_key()?;
-        let seed_arr: [u8; 32] = sk_seed.as_slice().try_into()
-            .map_err(|_| anyhow!("Invalid seed length"))?;
-        let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
-        let sk = kp.signing_key();
-        reflector_vk_b64 = Some(vk_b64);
-
-        sign_ml_dsa87(sign_data.as_bytes(), &sk)?
-    };
-
-    // Create dht-put message with proper publisher_fp for signature verification
+    // Create dht-addr-record message (server expects null_id, address, ttl in payload)
     let req = add_protocol::envelope::WireEnvelope {
-        msg_type: "dht-put".to_string(),
+        msg_type: "dht-addr-record".to_string(),
         msg_id: uuid_hex(),
         ts: chrono::Utc::now().timestamp() as f64,
         sig,
         payload: {
             let mut m = serde_json::Map::new();
-            m.insert("key".to_string(), serde_json::Value::String(addr_key));
-            m.insert("value".to_string(), serde_json::Value::String(value_b64));
-            m.insert("salt".to_string(), serde_json::Value::String(salt));
-            m.insert("seq".to_string(), serde_json::Value::Number(seq.into()));
-            m.insert(
-                "nonce".to_string(),
-                serde_json::Value::Number(pow_nonce.into()),
-            );
-            m.insert(
-                "publisher_fp".to_string(),
-                serde_json::Value::String(REFLECTOR_FINGERPRINT.to_string()),
-            );
-            if let Some(vk) = reflector_vk_b64.take() {
-                m.insert(
-                    "publisher_verifying_key".to_string(),
-                    serde_json::Value::String(vk),
-                );
-            }
+            m.insert("null_id".to_string(), serde_json::Value::String(REFLECTOR_NULL_ID.to_string()));
+            m.insert("address".to_string(), serde_json::Value::String(listen_address.to_string()));
+            m.insert("ttl".to_string(), serde_json::json!(add_protocol::constants::ADDR_TTL));
+            m.insert("publisher_fp".to_string(), serde_json::Value::String(REFLECTOR_FINGERPRINT.to_string()));
+            m.insert("nonce".to_string(), serde_json::Value::Number(pow_nonce.into()));
             serde_json::Value::Object(m)
         },
     };

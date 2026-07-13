@@ -16,6 +16,17 @@ const path = require('path')
 const fs = require('fs')
 const os = require('os')
 
+// Read version from package.json
+function getAppVersion() {
+  try {
+    const pkgPath = path.join(__dirname, '../package.json')
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    return pkg.version || '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
 // Resolve add CLI path for dev and packaged modes
 function getAddCliPath() {
   // 1. Environment variable override
@@ -227,12 +238,13 @@ function restartListenProcess() {
 }
 
 function createWindow() {
+  const version = getAppVersion()
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: 'Gnoppix - Add Messenger 0.2',
+    title: `Gnoppix - Add Messenger ${version}`,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -363,7 +375,9 @@ ipcMain.handle('add-listen-status', async () => {
   return { running: !!listenProcess, pid: listenProcess?.pid || null }
 })
 
-ipcMain.handle('add-passwd', async () => queuedCommand(['passwd']))
+ipcMain.handle('add-passwd', async (_, current, newPass) => {
+  runCliCommand(['passwd', '--current', current, '--new', newPass])
+})
 
 app.whenReady().then(() => {
   createWindow()

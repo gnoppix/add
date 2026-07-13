@@ -561,13 +561,32 @@ fn decrypt_cert_armored(
 /// Change the passphrase protecting the GPG secret key (own_cert.age)
 /// Decrypts with old passphrase, re-encrypts with new passphrase.
 /// If encrypt=true and only plaintext exists, encrypt it without prompting for old password.
-fn change_passphrase(encrypt_plaintext: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn change_passphrase(current_pass: Option<String>, new_pass_in: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let cert_dir = home_dir().join(GPG_HOME);
     let enc_path = cert_dir.join("own_cert.age");
     let plain_path = cert_dir.join("own_cert.asc");
 
+    // IPC mode from Electron: both passphrases provided as args
+    if let Some(old_pass) = current_pass {
+        let new_pass = new_pass_in.ok_or("new passphrase required with --current")?;
+        if new_pass.is_empty() {
+            return Err("new passphrase cannot be empty".into());
+        }
+
+        // Load and decrypt existing cert with old passphrase
+        let armored = std::fs::read_to_string(&enc_path)?;
+        let cert_armored = decrypt_cert_armored(&armored, &old_pass)?;
+
+        // Re-encrypt with new passphrase
+        let encrypted = encrypt_cert_armored(&cert_armored, &new_pass)?;
+        std::fs::write(&enc_path, &encrypted)?;
+        println!("Passphrase changed successfully");
+        return Ok(());
+    }
+
+    // CLI mode: prompt for passphrases
     // If --encrypt flag and plaintext cert exists, encrypt it without old password
-    if encrypt_plaintext && plain_path.exists() {
+    if plain_path.exists() {
         let armored = std::fs::read_to_string(&plain_path)?;
         println!("Enter passphrase to encrypt with (empty to cancel):");
         let new_pass = rpassword::read_password().unwrap_or_default();
@@ -577,6 +596,7 @@ fn change_passphrase(encrypt_plaintext: bool) -> Result<(), Box<dyn std::error::
         let encrypted = encrypt_cert_armored(&armored, &new_pass)?;
         std::fs::write(&enc_path, &encrypted)?;
         std::fs::remove_file(&plain_path)?;
+        println!("Cert encrypted successfully");
         return Ok(());
     }
 
@@ -614,7 +634,6 @@ fn change_passphrase(encrypt_plaintext: bool) -> Result<(), Box<dyn std::error::
         // Re-encrypt with new passphrase
         let encrypted = encrypt_cert_armored(&cert_armored, &new_pass)?;
         std::fs::write(&enc_path, &encrypted)?;
-        // Remove plaintext if it exists
         let _ = std::fs::remove_file(&plain_path);
     }
 
@@ -3401,15 +3420,18 @@ async fn send_message(
                     println!("Message delivered successfully!");
                 } else if msg_type == "p2p-receipt" {
                     // ACS2.6: E2E delivery receipt — recipient has decrypted the message.
+                    // Reflector sends receipt with top-level fields (not under payload)
                     let receipt_msg_hash = msg_val
                         .get("payload")
                         .and_then(|p| p.get("msg_hash"))
                         .and_then(|h| h.as_str())
+                        .or_else(|| msg_val.get("msg_hash").and_then(|h| h.as_str()))
                         .unwrap_or("");
                     let received_at = msg_val
                         .get("payload")
                         .and_then(|p| p.get("received_at"))
                         .and_then(|t| t.as_f64())
+                        .or_else(|| msg_val.get("received_at").and_then(|t| t.as_f64()))
                         .unwrap_or(0.0);
 
                     // Verify receipt signature (authenticity)
@@ -3449,9 +3471,12 @@ async fn send_message(
                     // back. It never decapsulates, so the returned `ciphertext` is
                     // opaque to us. In a loopback the sender already holds the
                     // plaintext, so display that instead of dumping base64 garbage.
+                    // Reflector may send at top-level or under payload (WireEnvelope format)
                     let raw_ct = msg_val
-                        .get("ciphertext")
+                        .get("payload")
+                        .and_then(|p| p.get("ciphertext"))
                         .and_then(|c| c.as_str())
+                        .or_else(|| msg_val.get("ciphertext").and_then(|c| c.as_str()))
                         .unwrap_or("");
                     // Strip a cosmetic prefix the reflector may prepend (e.g. "/"
                     // or "🤖 [Reflector Echo]: ").
@@ -4387,9 +4412,12 @@ enum Commands {
     },
     /// Change or set the passphrase protecting your GPG secret key
     Passwd {
-        /// Encrypt a plaintext cert (run without password to create new encrypted cert)
+        /// Current passphrase (for IPC from Electron)
         #[arg(long)]
-        encrypt: bool,
+        current: Option<String>,
+        /// New passphrase (for IPC from Electron)
+        #[arg(long)]
+        new: Option<String>,
     },
 }
 
@@ -5322,8 +5350,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Passwd { encrypt } => {
-            match change_passphrase(encrypt) {
+        Commands::Passwd { current, new } => {
+            match change_passphrase(current, new) {
                 Ok(()) => println!("Passphrase changed successfully."),
                 Err(e) => eprintln!("Failed to change passphrase: {}", e),
             }

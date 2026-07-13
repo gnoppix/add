@@ -22,9 +22,16 @@ interface AddContactForm {
   alias: string
 }
 
+interface PasswdForm {
+  current: string
+  new: string
+  confirm: string
+}
+
 function SidebarHeader() {
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showAddContact, setShowAddContact] = useState(false)
+  const [showPasswdModal, setShowPasswdModal] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [passwdMessage, setPasswdMessage] = useState('')
   const [listenRunning, setListenRunning] = useState(false)
@@ -32,6 +39,11 @@ function SidebarHeader() {
     nullId: '',
     fingerprint: '',
     alias: '',
+  })
+  const [passwdForm, setPasswdForm] = useState<PasswdForm>({
+    current: '',
+    new: '',
+    confirm: '',
   })
   const {
     initialize,
@@ -153,7 +165,6 @@ function SidebarHeader() {
     }
   }
 
-  // Check listen status on mount
   useEffect(() => {
     checkListenStatus()
   }, [])
@@ -167,7 +178,6 @@ function SidebarHeader() {
       if (contactForm.alias) {
         await api.alias(contactForm.alias, contactForm.nullId)
       }
-      // Add to local state
       addConversation({
         id: contactForm.nullId,
         name: contactForm.alias || contactForm.nullId,
@@ -195,12 +205,23 @@ function SidebarHeader() {
       setPasswdMessage('IPC API not available')
       return
     }
-    if (!confirm('Change GPG key passphrase? You will be prompted in the terminal.')) return
+
+    if (!passwdForm.current || !passwdForm.new) {
+      setPasswdMessage('Both current and new passphrase required')
+      return
+    }
+
+    if (passwdForm.new !== passwdForm.confirm) {
+      setPasswdMessage('New passphrases do not match')
+      return
+    }
 
     try {
-      await api.passwd()
+      await api.passwd(passwdForm.current, passwdForm.new)
       setPasswdMessage('Passphrase changed successfully')
+      setPasswdForm({ current: '', new: '', confirm: '' })
       setTimeout(() => setPasswdMessage(''), 3000)
+      setShowPasswdModal(false)
     } catch (err) {
       setPasswdMessage(`Failed: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -208,12 +229,9 @@ function SidebarHeader() {
 
   return (
     <header className="flex h-14 items-center justify-between border-b border-gray-200 px-3">
-      {/* Left: User Profile Avatar */}
       <ProfileAvatar />
 
-      {/* Right: Action buttons */}
       <div className="flex items-center gap-1">
-        {/* New Message / Compose Button */}
         <button
           onClick={() => {
             setShowAddContact(true)
@@ -228,7 +246,6 @@ function SidebarHeader() {
           </svg>
         </button>
 
-        {/* Settings Gear Icon */}
         <button
           onClick={() => setShowSettingsModal(true)}
           className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors hover:bg-gray-100"
@@ -240,7 +257,6 @@ function SidebarHeader() {
           </svg>
         </button>
 
-        {/* Theme Toggle */}
         <ThemeToggle />
       </div>
 
@@ -251,7 +267,6 @@ function SidebarHeader() {
             <h2 className="mb-4 text-lg font-semibold">Settings</h2>
 
             <div className="space-y-3 text-sm">
-              {/* Error Message */}
               {errorMessage && (
                 <div className="rounded bg-red-100 p-2 text-xs text-red-700">
                   {errorMessage}
@@ -307,14 +322,9 @@ function SidebarHeader() {
                 <div className="flex flex-col gap-1 mt-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-gray-600">P2P Listener</span>
-                    <span
-                      id="listen-status"
-                      className={`px-1.5 py-0.5 rounded text-xs ${
-                        listenRunning
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-red-100 text-red-700'
-                      }`}
-                    >
+                    <span className={`px-1.5 py-0.5 rounded text-xs ${
+                      listenRunning ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                    }`}>
                       {listenRunning ? 'Running' : 'Stopped'}
                     </span>
                   </div>
@@ -357,11 +367,8 @@ function SidebarHeader() {
               {isAuthenticated && (
                 <div className="border-t pt-3">
                   <p className="font-medium">Security</p>
-                  {passwdMessage && (
-                    <p className="mt-1 text-xs text-green-600">{passwdMessage}</p>
-                  )}
                   <button
-                    onClick={handlePasswd}
+                    onClick={() => setShowPasswdModal(true)}
                     className="mt-1 rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600"
                   >
                     Change GPG Key Passphrase
@@ -428,6 +435,60 @@ function SidebarHeader() {
                 className="rounded bg-primary-500 px-3 py-1 text-sm text-white hover:bg-primary-600"
               >
                 Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Passphrase Modal */}
+      {showPasswdModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-80 rounded-lg bg-white p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-semibold">Change GPG Key Passphrase</h2>
+
+            {passwdMessage && (
+              <div className="mb-3 rounded bg-red-100 p-2 text-xs text-red-700">
+                {passwdMessage}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <input
+                type="password"
+                placeholder="Current passphrase"
+                value={passwdForm.current}
+                onChange={(e) => setPasswdForm({ ...passwdForm, current: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+              <input
+                type="password"
+                placeholder="New passphrase"
+                value={passwdForm.new}
+                onChange={(e) => setPasswdForm({ ...passwdForm, new: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+              <input
+                type="password"
+                placeholder="Confirm new passphrase"
+                value={passwdForm.confirm}
+                onChange={(e) => setPasswdForm({ ...passwdForm, confirm: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setShowPasswdModal(false)}
+                className="rounded bg-gray-100 px-3 py-1 text-sm hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePasswd}
+                className="rounded bg-primary-500 px-3 py-1 text-sm text-white hover:bg-primary-600"
+              >
+                Change
               </button>
             </div>
           </div>
