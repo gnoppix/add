@@ -287,7 +287,7 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
             serde_json::to_string(&req)?.into(),
         ))
         .await?;
-    info!("Sent dht-put registration to {}", bootstrap_url);
+    info!("Sent dht-addr-record registration to {}", bootstrap_url);
 
     Ok(())
 }
