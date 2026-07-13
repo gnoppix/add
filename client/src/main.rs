@@ -4600,6 +4600,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "\nAdded Reflector Bot (NN-UFtv-8fHu) as ECHO contact for latency testing."
                 );
             }
+            // Also add the Reflector-ECHO alias
+            let mut aliases = load_aliases();
+            if !aliases.contains_key("Reflector-ECHO") {
+                aliases.insert("Reflector-ECHO".to_string(), "NN-UFtv-8fHu".to_string());
+                save_aliases(&aliases)?;
+            }
         }
         Commands::Id => {
             let identity = Identity::load()?;
