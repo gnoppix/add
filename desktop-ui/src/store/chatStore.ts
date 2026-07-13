@@ -49,6 +49,10 @@ interface ChatStore {
   initialize: () => Promise<void>
   loadContacts: () => Promise<void>
   sendMessage: (content: string) => Promise<void>
+
+  // Internal persistence methods (not exposed via IPC)
+  persist: () => void
+  hydrate: () => void
 }
 
 // Electron API wrapper
@@ -90,10 +94,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           ),
         }
       }
-      const next = { conversations: [conversation, ...state.conversations] }
-      get().persist()
-      return next
+      return { conversations: [conversation, ...state.conversations] }
     })
+    get().persist()
   },
 
   addMessage: (conversationId, message) =>
@@ -186,8 +189,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             : conv
         ),
       }
-      get().persist()
     })
+    get().persist()
   },
 
   checkContactsOnlineStatus: async () => {
@@ -369,7 +372,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
 
     addMessage(activeConversationId, message)
-      get().persist()
+    get().persist()
 
     try {
       const result = await api.send(activeConversationId, content, ttl)
