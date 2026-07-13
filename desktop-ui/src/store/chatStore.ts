@@ -12,6 +12,7 @@
 
 import { create } from 'zustand'
 import type { Conversation, Message, MessageStatus } from '../types/index'
+import { generateIdenticon } from '../lib/identicon'
 
 // Dedupe key for incoming relay messages. The relay mailbox is not reliably
 // purged (relay_purge depends on ML-DSA-87 keys not present in the GPG build),
@@ -236,7 +237,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         state.addConversation({
           id: from,
           name: from,
-          avatarUrl: `https://i.pravatar.cc/150?u=${from}`,
+          avatarUrl: generateIdenticon(from),
           lastMessage: '',
           lastMessageTimestamp: new Date(),
           unreadCount: 0,
@@ -340,7 +341,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         addConversation({
           id: contact.nullId,
           name: aliasMap.get(contact.nullId) || contact.nullId,
-          avatarUrl: `https://i.pravatar.cc/150?u=${contact.nullId}`,
+          avatarUrl: generateIdenticon(contact.nullId),
           lastMessage: '',
           lastMessageTimestamp: new Date(),
           unreadCount: 0,

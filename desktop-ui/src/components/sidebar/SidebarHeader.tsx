@@ -15,6 +15,7 @@ import { useState, useEffect } from 'react'
 import { useChatStore } from '../../store/chatStore'
 import ThemeToggle from './ThemeToggle'
 import ProfileAvatar from './ProfileAvatar'
+import { generateIdenticon } from '../../lib/identicon'
 
 interface AddContactForm {
   nullId: string
@@ -182,7 +183,7 @@ function SidebarHeader() {
         id: contactForm.nullId,
         name: contactForm.alias || contactForm.nullId,
         fingerprint: contactForm.fingerprint,
-        avatarUrl: `https://i.pravatar.cc/150?u=${contactForm.nullId}`,
+        avatarUrl: generateIdenticon(contactForm.nullId),
         lastMessage: '',
         lastMessageTimestamp: new Date(),
         unreadCount: 0,

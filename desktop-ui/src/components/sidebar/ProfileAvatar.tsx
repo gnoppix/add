@@ -13,6 +13,7 @@
 import { useRef } from 'react'
 import { useProfileStore } from '../../store/profileStore'
 import { useChatStore } from '../../store/chatStore'
+import { generateIdenticon } from '../../lib/identicon'
 
 export default function ProfileAvatar({ size = 32 }: { size?: number }) {
   const { avatarUrl, setAvatar } = useProfileStore()
@@ -52,6 +53,8 @@ export default function ProfileAvatar({ size = 32 }: { size?: number }) {
       >
         {avatarUrl ? (
           <img src={avatarUrl} alt="Profile" className="w-full h-full object-cover" />
+        ) : myId ? (
+          <img src={generateIdenticon(myId)} alt="Profile" className="w-full h-full object-cover" />
         ) : (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14v7m-3 0h6" />
