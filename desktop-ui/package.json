@@ -1,6 +1,6 @@
 {
   "name": "add-desktop",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Cross-platform desktop messaging application",
   "main": "electron/main.js",
   "author": "Add Team <team@gnoppix.org>",
