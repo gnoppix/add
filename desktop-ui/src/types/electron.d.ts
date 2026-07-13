@@ -44,6 +44,9 @@ declare global {
       stopListen: () => Promise<{ success: boolean; message: string }>
       restartListen: () => Promise<{ success: boolean; message: string }>
       listenStatus: () => Promise<{ running: boolean; pid: number | null }>
+
+      // Security - Change GPG key passphrase
+      passwd: () => Promise<string>
     }
   }
 }

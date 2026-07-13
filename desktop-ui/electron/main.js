@@ -363,6 +363,8 @@ ipcMain.handle('add-listen-status', async () => {
   return { running: !!listenProcess, pid: listenProcess?.pid || null }
 })
 
+ipcMain.handle('add-passwd', async () => queuedCommand(['passwd']))
+
 app.whenReady().then(() => {
   createWindow()
 

@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld('addAPI', {
   restartListen: () => ipcRenderer.invoke('add-restart-listen'),
   listenStatus: () => ipcRenderer.invoke('add-listen-status'),
 
+  // Security - Change GPG key passphrase
+  passwd: () => ipcRenderer.invoke('add-passwd'),
+
   // Subscribe to main-process push events (e.g. live P2P inbound messages
   // from the background listener). Returns an unsubscribe function.
   on: (channel, callback) => {

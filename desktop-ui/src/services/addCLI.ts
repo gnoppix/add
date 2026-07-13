@@ -96,6 +96,10 @@ export class AddCLI {
     await this.runCommand(['read'])
     return []
   }
+
+  async passwd(): Promise<string> {
+    return await this.runCommand(['passwd'])
+  }
 }
 
 // Export singleton for main process use

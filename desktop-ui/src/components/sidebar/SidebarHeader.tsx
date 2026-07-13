@@ -26,6 +26,7 @@ function SidebarHeader() {
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showAddContact, setShowAddContact] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [passwdMessage, setPasswdMessage] = useState('')
   const [listenRunning, setListenRunning] = useState(false)
   const [contactForm, setContactForm] = useState<AddContactForm>({
     nullId: '',
@@ -188,6 +189,23 @@ function SidebarHeader() {
     }
   }
 
+  const handlePasswd = async () => {
+    const api = window.addAPI
+    if (!api) {
+      setPasswdMessage('IPC API not available')
+      return
+    }
+    if (!confirm('Change GPG key passphrase? You will be prompted in the terminal.')) return
+
+    try {
+      await api.passwd()
+      setPasswdMessage('Passphrase changed successfully')
+      setTimeout(() => setPasswdMessage(''), 3000)
+    } catch (err) {
+      setPasswdMessage(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   return (
     <header className="flex h-14 items-center justify-between border-b border-gray-200 px-3">
       {/* Left: User Profile Avatar */}
@@ -289,11 +307,11 @@ function SidebarHeader() {
                 <div className="flex flex-col gap-1 mt-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-gray-600">P2P Listener</span>
-                    <span 
-                      id="listen-status" 
+                    <span
+                      id="listen-status"
                       className={`px-1.5 py-0.5 rounded text-xs ${
-                        listenRunning 
-                          ? 'bg-green-100 text-green-700' 
+                        listenRunning
+                          ? 'bg-green-100 text-green-700'
                           : 'bg-red-100 text-red-700'
                       }`}
                     >
@@ -334,6 +352,22 @@ function SidebarHeader() {
                   Load Contacts
                 </button>
               </div>
+
+              {/* Security: Change Passphrase */}
+              {isAuthenticated && (
+                <div className="border-t pt-3">
+                  <p className="font-medium">Security</p>
+                  {passwdMessage && (
+                    <p className="mt-1 text-xs text-green-600">{passwdMessage}</p>
+                  )}
+                  <button
+                    onClick={handlePasswd}
+                    className="mt-1 rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600"
+                  >
+                    Change GPG Key Passphrase
+                  </button>
+                </div>
+              )}
             </div>
 
             <button
