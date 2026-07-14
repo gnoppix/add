@@ -475,6 +475,39 @@ fn prompt_passphrase() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 /// Load the Sequoia certificate for signing operations.
+/// Returns the user's own certificate as ASCII-armored text (the same bytes
+/// stored in `own_cert.age` / `own_cert.asc`). Used by the cert-store publish
+/// path (DESIGN.md §4.2) which uploads the armored cert to the opaque blob store.
+fn load_own_cert_armored() -> Result<String, Box<dyn std::error::Error>> {
+    let cert_dir = home_dir().join(GPG_HOME);
+    let enc_path = cert_dir.join("own_cert.age");
+    let plain_path = cert_dir.join("own_cert.asc");
+
+    if enc_path.exists() {
+        let armored = std::fs::read_to_string(&enc_path)?;
+        let password = prompt_passphrase()?;
+        if password.is_empty() {
+            return Err("encrypted own_cert.age requires a passphrase".into());
+        }
+        return Ok(decrypt_cert_armored(&armored, &password)?);
+    }
+
+    if !plain_path.exists() {
+        return Err("no identity found — run 'add init' first".into());
+    }
+    let armored = std::fs::read_to_string(&plain_path)?;
+    let bytes = armored.as_bytes();
+    if !bytes.is_empty()
+        && (bytes[0] == 0xEF && bytes.get(1..3) == Some(&[0xBF, 0xBD]) || bytes[0] == 0x00)
+    {
+        return Err(
+            "corrupt identity file detected — run 'rm -rf ~/.add/gnupg && add init' to recreate"
+                .into(),
+        );
+    }
+    Ok(armored)
+}
+
 /// Tries the age-encrypted `own_cert.age` first, falls back to plaintext `own_cert.asc`.
 fn load_cert() -> Result<sequoia_openpgp::Cert, Box<dyn std::error::Error>> {
     use sequoia_openpgp::parse::Parse;
@@ -1998,6 +2031,191 @@ async fn dht_register_addr_record_all(
         Ok(())
     } else {
         Err(last_error.unwrap_or_else(|| "No bootstrap servers available".into()))
+    }
+}
+
+/// Content-addressing key for the cert store: SHA-256 of the fingerprint.
+/// The fetcher computes this directly from the fingerprint Bob speaks
+/// out-of-band (DESIGN.md §4.2), so no prior cert is needed to locate it.
+fn cert_blob_key(fingerprint: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let h = Sha256::digest(fingerprint.as_bytes());
+    format!("cert:{}", hex::encode(h))
+}
+
+/// Publish our certificate to the opaque blob store on ALL bootstrap servers
+/// (DESIGN.md §4.2 Publish). The blob is addressed by `cert:<H(fingerprint)>`
+/// and signed over `{cert_b64}|{fingerprint}` with our ML-DSA-87 key. The
+/// server stores it opaquely — it learns the public cert + fingerprint but
+/// gains no trusted ID↔key statement.
+async fn dht_publish_cert(
+    identity: &Identity,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use add_protocol::envelope::WireEnvelope;
+
+    // SECURITY: publish the PUBLIC cert only — strip all secret key material.
+    let armored = {
+        use sequoia_openpgp::serialize::Serialize;
+        let cert = load_cert().map_err(|e| e.to_string())?.strip_secret_key_material();
+        let mut buf = Vec::new();
+        cert.armored()
+            .serialize(&mut buf)
+            .map_err(|e| format!("serialize public cert: {}", e))?;
+        String::from_utf8(buf).map_err(|e| format!("armored cert invalid UTF-8: {}", e))?
+    };
+    let cert_b64 = base64::engine::general_purpose::STANDARD.encode(armored.as_bytes());
+    let fp = identity.fingerprint.clone();
+
+    // ML-DSA-87 verifying key (for the fetcher to verify signatures later)
+    let vk_b64 = if let Some(sk_b64) = &identity.ml_dsa87_signing_key {
+        let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
+        use ml_dsa::{KeyExport, KeyInit, Keypair};
+        let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
+            .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
+        let vk = Keypair::verifying_key(&sk).clone();
+        base64::engine::general_purpose::STANDARD.encode(vk.to_bytes())
+    } else {
+        String::new()
+    };
+
+    // ML-KEM (Kyber) encapsulation key, derived deterministically from null_id
+    let kyber_enc_b64 = {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(identity.null_id.as_bytes());
+        let hk = hkdf::Hkdf::<Sha256>::new(None, &hash);
+        let mut seed = [0u8; 64];
+        hk.expand(b"add-sealed-sender-kyber-seed", &mut seed)
+            .map_err(|_| "HKDF expand failed".to_string())?;
+        let kp = add_crypto::kyber::KyberKeypair::from_seed(&seed)
+            .map_err(|e| format!("kyber keypair from seed: {}", e))?;
+        add_crypto::kyber::encode_enc_key(&kp.enc)
+    };
+
+    let key = cert_blob_key(&fp);
+    // Bundle cert + keys into the opaque value blob (the generic store only
+    // persists key/value/sig, so extra payload fields would be dropped on GET).
+    let bundle = serde_json::json!({
+        "cert": cert_b64,
+        "vk": vk_b64,
+        "kyber_enc": kyber_enc_b64,
+        "fp": fp,
+    })
+    .to_string();
+    let value_b64 = base64::engine::general_purpose::STANDARD.encode(bundle.as_bytes());
+    let sign_data = format!("{}|{}", value_b64, fp);
+    let sig = sign_for_transport(&sign_data)?;
+
+    let (_, bootstraps, _) = discover_all_servers().await;
+    let mut success_count = 0;
+    let mut last_error = None;
+    for seed_url in &bootstraps {
+        let ws_url = seed_url
+            .replace("http://", "ws://")
+            .replace("https://", "wss://");
+        let mut ws = match ws_connect(&ws_url).await {
+            Ok(w) => w,
+            Err(e) => {
+                last_error = Some(format!("DHT connect failed: {}", e));
+                continue;
+            }
+        };
+        let req = WireEnvelope {
+            msg_type: "blob-put".to_string(),
+            msg_id: uuid_hex(),
+            ts: chrono::Utc::now().timestamp() as f64,
+            sig: sig.clone(),
+            payload: {
+                let mut m = serde_json::Map::new();
+                m.insert("key".to_string(), serde_json::Value::String(key.clone()));
+                m.insert("value".to_string(), serde_json::Value::String(value_b64.clone()));
+                m.insert("sig".to_string(), serde_json::Value::String(sig.clone()));
+                m.insert("publisher_fp".to_string(), serde_json::Value::String(fp.clone()));
+                m.insert("ttl".to_string(), serde_json::json!(add_protocol::constants::ADDR_TTL));
+                m.insert("nonce".to_string(), serde_json::Value::Number((uuid_hex().len() as i64).into()));
+                m.insert("vk".to_string(), serde_json::Value::String(vk_b64.clone()));
+                m.insert("kyber_enc".to_string(), serde_json::Value::String(kyber_enc_b64.clone()));
+                serde_json::Value::Object(m)
+            },
+        };
+        let req_json = serde_json::to_string(&req)?;
+        if let Err(e) = ws.send(Message::Text(req_json.into())).await {
+            last_error = Some(format!("cert publish send failed: {}", e));
+            continue;
+        }
+        if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
+            if let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text) {
+                if resp.msg_type == "dht-found" {
+                    success_count += 1;
+                } else {
+                    last_error = Some(format!("cert publish rejected: {}", resp.msg_type));
+                }
+            }
+        }
+    }
+    if success_count > 0 {
+        tracing::info!("Certificate published on {}/{} bootstrap servers", success_count, bootstraps.len());
+        Ok(())
+    } else {
+        Err(last_error
+            .map(|e| e.into())
+            .unwrap_or_else(|| "No bootstrap servers available".into()))
+    }
+}
+
+/// Fetch a contact's certificate blob from the opaque store, given the
+/// fingerprint they spoke out-of-band (DESIGN.md §4.2 Onboarding). Returns the
+/// armored cert + ML-DSA verifying key + ML-KEM enc key. The caller verifies
+/// the cert hash matches the spoken fingerprint before trusting it.
+async fn dht_fetch_cert(
+    seed_url: &str,
+    fingerprint: &str,
+) -> Result<(String, String, String), Box<dyn std::error::Error + Send + Sync>> {
+    use add_protocol::envelope::WireEnvelope;
+    let ws_url = seed_url.replace("http://", "ws://").replace("https://", "wss://");
+    let mut ws = ws_connect(&ws_url)
+        .await
+        .map_err(|e| format!("DHT connect failed: {}", e))?;
+    let key = cert_blob_key(fingerprint);
+    let req = WireEnvelope {
+        msg_type: "blob-get".to_string(),
+        msg_id: uuid_hex(),
+        ts: chrono::Utc::now().timestamp() as f64,
+        sig: String::new(),
+        payload: {
+            let mut m = serde_json::Map::new();
+            m.insert("key".to_string(), serde_json::Value::String(key));
+            serde_json::Value::Object(m)
+        },
+    };
+    ws.send(Message::Text(serde_json::to_string(&req)?.into()))
+        .await
+        .map_err(|e| format!("cert fetch send failed: {}", e))?;
+    if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
+        let resp: WireEnvelope = serde_json::from_str(&resp_text)
+            .map_err(|e| format!("cert fetch parse failed: {}", e))?;
+        if resp.msg_type != "dht-found" {
+            return Err(format!("cert not found: {}", resp.msg_type).into());
+        }
+        let value = resp
+            .payload_str("value")
+            .ok_or("missing cert blob value")?;
+        // value = base64(JSON bundle {cert, vk, kyber_enc, fp})
+        let bundle_bytes = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .map_err(|e| format!("cert blob not base64: {}", e))?;
+        let bundle: serde_json::Value = serde_json::from_slice(&bundle_bytes)
+            .map_err(|e| format!("cert bundle not JSON: {}", e))?;
+        let cert_b64 = bundle.get("cert").and_then(|v| v.as_str()).unwrap_or("");
+        let vk_b64 = bundle.get("vk").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let kyber_enc = bundle.get("kyber_enc").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let armored_bytes = base64::engine::general_purpose::STANDARD
+            .decode(cert_b64)
+            .map_err(|e| format!("cert not base64: {}", e))?;
+        let armored = String::from_utf8(armored_bytes)
+            .map_err(|e| format!("cert blob not utf8: {}", e))?;
+        Ok((armored, vk_b64, kyber_enc))
+    } else {
+        Err("no response from bootstrap".into())
     }
 }
 
@@ -4422,6 +4640,13 @@ enum Commands {
     RegisterAllBootstraps,
     /// Check registration status across all bootstrap servers
     CheckRegister,
+    /// Publish your certificate to the opaque blob store (DESIGN.md §4.2)
+    PublishCert,
+    /// Fetch a contact's certificate from the opaque store by fingerprint
+    FetchCert {
+        /// Contact fingerprint (spoken out-of-band)
+        fingerprint: String,
+    },
     /// Check online status of all contacts (query DHT addr_records)
     ContactStatus,
     /// Delete a message by its position number (shown in read output)
@@ -5289,6 +5514,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "⚠ Some servers missing registration. Run 'add register-all-bootstraps' to fix."
                 );
+            }
+        }
+        Commands::PublishCert => {
+            let identity = Identity::load()?;
+            match dht_publish_cert(&identity).await {
+                Ok(()) => println!("✓ Certificate published to bootstrap servers."),
+                Err(e) => {
+                    eprintln!("✗ Failed to publish certificate: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::FetchCert { fingerprint } => {
+            let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
+            let mut fetched = None;
+            for url in &bootstraps {
+                match dht_fetch_cert(url, &fingerprint).await {
+                    Ok((armored, vk, kyber_enc)) => {
+                        fetched = Some((armored, vk, kyber_enc));
+                        break;
+                    }
+                    Err(e) => tracing::warn!("cert fetch from {} failed: {}", url, e),
+                }
+            }
+            match fetched {
+                Some((armored, vk, kyber_enc)) => {
+                    // Verify the fetched cert's fingerprint matches what Bob spoke.
+                    use sequoia_openpgp::parse::Parse;
+                    let cert = sequoia_openpgp::Cert::from_bytes(armored.as_bytes())
+                        .map_err(|e| format!("parse cert: {}", e))?;
+                    let got_fp = cert.fingerprint().to_hex().to_uppercase();
+                    if got_fp != fingerprint.to_uppercase() {
+                        eprintln!(
+                            "✗ FINGERPRINT MISMATCH: spoke '{}' but cert hashes to '{}'",
+                            fingerprint, got_fp
+                        );
+                        std::process::exit(1);
+                    }
+                    println!("✓ Certificate verified (fingerprint matches).");
+                    println!("Fingerprint:   {}", got_fp);
+                    println!("ML-DSA vk:     {}", vk);
+                    println!("ML-KEM enc:    {}", kyber_enc);
+                    println!();
+                    println!("----- BEGIN ARMORDED CERT (share on request) -----");
+                    println!("{}", armored);
+                    println!("----- END ARMORDED CERT -----");
+                }
+                None => {
+                    eprintln!("✗ Certificate not found for fingerprint {}", fingerprint);
+                    std::process::exit(1);
+                }
             }
         }
         Commands::ContactStatus => {

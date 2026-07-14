@@ -29,7 +29,7 @@ pub const MAX_TTL: i64 = 604800; // 7 days
 pub const MAX_KEY_SIZE: usize = 256;
 pub const ADDR_TTL: i64 = 7200; // 2 hours
 pub const POW_MAX_AGE: i64 = 300; // 5 minutes
-pub const MAX_VALUE_SIZE: usize = 4096; // 4 KB
+pub const MAX_VALUE_SIZE: usize = 16384; // 16 KB (cert bundles: ML-DSA-87 vk ~3.5KB b64 + cert + ML-KEM key)
 pub const MAX_TOTAL_KEYS: usize = 1_000_000;
 
 // --- Argon2id PoW parameters for DHT writes ---
