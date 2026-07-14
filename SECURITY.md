@@ -113,6 +113,18 @@ server enumerate the whole roster and correlate it with address fetches. So
 - Users publish certs content-addressed by `H(pubkey)` (or fingerprint) to a
   single opaque store. The server holds a blob + signature, no trusted ID↔key
   mapping.
+- **Publish step (new-ID generation):** the client generates the ML-DSA cert +
+  ML-KEM keypair locally, derives Null ID + fingerprint, signs
+  `{cert || fingerprint}` with its own ML-DSA key, and uploads
+  `{cert, fingerprint, sig}` addressed by `H(pubkey)`. The signed upload lets
+  the store reject unsigned junk without trusting the publisher; the
+  content-addressing key means the server cannot present a swapped "ID→cert"
+  mapping as authoritative.
+- On upload the server inevitably sees the **public** cert + fingerprint. That
+  is not a secrecy loss (public keys are public) and is required for a
+  fetchable directory. What it must NOT gain is a trusted ID↔key statement or
+  the ability to substitute a key undetected — both are defeated at verify
+  time by the out-of-band fingerprint.
 - Onboarding: Bob speaks his **ID + fingerprint** out-of-band (e.g. on a call);
   Alice enters both; her client pulls the cert, hashes it, and **compares to
   Bob's spoken fingerprint**. Match ⇒ authentic; mismatch ⇒ reject. The server

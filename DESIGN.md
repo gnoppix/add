@@ -127,6 +127,27 @@ There is **no** plaintext public-key directory keyed by Null ID. Instead:
   can meaningfully mutate into a trusted statement.
 - Trust anchor = the **fingerprint Bob speaks out-of-band**.
 
+**Publish (when a user generates a new ID):**
+1. On first run (or "New Identity"), the client generates the ML-DSA cert +
+   ML-KEM keypair locally. The Null ID (`NN-…`) and the fingerprint are derived
+   from this cert.
+2. The client computes `fp = fingerprint(cert)` and
+   `key = H(pubkey)` (content-addressing key).
+3. It uploads `{cert, fp, sig}` to the opaque cert store, addressed by `key`,
+   where `sig` is the client's ML-DSA signature over `{cert || fp}` (proves the
+   publisher holds the private key; lets the store reject unsigned junk without
+   trusting the publisher).
+4. The server stores the blob + signature keyed by `key`. It learns the cert
+   and fingerprint, but holds **no mutable ID↔key mapping** it can present as a
+   trusted statement — resolution still requires the out-of-band fingerprint.
+5. The user then shares their **ID + fingerprint** out-of-band (e.g. on a call)
+   so contacts can fetch and verify (see Onboarding flow below).
+
+Note: the server sees the public cert and fingerprint on upload — that is
+unavoidable for a fetchable directory and is **not** a secrecy loss (public
+keys are public). What the design avoids is the server learning *who is connected to
+whom* or being able to substitute a key undetected (caught at verify time).
+
 **Onboarding flow (chosen UX):**
 1. Bob (on a call with Alice) says: "my ID is `NN-XXXX` and my fingerprint is
    `ABCDE`." (ID + fingerprint exchanged verbally / out-of-band.)
