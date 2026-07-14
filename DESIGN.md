@@ -16,6 +16,10 @@ replacement ("contact-book" discovery). It is paired with `SECURITY.md`.
   today — messages are E2E encrypted).
 - **Target (not yet shipped):** also hide *who is where* (IP↔ID mapping) and
   the *contact graph* from the infrastructure itself.
+- **Decision (2026-07):** drop the earlier "3-server sharded + composition
+  server" sketch. Trust comes from out-of-band **fingerprint verification**,
+  not from server count. The cert store and the address store are each a
+  single, opaque, content-addressed server; the server is never trusted.
 
 ---
 
@@ -106,42 +110,70 @@ design below is the *recommended* form that closes the holes identified in
    unavailable server doesn't break discovery.
 4. **Signed shards.** Each shard carries an ML-DSA signature; clients verify on
    reassembly (defends against poisoned/unavailable shards).
-5. **Diverse operators.** The privacy gain only holds if the `n` servers are
-   run by independent parties / jurisdictions. Co-located servers gain little.
+5. **Single opaque server, not a shard quorum.** The earlier "distribute +
+   shard + composition server" sketch is **dropped**. Instead: one dumb,
+   content-addressed blob store per dataset (one for certs, one for encrypted
+   address records). The server is never trusted — correctness comes from
+   signatures + out-of-band fingerprint verification, not from server count.
+   (Diverse operators remain a bonus for availability, not a trust root.)
 
-### 4.2 Record lifecycle
+### 4.2 Public-key / certificate store (the onboarding path)
 
-Alice wants Bob reachable. Alice already holds Bob's ML-KEM public key + ML-DSA
-cert (out-of-band import + fingerprint verify — the same flow used to start a
-conversation today).
+There is **no** plaintext public-key directory keyed by Null ID. Instead:
 
-Publish (Alice, on Bob's behalf — or Bob publishes for himself):
-1. Build plaintext address record `R = {null_id, ws://<ip>:<port>, ttl}`.
-2. Encrypt `R` under a key **derived from Bob's public ML-KEM key** → `C`.
-   (Chicken-and-egg avoided: the decryption key is Bob's *public* key, which
-   Alice already has post-import. No prior session required.)
-3. Erasure-encode `C` into `n` shards `{s₁..sₙ}` with `k`-reconstruct.
-4. For each shard, compute `hᵢ = H(sᵢ)`, sign `sᵢ` with Alice's ML-DSA key.
-5. PUT each `(hᵢ, sᵢ, sig)` to a different server (content-addressed; server
-   stores no key↔shard mapping).
+- Each user publishes their **ML-DSA cert + ML-KEM public key**, content-
+  addressed by `H(pubkey)` (or by the fingerprint itself), to a single opaque
+  store. The server stores a blob + signature; it holds no ID↔key mapping it
+  can meaningfully mutate into a trusted statement.
+- Trust anchor = the **fingerprint Bob speaks out-of-band**.
 
-Resolve (Bob, or any contact holding Alice's public key):
-1. From Alice's Null ID + Bob's own key, derive the same set of shard hashes
-   `hᵢ` (deterministic). Fetch any `k` of them from the `n` servers.
-2. Verify each shard signature; erasure-decode to `C`; decrypt `C` using Bob's
-   **private** ML-KEM key → `R` → `ws://<ip>:<port>`.
+**Onboarding flow (chosen UX):**
+1. Bob (on a call with Alice) says: "my ID is `NN-XXXX` and my fingerprint is
+   `ABCDE`." (ID + fingerprint exchanged verbally / out-of-band.)
+2. Alice types Bob's **ID + fingerprint** into her client.
+3. Client pulls Bob's public cert from the store, addressed by ID.
+4. Client hashes the downloaded cert and **compares to the fingerprint Bob
+   spoke**. Match ⇒ cert authentic; mismatch ⇒ reject + warn.
+5. On success, cert is cached locally as *verified*; further resolves use the
+   cache, not the server.
 
-Result: only contacts holding the right public key can resolve and decrypt;
-**the server sees only ciphertext blobs addressed by hash.**
+**Why this is sound:** the server is only a transport for the cert. A malicious
+server returning a wrong key fails step 4 (collision-resistant hash + ML-DSA —
+it cannot forge a cert hashing to Bob's fingerprint). No server trust required.
 
-### 4.3 Why this beats the "3-server + composition server" sketch
+**Hardening notes:**
+- Address the cert by `H(pubkey)`/fingerprint, not by the mutable Null ID, so
+  the server cannot even swap "ID→cert" mappings.
+- Encode the fingerprint as a grouped, checksummed string (base32 groups-of-4
+  + checksum word, Signal-safety-number style) so read-aloud / typed typos
+  fail loudly. Prefer paste/scan over manual entry.
+- Show a "both sides confirm the SAME fingerprint" screen and, optionally, a
+  derived safety number compared on the call (Signal model) — this is TOFU +
+  out-of-band confirmation, not "server vouches."
+- If a cached cert is re-pulled (key rotation), re-verify and alert on change;
+  rotations must be re-confirmed out-of-band.
+- Caveat to state to users: if Alice types the fingerprint wrong, she matches
+  against her own typo. Safe-encoding + visible same-fingerprint confirmation
+  mitigate this.
 
-- The original sketch put "how shards compose" on server 3 → that server
-  becomes the correlation oracle (it learns which A-shard + B-shard = one
-  record). Content-addressed erasure coding removes that server entirely.
-- The original sketch accepted "server knows Alice↔Bob edge." With opaque
-  hash-addressed blobs and no ACL, the server learns neither the edge nor the
-  IP nor the Null ID.
+### 4.3 Address record store (replaces open DHT)
+
+Same opaque-store pattern as the cert store, but the value is the encrypted
+address record:
+
+Publish: build `R = {null_id, ws://<ip>:<port>, ttl}`; encrypt `R` under a key
+**derived from Bob's public ML-KEM key** (chicken-and-egg avoided — decryption
+key is Bob's *public* key, already held post-onboarding); content-address the
+ciphertext blob; sign it.
+
+Resolve: any contact holding Alice's public key fetches the blob by hash,
+verifies the signature, decrypts with their private ML-KEM key → `R` →
+`ws://<ip>:<port>`. **The server sees only a ciphertext blob addressed by
+hash — no IP, no Null ID, no contact edge.**
+
+This closes the holes in the old shard sketch (no composition server = no
+correlation oracle; opaque hash-addressed blobs = no ID↔shard mapping; no ACL
+= no contact-graph leak).
 
 ### 4.4 Remaining leak — traffic analysis
 
@@ -176,8 +208,10 @@ No system GnuPG binary; all crypto is in-process Rust.
 
 ## 6. Open questions / TODO
 
-- [ ] Decide `k`, `n`, and operator diversity model for sharded store.
-- [ ] Specify shard format + key derivation (ML-KEM-based KDF) precisely.
-- [ ] Wire PIR for query hiding (build on `handle_pir_query`).
-- [ ] Decide TTL/refresh policy under the closed model.
+- [ ] Specify cert-store + address-store blob format and ML-KEM-based KDF precisely.
+- [ ] Decide fingerprint encoding (base32 groups-of-4 + checksum word) and
+      same-fingerprint confirmation UI.
+- [ ] Wire PIR for query hiding on the address store (build on `handle_pir_query`).
+- [ ] Decide TTL/refresh policy for the encrypted address record.
+- [ ] Publish `_add-bootstrap` / `_add-relay` SRV records (currently unused).
 - [ ] Publish `_add-bootstrap` / `_add-relay` SRV records (currently unused).

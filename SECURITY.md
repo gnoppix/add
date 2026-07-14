@@ -87,18 +87,49 @@ contacts only (not a public phone book).
    helps against a *single* server being hacked or its disk seized. → Use
    **diverse, independent operators** for real gain.
 
+**DECISION (2026-07): the sharded + composition-server sketch is DROPPED.**
+Replaced by a single opaque, content-addressed blob store per dataset (certs
+and encrypted address records), where trust comes from signatures + out-of-band
+fingerprint verification, NOT from server count. The points below explain why
+the shard sketch was rejected; the adopted design is in `DESIGN.md` §4.
+
 2. **The "composition server" is the weak link.** A server that knows how
    shards compose is a correlation oracle (it learns which A+B = one record).
-   → Remove it: use **content-addressed erasure coding** (any `k`-of-`n`
-   reconstructs; shards self-describing by hash). No server holds the mapping.
+   → Removed: **content-addressed opaque blobs**; no server holds the mapping.
 
 3. **You can avoid even the contact-graph leak.** Conceding "server knows
    Alice↔Bob" is unnecessary. Make the store a **dumb opaque blob store**:
-   encrypt each shard under the *contact's* key, serve by content-hash, **no
+   encrypt each record under the *contact's* key, serve by content-hash, **no
    ACL**. The server then learns nothing — not the IP, not the Null ID, not
    the edge. Strictly stronger than an ACL model, and removes objection #2.
 
-4. **Traffic analysis still wins.** Even with encrypted shards, the server
+### 4.1 Onboarding via fingerprint (chosen UX)
+
+The earlier objection "storing all public keys on the server builds a user
+directory" still holds: a plaintext key directory keyed by Null ID lets the
+server enumerate the whole roster and correlate it with address fetches. So
+**no plaintext key directory**. Instead:
+
+- Users publish certs content-addressed by `H(pubkey)` (or fingerprint) to a
+  single opaque store. The server holds a blob + signature, no trusted ID↔key
+  mapping.
+- Onboarding: Bob speaks his **ID + fingerprint** out-of-band (e.g. on a call);
+  Alice enters both; her client pulls the cert, hashes it, and **compares to
+  Bob's spoken fingerprint**. Match ⇒ authentic; mismatch ⇒ reject. The server
+  is only a transport — it cannot forge a cert hashing to Bob's fingerprint.
+- Trust anchor is the out-of-band fingerprint, never the server. This is TOFU
+  + out-of-band confirmation (Signal model), not "server vouches."
+- Hardening: checksummed grouped fingerprint encoding (typos fail loudly);
+  "both sides confirm the SAME fingerprint" screen; re-verify cached certs on
+  rotation and alert on change; state the caveat that a mistyped fingerprint
+  matches against the user's own typo.
+
+**Why not a 3-server key store:** trust already derives from the fingerprint,
+so adding servers adds moving parts without raising the bar against the actual
+adversary (a same-operator compromise gets all 3 anyway). One opaque store +
+fingerprint verification is simpler and equally strong.
+
+4. **Traffic analysis still wins.** Even with encrypted blobs, the server
    sees *Alice fetch-then-connect-to-Y with matching timing/size*. Encryption
    hides content, not pattern. → Needs **PIR** (scaffolded as
    `handle_pir_query`) or cover traffic. Remaining metadata leak; document it.
