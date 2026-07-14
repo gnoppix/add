@@ -25,7 +25,7 @@ ssh -o ConnectTimeout=15 "$host" bash -s <<EOF
   sleep 1
   mv -f $bin.new $bin
   chmod +x $bin
-  setsid ./$bin > $bin.log 2>&1 < /dev/null &
+  setsid ./$bin --port 44089 > $bin.log 2>&1 < /dev/null &
 EOF
 
 echo "deployed+restarted $bin on $host"
