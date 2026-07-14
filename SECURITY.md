@@ -12,31 +12,46 @@ today, the RAM/key-snapshot question, and the analysis of the proposed sharded
 |----------------------------|------------------|------------|----------------------------|
 | Message bodies             | client ↔ client  | **yes**    | only sender + recipient    |
 | Channel (ratchet frames)   | in transit       | **yes**    | only the two peers         |
-| Address record (`addr:`)   | bootstrap DHT    | **no**     | **anyone with DB access**  |
-| Null ID / fingerprint      | bootstrap DHT    | **no**     | **anyone with DB access**  |
+| Address record (`addr:`)   | bootstrap DHT    | **RETIRED**| *removed 2026-07-14* — no plaintext addr path remains |
+| Presence blob (V2.2)       | bootstrap blob   | **yes**    | only the mutual contact (per-pair ML-KEM); server sees ciphertext only |
+| Null ID / fingerprint      | bootstrap cert   | **no** \*  | anyone, but it is a pseudonym and the cert is public-by-design |
 | Contact list / keys        | local only       | at rest*   | the device owner           |
 
 \* local store is not currently at-rest encrypted; see §3.
 
-**Bottom line:** message *content* is safe; the *routing metadata* (who is at
-which IP) is **plaintext on the bootstrap servers.**
+**Bottom line:** message *content* is safe; routing metadata (who is at which IP)
+is **no longer exposed** — presence is encrypted per-contact and the server
+stores only ciphertext. The operator cannot read IP↔ID without the per-pair
+decapsulation key (which only the two mutual contacts can derive). See
+`DESIGN.md` §2 (retired) and §4.3 (V2.2).
 
 ---
 
-## 2. Can a system admin see IPs and IDs? — YES
+## 2. Can a system admin see IPs and IDs? — NO (post V0 rebase, 2026-07-14)
 
-Anyone with root on a bootstrap host can run:
+The plaintext `addr:` record is **gone**. The query below now returns nothing —
+there is no `addr:%` table to read:
 
 ```sql
 sqlite3 /root/.add/bootstrap_dht.db
   "SELECT key, value, publisher_fp FROM kv_store
    WHERE key LIKE 'addr:%';"
+-- → 0 rows (handler removed 2026-07-14)
 ```
 
-and read, for every online user: Null ID, public IP, listener port, and GPG
-fingerprint. This is inherent to open DHT discovery — the bootstrap must know
-the mapping to answer lookups. The ID is a *pseudonym* (no name/email), but
-IP + persistent pseudonym is still linkable metadata.
+What remains on the bootstrap are opaque blobs:
+
+- **Cert blobs** — public by design (a published cert + fingerprint); the
+  operator can read them but they contain no IP.
+- **Presence blobs (V2.2)** — `value` is `base64(kem_ct_hex)'.'base64(nonce‖aes_ct)`.
+  The operator sees only ciphertext addressed by `presence:H(fp‖fp)`; without the
+  per-pair ML-KEM decapsulation key (derivable only by the two mutual contacts)
+  the listener IP cannot be recovered. So root on a bootstrap host can no longer
+  read IP↔ID. The Null ID / fingerprint are pseudonyms and the cert is
+  public-by-design; IP + persistent pseudonym linkability is closed.
+
+(Legacy note: prior to 2026-07-14 this section read "YES" — open DHT discovery
+forced the bootstrap to know the mapping. That design is retired.)
 
 ---
 
@@ -197,7 +212,9 @@ Security properties:
 - Independent operators for the n servers.
 - (Optional, later) PIR to hide which contact is being resolved.
 ```
-
+*Implemented as V2.2 (2026-07-14): per-contact encrypted presence blobs in the
+opaque blob store — `client/src/presence.rs`; not the k-of-n shard variant
+(designed, simpler single-blob model chosen for v1).*
 Result: a single server compromise / seizure yields only ciphertext; the
 operator cannot read IPs, Null IDs, or the contact graph.
 

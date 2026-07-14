@@ -81,10 +81,6 @@ const resources = {
           stopListenFailed: '...',
           restartListenFailed: '...',
         },
-        reflectorBot: {
-          title: '...',
-          description: '...',
-        },
       },
     },
   },

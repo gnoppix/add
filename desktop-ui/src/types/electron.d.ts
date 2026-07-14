@@ -30,7 +30,7 @@ declare global {
       aliases: () => Promise<Array<{ alias: string; nullId: string }>>
 
       // Messaging
-      send: (nullId: string, message: string, ttl?: string) => Promise<void>
+      send: (nullId: string, message: string, ttl?: string) => Promise<string>
       read: (json?: boolean) => Promise<Array<{ from: string; text: string }> | string>
       delete: (id: number) => Promise<string>
 
@@ -46,7 +46,11 @@ declare global {
       listenStatus: () => Promise<{ running: boolean; pid: number | null }>
 
       // Security - Change GPG key passphrase
-      passwd: () => Promise<string>
+      passwd: (current: string, newPass: string) => Promise<string>
+
+      // Subscribe to main-process push events (e.g. live P2P inbound messages).
+      // Returns an unsubscribe function.
+      on: (channel: string, callback: (...args: unknown[]) => void) => () => void
     }
   }
 }

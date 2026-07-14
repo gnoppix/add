@@ -21,6 +21,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use futures::{SinkExt as _, StreamExt as _};
 use sha2::{Digest, Sha256};
+use std::time::Duration;
+use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 
 /// Derive the ML-KEM-1024 keypair for a given Null ID.
@@ -263,4 +265,87 @@ pub async fn fetch_presence(identity: &Identity, contact_fp: &str) -> Option<Str
         }
     }
     None
+}
+
+/// Like `fetch_presence`, but additionally verifies the contact is actually
+/// reachable *right now*. A stale DHT presence blob (published while the
+/// contact was online, still within its TTL after they went offline) would
+/// make `fetch_presence` report an address — but the listener is no longer
+/// there. `fetch_presence_live` opens a WebSocket to that address and returns
+/// it only if the contact's listener answers the handshake.
+///
+/// Used by `contact-status` so the UI shows "online" = "reachable now", not
+/// "published presence recently". The `send` path deliberately keeps using the
+/// unprobed `fetch_presence` so message routing is never gated on liveness.
+pub async fn fetch_presence_live(identity: &Identity, contact_fp: &str) -> Option<String> {
+    let addr = fetch_presence(identity, contact_fp).await?;
+    // Normalize to a WebSocket URL (the stored address may be http(s)://).
+    let probe_url = addr
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
+    // Short timeout: a dead/unreachable listener must not stall the poll.
+    match timeout(Duration::from_secs(4), crate::ws_connect(&probe_url)).await {
+        Ok(Ok(_ws)) => Some(addr), // handshake completed → listener is live
+        _ => None,                 // timeout or connect error → offline
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::{Aes256Gcm, Key, Nonce};
+
+    fn fake_identity(null_id: &str) -> Identity {
+        Identity {
+            fingerprint: String::new(),
+            null_id: null_id.to_string(),
+            ml_dsa87_signing_key: None,
+        }
+    }
+
+    // Proves the per-pair ML-KEM-1024 round-trip: Alice encapsulates to Bob's
+    // derived KEM key, Bob (and only Bob, via his own derived dk) decapsulates
+    // to the same shared secret and opens the AES-sealed address.
+    #[test]
+    fn presence_pair_kem_roundtrip() {
+        let alice = fake_identity("NN-AAAA1111BBBB2222CCCC3333DDDD4444");
+        let bob_fp = "DCD689A757DD640EB3902BA9AB9751043C4A3AE4";
+
+        let addr = "ws://203.0.113.7:8765";
+        let key = presence_blob_key(&alice.null_id, bob_fp);
+        let (ct_hex, ss) = pair_encapsulate(&alice.null_id, &null_id_from_fingerprint(bob_fp)).unwrap();
+        let ct_hex_clone = ct_hex.clone();
+
+        // seal with the shared secret
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&ss));
+        let mut nonce_bytes = [0u8; 12];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ct = cipher.encrypt(nonce, addr.as_bytes()).unwrap();
+        let blob = format!("{}.{}", base64::engine::general_purpose::STANDARD.encode(ct_hex),
+                                   base64::engine::general_purpose::STANDARD.encode([nonce.as_slice(), &ct].concat()));
+
+        // Now Bob fetches: he derives the SAME ss via his dk + the embedded ct.
+        let bob = fake_identity(&null_id_from_fingerprint(bob_fp));
+        let recovered = {
+            let kem_ct_hex = String::from_utf8(
+                base64::engine::general_purpose::STANDARD.decode(blob.split('.').next().unwrap()).unwrap(),
+            )
+            .unwrap();
+            let ss = pair_decapsulate(&bob.null_id, &kem_ct_hex).unwrap();
+            let aes_b64 = blob.split('.').nth(1).unwrap();
+            open(&ss, aes_b64).unwrap()
+        };
+        assert_eq!(String::from_utf8(recovered).unwrap(), addr);
+
+        // An eavesdropper without Bob's dk derives a DIFFERENT shared secret
+        // and therefore cannot AES-open the address (it yields garbage).
+        let eve = fake_identity("NN-EVEE0000111122223333444455556666");
+        let ct_hex_for_eve = ct_hex_clone.clone();
+        let eve_ss = pair_decapsulate(&eve.null_id, &ct_hex_for_eve).ok();
+        let eve_opened = eve_ss.and_then(|ss| open(&ss, blob.split('.').nth(1).unwrap()).ok());
+        assert!(eve_opened.is_none(), "outsider must NOT recover the address");
+        let _ = key;
+    }
 }

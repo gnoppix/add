@@ -365,7 +365,7 @@ The desktop client lives in `desktop-ui/` (Electron + React + TypeScript, Zustan
 
 **Completed 2026-07-06 (Reflector Bot):**
 23. ✅ Reflector Bot — Headless echo bot with TTL inheritance, loop prevention, zero-footprint storage
-24. ✅ Default contact integration — `NN-UFtv-8fHu` auto-added in CLI and desktop UI (Reflector Bot)
+24. ✅ Default contact integration — `NN-UFtv-8fHu` auto-added in CLI (reflector). **Desktop UI no longer auto-adds it** (2026-07-14): clients start with a clean contact list; add the bot manually if needed for testing.
 
 **Completed 2026-07-09 (v0.3.16 — SPQR Braid fully wired):**
 25. ✅ SPQR Braid wired into live P2P handshake + ratchet — `p2p/src/braid_handshake.rs` streams the 1568B ML-KEM-1024 EK as `p2p-braid-chunk` frames; `send_message` + `handle_incoming_connection` negotiate `braid:true` and feed the reassembled key into KEM + Double Ratchet. Inline `kyber_enc_key` kept as fallback.
@@ -382,13 +382,17 @@ The desktop client lives in `desktop-ui/` (Electron + React + TypeScript, Zustan
 **Legend (this part):** ✅ done · 🔄 in progress · ⬜ todo · 🟢 defer (v2)
 
 > **V0 — Clean-cut rebase (2026-07-14):** server `addr-record` handler + client `dht_register_addr_record*` fully removed; discovery/registration now rides the opaque blob store + cert store only. DBs wiped on all 3 bootstraps; `dht_node.rs` has no `addr:` path. Presence = V2.2 per-contact encrypted blobs. The legacy plaintext `addr:` record (operator-readable IP↔ID) is retired for good.
+>
+> **Verified 2026-07-14 (fresh):** `cargo build --release --bin add` clean (0 warnings); `make check` workspace OK; unit test `presence::tests::presence_pair_kem_roundtrip` passes (Alice→Bob ML-KEM-1024 round-trip recovers the shared secret and AES-opens the address; an outsider with a different derived key fails to open it). Live round-trip: two fresh identities made mutual contacts; publisher's `add listen` stored an opaque presence blob; the contact's `add contact-status` decrypted it (`✓ … ONLINE at ws://127.0.0.1:18765`) while a non-contact stayed hidden. Server only ever held ciphertext.
+>
+> **2026-07-14 (live presence fix / Fix A):** `contact-status` now reports ONLINE only if a real WebSocket to the contact's listener answers (new `fetch_presence_live`, 4s probe). Previously a stale 2h-TTL presence blob made offline CLI contacts show ONLINE. Verified: the reported-false-positive contact `NN-kuU5-XHV2` now correctly reads `✗ … OFFLINE`. Desktop UI polls at 5s after launch, then every 27s. The `send` path still uses the unprobed `fetch_presence` so routing is never gated on liveness.
 
 ### VII.1 — Opaque cert store (publish + fetch, content-addressed)
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| V1.1 | New-ID publishes signed cert+fingerprint to opaque store (key=`H(pubkey)`) | ⬜ | Client signs `{cert‖fp}`; server stores blob+sig, no trusted ID↔key map. DESIGN §4.2 Publish. |
-| V1.2 | Cert fetch by ID + verify hash == spoken fingerprint | ⬜ | Onboarding verify path. |
-| V1.3 | Retire plaintext `addr:`-style public-key directory keyed by Null ID | ⬜ | No roster enumeration. |
+| V1.1 | New-ID publishes signed cert+fingerprint to opaque store (key=`H(pubkey)`) | ✅ Done | Client signs `{cert‖fp}`; server stores blob+sig, no trusted ID↔key map. DESIGN §4.2 Publish. Verified 3/3 public-only on is/me/jp. |
+| V1.2 | Cert fetch by ID + verify hash == spoken fingerprint | ✅ Done | Onboarding verify path; `dht_fetch_cert` reads `cert_blob_key(fp)=H(fp)` blob. |
+| V1.3 | Retire plaintext `addr:`-style public-key directory keyed by Null ID | ✅ Done | No roster enumeration; superseded by blob store + cert store. |
 
 ### VII.2 — Per-contact encrypted address store (replaces open DHT addr_record)
 | # | Task | Status | Notes |
@@ -421,9 +425,10 @@ The desktop client lives in `desktop-ui/` (Electron + React + TypeScript, Zustan
 | V5.1 | PIR on address store (close traffic-analysis leak) | 🟢 | `handle_pir_query` stub exists; hardest piece. |
 
 ### VII — Build order (phased)
-1. **V2.1 opaque blob store** — kills plaintext IP↔ID exposure on the server. Cheapest, highest value. ← **starting here**
-2. V1.1–V1.3 cert store publish/fetch.
-3. V2.2–V2.5 per-contact encryption.
-4. V3.1–V3.4 fingerprint UX.
-5. V4.1–V4.4 mutual-consent gate.
+0. **V0 clean-cut rebase** — ✅ remove `addr-record` server+client, wipe DBs, presence on blob store. **DONE 2026-07-14.**
+1. **V2.1 opaque blob store** — ✅ kills plaintext IP↔ID exposure on the server. Cheapest, highest value. **DONE.**
+2. V1.1–V1.3 cert store publish/fetch — ✅ Done (verified 3/3 public-only).
+3. V2.2–V2.5 per-contact encryption — ✅ Done (unit test + live round-trip verified).
+4. V3.1–V3.4 fingerprint UX — ⬜ todo (desktop-ui).
+5. V4.1–V4.4 mutual-consent gate — ⬜ todo (client-side).
 6. V5.1 PIR (deferred).

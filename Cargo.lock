@@ -43,6 +43,7 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "hex",
+ "hkdf",
  "ml-dsa",
  "pem",
  "pqcrypto-dilithium",

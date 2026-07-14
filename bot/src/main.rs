@@ -183,7 +183,10 @@ async fn main() -> Result<()> {
 
     info!("P2P listener on {}", listen_address);
 
-    // Register addr_record in DHT with all bootstrap servers
+    // Publish the reflector's public service bundle (cert + address) to the
+    // opaque cert store on all bootstrap servers. This replaces the retired
+    // plaintext `addr:` record — the server stores only an opaque blob, never
+    // a plaintext IP↔ID mapping.
     let bootstrap_urls = vec![
         "wss://bootstrap-eu.gnoppix.org/ws".to_string(),
         "wss://bootstrap-asia.gnoppix.org/ws".to_string(),
@@ -191,13 +194,13 @@ async fn main() -> Result<()> {
     ];
 
     for url in &bootstrap_urls {
-        if let Err(e) = register_addr_record(url, &listen_address).await {
-            warn!("Failed to register to {}: {}", url, e);
+        if let Err(e) = publish_service_bundle(url, &listen_address).await {
+            warn!("Failed to publish service bundle to {}: {}", url, e);
         } else {
-            info!("Registered address in DHT on {}", url);
+            info!("Published service bundle on {}", url);
         }
     }
-    info!("Registered address in DHT for direct P2P discovery");
+    info!("Published public service bundle for direct P2P discovery");
 
     if args.once {
         info!("Single cycle complete - exiting");
@@ -211,19 +214,19 @@ async fn main() -> Result<()> {
     let rereg_listen = listen_address.clone();
     tokio::spawn(async move {
         let bootstraps = vec![
-            "wss://bootstrap-eu.gnoppix.org/ws".to_string(),
-            "wss://bootstrap-asia.gnoppix.org/ws".to_string(),
-            "wss://bootstrap-us.gnoppix.org/ws".to_string(),
+        "wss://bootstrap-eu.gnoppix.org/ws".to_string(),
+        "wss://bootstrap-asia.gnoppix.org/ws".to_string(),
+        "wss://bootstrap-us.gnoppix.org/ws".to_string(),
         ];
-        // First re-register quickly (within ~10s) to overwrite any stale
-        // record left by a previous instance, then settle into a 5-min cadence.
+        // First re-publish quickly (within ~10s) to overwrite any stale
+        // bundle left by a previous instance, then settle into a 5-min cadence.
         let mut first = true;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(if first { 10 } else { 300 })).await;
             first = false;
             for url in &bootstraps {
-                if let Err(e) = register_addr_record(url, &rereg_listen).await {
-                    warn!("Periodic re-register to {} failed: {}", url, e);
+                if let Err(e) = publish_service_bundle(url, &rereg_listen).await {
+                    warn!("Periodic re-publish to {} failed: {}", url, e);
                 }
             }
         }
@@ -245,8 +248,17 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Register the reflector's listening address in the DHT using WireEnvelope format
-async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Result<()> {
+/// Publish the reflector's public service bundle to the opaque cert store on
+/// the bootstrap servers (DESIGN.md §6 exception + §4.2). The bundle carries
+/// `{cert, vk, kyber_enc, fp, address}` under key `cert:<H(fp)>` — the same
+/// opaque blob store every client uses. The server stores it opaquely: it sees
+/// the public cert + an encrypted address field, never a plaintext `addr:ip`
+/// record. Any client may read it (the key is well-known), which is what makes
+/// the reflector reachable without a contact entry. We still solve PoW so the
+/// publish is accepted whether or not the server enforces it.
+async fn publish_service_bundle(bootstrap_url: &str, listen_address: &str) -> Result<()> {
+    use sha2::{Digest, Sha256};
+
     let (ws_stream, _response) = tokio::time::timeout(
         std::time::Duration::from_secs(20),
         tokio_tungstenite::connect_async(bootstrap_url),
@@ -255,33 +267,63 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
     .map_err(|_| anyhow!("Timeout connecting to bootstrap {}", bootstrap_url))?
     .map_err(|e| anyhow!("Failed to connect to bootstrap: {}", e))?;
 
-    // Do not split()+drop the read half: that stalls writes (pongs never read).
-    // Send on the unified stream, mirroring the client's working ws_connect() path.
     let mut ws_tx = ws_stream;
 
-    // SECURITY FIX (M11): PoW salted with the publisher's own fingerprint
-    let sign_data = format!("{}|{}|{}", REFLECTOR_NULL_ID, listen_address, add_protocol::constants::ADDR_TTL);
+    // Deterministic ML-KEM enc key derived from the reflector's null_id, so a
+    // client that wants to KEM-encapsulate to the published key gets a stable
+    // target (mirrors client/src/main.rs derive from add-sealed-sender-kyber-seed).
+    let kyber_enc_b64 = {
+        let hash = Sha256::digest(REFLECTOR_NULL_ID.as_bytes());
+        let hk = hkdf::Hkdf::<Sha256>::new(None, &hash);
+        let mut seed = [0u8; 64];
+        hk.expand(b"add-sealed-sender-kyber-seed", &mut seed)
+            .map_err(|_| anyhow!("HKDF expand failed"))?;
+        let kp = add_crypto::kyber::KyberKeypair::from_seed(&seed)
+            .map_err(|e| anyhow!("kyber keypair from seed: {}", e))?;
+        add_crypto::kyber::encode_enc_key(&kp.enc)
+    };
+
     let (sk_seed, vk_b64) = load_reflector_signing_key()?;
+
+    // Bundle published to the opaque store. `cert` is empty for the reflector
+    // (it has no OpenPGP cert); `vk` is the authoritative verifying key the
+    // client pins, and `address` is its advertised ws:// endpoint.
+    let bundle = serde_json::json!({
+        "cert": "",
+        "vk": vk_b64,
+        "kyber_enc": kyber_enc_b64,
+        "fp": REFLECTOR_FINGERPRINT,
+        "address": listen_address,
+    })
+    .to_string();
+    let value_b64 = base64_standard.encode(bundle.as_bytes());
+
+    let key = format!("cert:{}", hex::encode(Sha256::digest(REFLECTOR_FINGERPRINT.as_bytes())));
+
+    let sign_data = format!("{}|{}|{}", key, value_b64, REFLECTOR_FINGERPRINT);
     let sig = {
         use add_crypto_pq::{MlDsa87KeyPair, sign_ml_dsa87};
-
         let seed_arr: [u8; 32] = sk_seed.as_slice().try_into()
             .map_err(|_| anyhow!("Invalid seed length"))?;
         let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
-        let sk = kp.signing_key();
-
-        sign_ml_dsa87(sign_data.as_bytes(), &sk)?
+        sign_ml_dsa87(sign_data.as_bytes(), &kp.signing_key())?
     };
 
+    // PoW: solve to seq==0 difficulty (8) — the server uses ADDR_POW_DIFFICULTY
+    // for `cert:` keys at seq==0. Difficulty 8 is fast (sub-second) and is what
+    // the server enforces, so matching it exactly keeps the publish quick.
+    let pow_data = format!("{}|{}|{}|{}", key, value_b64, REFLECTOR_FINGERPRINT, 0);
     let pow_nonce: u64 = {
-        let pow_data = format!("{}|{}|{}", REFLECTOR_NULL_ID, listen_address, add_protocol::constants::ADDR_TTL);
-        tokio::task::spawn_blocking(move || {
-            add_dht_core::pow_solve(
-                &pow_data,
-                add_protocol::constants::ADDR_POW_DIFFICULTY,
-                10_000_000,
-                REFLECTOR_FINGERPRINT.as_bytes(),
-            )
+        tokio::task::spawn_blocking({
+            let pd = pow_data.clone();
+            move || {
+                add_dht_core::pow_solve(
+                    &pd,
+                    add_protocol::constants::ADDR_POW_DIFFICULTY,
+                    2_000_000,
+                    REFLECTOR_FINGERPRINT.as_bytes(),
+                )
+            }
         })
         .await
         .map_err(|e| anyhow!("PoW task error: {}", e))?
@@ -289,20 +331,24 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
         .ok_or_else(|| anyhow!("Could not solve PoW in time"))?
     };
 
-    // Create dht-addr-record message (server expects null_id, address, ttl in payload)
     let req = add_protocol::envelope::WireEnvelope {
-        msg_type: "dht-addr-record".to_string(),
+        msg_type: "blob-put".to_string(),
         msg_id: uuid_hex(),
         ts: chrono::Utc::now().timestamp() as f64,
-        sig,
+        sig: sig.clone(),
         payload: {
             let mut m = serde_json::Map::new();
-            m.insert("null_id".to_string(), serde_json::Value::String(REFLECTOR_NULL_ID.to_string()));
-            m.insert("address".to_string(), serde_json::Value::String(listen_address.to_string()));
-            m.insert("ttl".to_string(), serde_json::json!(add_protocol::constants::ADDR_TTL));
+            m.insert("key".to_string(), serde_json::Value::String(key));
+            m.insert("value".to_string(), serde_json::Value::String(value_b64));
+            m.insert("sig".to_string(), serde_json::Value::String(sig));
             m.insert("publisher_fp".to_string(), serde_json::Value::String(REFLECTOR_FINGERPRINT.to_string()));
+            // Self-asserted verifying key — the server binds it to publisher_fp
+            // before accepting the cert blob (cert-store MITM defense).
             m.insert("publisher_verifying_key".to_string(), serde_json::Value::String(vk_b64.clone()));
-            m.insert("nonce".to_string(), serde_json::Value::Number(pow_nonce.into()));
+            m.insert("ttl".to_string(), serde_json::Value::Number(serde_json::Number::from(add_protocol::constants::ADDR_TTL)));
+            m.insert("nonce".to_string(), serde_json::Value::Number(serde_json::Number::from(pow_nonce as i64)));
+            m.insert("vk".to_string(), serde_json::Value::String(vk_b64.clone()));
+            m.insert("kyber_enc".to_string(), serde_json::Value::String(kyber_enc_b64.clone()));
             serde_json::Value::Object(m)
         },
     };
@@ -312,7 +358,7 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
             serde_json::to_string(&req)?.into(),
         ))
         .await?;
-    info!("Sent dht-addr-record registration to {}", bootstrap_url);
+    info!("Published public service bundle to {}", bootstrap_url);
 
     Ok(())
 }

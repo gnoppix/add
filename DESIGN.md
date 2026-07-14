@@ -23,9 +23,16 @@ replacement ("contact-book" discovery). It is paired with `SECURITY.md`.
 
 ---
 
-## 2. Current mechanism — open DHT
+## 2. Current mechanism — open DHT  *(RETIRED 2026-07-14 — V0 clean-cut rebase)*
 
-### 2.1 What is stored
+> **Status:** the plaintext `addr:` record described below no longer exists. As of
+> 2026-07-14 the `addr-record` handler was removed server-side (`dht_node.rs`) and
+> `dht_register_addr_record*` was removed client-side. Discovery now uses the
+> opaque blob store + per-contact **encrypted** presence blobs (see §4.3). The
+> DBs on all three bootstraps were wiped. This section is kept only as a record
+> of what was replaced.
+
+### 2.1 What *was* stored
 
 On startup, `add listen` computes the advertised address via NAT traversal
 (UPnP/IGD, else STUN) and calls `dht_register_addr_record_all`, which writes an
@@ -83,12 +90,20 @@ back to the hardcoded list above (no SRV records currently published).
 | Adversary                         | Sees IP↔ID? | Sees messages? | Sees contact graph? |
 |-----------------------------------|-------------|----------------|---------------------|
 | Passive network observer          | no*         | no             | no                  |
-| Bootstrap server operator (root)  | **yes**     | no             | **yes** (all edges) |
-| Hosting provider / VM snapshot    | **yes**     | no             | **yes**             |
-| State subpoena of all 3 servers   | **yes**     | no             | **yes**             |
+| Bootstrap server operator (root)  | **no**      | no             | **no**              |
+| Hosting provider / VM snapshot    | **no**      | no             | **no**              |
+| State subpoena of all 3 servers   | **no**      | no             | **no**              |
 | Compromised client                | (has own)   | (has own)      | (has own)           |
 
 \* unless correlation via relay timing; see §5.4.
+
+> **Updated 2026-07-14 (V0 rebase):** the operator can no longer read IP↔ID or
+> the contact graph. Presence is stored as per-contact ML-KEM-encrypted blobs
+> (§4.3); the server holds only ciphertext. A root operator on a bootstrap can
+> read the opaque blobs but cannot decrypt them without the per-pair
+> decapsulation key, which only the two mutual contacts can derive. (Prior to
+> this date the table read "yes" for the operator — that reflected the retired
+> plaintext `addr:` record, §2.)
 
 ---
 
@@ -106,10 +121,17 @@ design below is the *recommended* form that closes the holes identified in
 2. **No access-control list, no composition server.** Records are addressed by
    content hash, not by a server-held mapping. The server learns no
    ID↔shard↔contact edges.
-3. **Erasure coding, not strict 3-of-3.** Use `k-of-n` (e.g. any 2-of-3) so one
-   unavailable server doesn't break discovery.
-4. **Signed shards.** Each shard carries an ML-DSA signature; clients verify on
-   reassembly (defends against poisoned/unavailable shards).
+3. **Replication, not erasure coding.** Each opaque blob is written to **all**
+   bootstrap servers (strict N-of-N write) and any one can answer a fetch
+   (any-1-of-N read). This gives the availability goal without Reed-Solomon
+   erasure coding — for ~300-byte blobs the extra complexity and a shard
+   composition step would contradict principle 5 (no composition server). If a
+   server is down, fetches/reads fall back to the others. (The earlier "k-of-n"
+   sketch is therefore **not** used — dropped alongside the composition server.)
+4. **Signed blobs.** Each blob carries an ML-DSA signature over `{key‖value}`;
+   the server verifies `VK == publisher null_id` and clients re-verify on fetch
+   (defends against a poisoned/unavailable blob — no reassembly step since
+   there are no shards).
 5. **Single opaque server, not a shard quorum.** The earlier "distribute +
    shard + composition server" sketch is **dropped**. Instead: one dumb,
    content-addressed blob store per dataset (one for certs, one for encrypted
@@ -177,24 +199,36 @@ it cannot forge a cert hashing to Bob's fingerprint). No server trust required.
   against her own typo. Safe-encoding + visible same-fingerprint confirmation
   mitigate this.
 
-### 4.3 Address record store (replaces open DHT)
+### 4.3 Address record store (replaces open DHT) — implemented as V2.2
 
-Same opaque-store pattern as the cert store, but the value is the encrypted
-address record:
+Per-contact **encrypted** presence blobs stored in the same opaque blob store as
+the cert store. For each mutual contact `C`, the publisher `A`:
 
-Publish: build `R = {null_id, ws://<ip>:<port>, ttl}`; encrypt `R` under a key
-**derived from Bob's public ML-KEM key** (chicken-and-egg avoided — decryption
-key is Bob's *public* key, already held post-onboarding); content-address the
-ciphertext blob; sign it.
+1. Derives its own KEM keypair `dk_A` from `A.null_id` (HKDF-SHA256 of
+   `Sha256(A.null_id)` with label `add-sealed-sender-kyber-seed`, expanded to
+   64 bytes → `KyberKeypair::from_seed`). `C`'s KEM public key `ek_C` is derived
+   identically from `C.null_id`, so both ends are reproducible at runtime — no
+   on-disk secret store.
+2. Encapsulates: `ct_C = encaps(ek_C)`, yielding a per-contact shared secret
+   `ss` (ML-KEM-1024).
+3. AES-256-GCM-seals the listener address under `ss`: `blob =
+   base64(hex(ct_C)) '.' base64(nonce‖ct)`.
+4. Stores under opaque key `presence:H(A.fp‖C.fp)` with an ML-DSA `sig` over
+   `{key‖value}`; the server verifies `VK == A.null_id` and stores the
+   ciphertext verbatim — it **never** parses the value as an address or learns
+   the contact edge.
 
-Resolve: any contact holding Alice's public key fetches the blob by hash,
-verifies the signature, decrypts with their private ML-KEM key → `R` →
-`ws://<ip>:<port>`. **The server sees only a ciphertext blob addressed by
-hash — no IP, no Null ID, no contact edge.**
+Resolve: `C` recomputes `presence:H(A.fp‖C.fp)`, fetches the blob, verifies the
+sig, decapsulates `ct_C` with its own `dk_C` → `ss` → AES-opens the address.
+**The server sees only a hash-addressed ciphertext blob: no IP, no Null ID, no
+contact graph.** An outsider lacking `dk_C` derives a *different* `ss` and
+fails to open the blob.
 
 This closes the holes in the old shard sketch (no composition server = no
 correlation oracle; opaque hash-addressed blobs = no ID↔shard mapping; no ACL
-= no contact-graph leak).
+= no contact-graph leak). Code: `client/src/presence.rs`
+(`publish_presence` / `fetch_presence`); verified by the
+`presence_pair_kem_roundtrip` unit test and a live two-identity publish→fetch.
 
 ### 4.4 Remaining leak — traffic analysis
 
@@ -221,7 +255,7 @@ fingerprint verify). This is a deliberate constraint, consistent with the
 | Signatures       | ML-DSA-87 (204)         | `sequoia-openpgp` / `pqcrypto-dilithium` |
 | Session          | Double Ratchet          | AES-256-GCM per frame, forward secret |
 | Transport        | `ws://` (direct P2P)    | app-layer encrypted; `wss://` on relay|
-| PoW              | difficulty-8 addr record| nonce-log replay protection           |
+| PoW              | (retired) addr-record   | nonce-log PoW was on the deleted `addr:` write; presence blobs need no PoW |
 
 No system GnuPG binary; all crypto is in-process Rust.
 
@@ -243,6 +277,9 @@ send to the other.
   cannot waste CPU or probe presence). This is what actually blocks Bob→Alice
   in the asymmetric-add scenario — Alice has no Bob entry, so she drops his
   inbound.
+  *Implemented 2026-07-14:* `handle_incoming_connection` (client/src/main.rs)
+  now gates on `load_contacts()` — a `p2p-hello` from a fingerprint not in the
+  local contact list is rejected before signature verification / ratchet work.*
 - Server-side allow-lists are explicitly NOT relied upon (a modified client
   could bypass them). The client itself is the enforcement point.
 
@@ -288,6 +325,7 @@ only ever shown for IDs the user has themselves added.
       same-fingerprint confirmation UI.
 - [ ] Wire PIR for query hiding on the address store (build on `handle_pir_query`).
 - [ ] Decide TTL/refresh policy for the encrypted address record.
-- [ ] Specify mutual-consent enforcement: inbound drop-before-decrypt path,
-      pending-add UI state, and remove→stop-publish coupling.
+- [x] Specify mutual-consent enforcement: inbound drop-before-decrypt path
+      (done 2026-07-14 — `handle_incoming_connection` gates on contact list);
+      pending-add UI state and remove→stop-publish coupling remain TODO.
 - [ ] Publish `_add-bootstrap` / `_add-relay` SRV records (currently unused).

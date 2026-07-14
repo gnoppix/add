@@ -74,8 +74,8 @@ OnMessageReceived
 
 ## Integration
 
-- **CLI client**: `NN-B0T-REFL` auto-added during `add init`
-- **Desktop UI**: "🤖 Reflector Bot" appears in contact list automatically
+- **CLI client**: `NN-UFtv-8fHu` is the Reflector Bot's Null ID — add it as a normal contact to test echo/latency (`add add-contact NN-UFtv-8fHu <fingerprint>`).
+- **Desktop UI**: the Reflector Bot is **not** auto-added. The desktop client starts with a clean contact list (only your real contacts); add `NN-UFtv-8fHu` manually if you want to use it for testing.
 
 ## Development
 

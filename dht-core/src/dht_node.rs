@@ -601,9 +601,15 @@ impl DhtNodeRuntime {
         // Address records are stored under the "addr:{null_id}" key (sent by the
         // reflector/contact registration path). Validate against the bare null_id
         // after stripping the prefix so the lookup key round-trips correctly.
+        // Public cert bundles (DESIGN.md §4.2/§6) are stored under the opaque
+        // "cert:<H(fp)>" key and are NOT keyed by the publisher's null_id; their
+        // authenticity is established by the mandatory signature check below
+        // (the VK must derive to `publisher_fp`), so we exempt them from the
+        // null_id==key rule.
+        let is_cert_key = key.starts_with("cert:");
         let key_for_validation = key.strip_prefix("addr:").unwrap_or(&key);
         let expected_nid = compute_null_id(&publisher_fp);
-        if expected_nid != key_for_validation {
+        if !is_cert_key && expected_nid != key_for_validation {
             let resp = build_dht_error(&key, &format!("key mismatch: expected {expected_nid}"));
             let _ = ws_tx
                 .send(Message::Text(resp.to_json().unwrap_or_default().into()))
@@ -769,6 +775,23 @@ impl DhtNodeRuntime {
         let publisher_fp = env.payload_str("publisher_fp").unwrap_or("").to_string();
         let ttl: i64 = env.payload_i64("ttl").unwrap_or(constants::ADDR_TTL);
         let salt = format!("blob:{}", rand::random::<u32>());
+        // Authenticate public cert bundles (DESIGN.md §4.2 / §6): a `cert:` blob
+        // MUST be signed by the key whose verifying key derives to `publisher_fp`.
+        // The otherwise-opaque store would otherwise let anyone overwrite
+        // `cert:<H(fp)>` and substitute a victim's cert/vk (cert-store MITM).
+        // We reuse the DHT-put signature contract: canonical
+        // `sign_data = "{key}|{value}|{publisher_fp}"`, verified against the
+        // self-asserted `publisher_verifying_key` (VK must derive to publisher_fp).
+        if key.starts_with("cert:") {
+            let sign_data = format!("{}|{}|{}", key, value_b64, publisher_fp);
+            if !verify_dht_put_signature(&sign_data, &sig, &publisher_fp, env) {
+                let resp = build_dht_error(&key, "invalid cert bundle signature");
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
+                return;
+            }
+        }
         // Content-addressed "latest wins" upsert — no seq/nonce replay games
         // (those are for the mutable addr-record model). Client owns the key.
         match store

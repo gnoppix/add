@@ -91,6 +91,21 @@ const FALLBACK_RELAY_ASIA: &str = "wss://relay-asia.gnoppix.org/ws";
 const BOOTSTRAP_SRV: &str = "_add-bootstrap._tcp.gnoppix.org";
 const RELAY_SRV: &str = "_add-relay._tcp.gnoppix.org";
 
+/// Well-known public service: the Add Reflector (echo) bot.
+/// A public service is reachable WITHOUT being in the user's contact list
+/// (DESIGN.md §6 exception). Clients fetch its cert+address bundle from the
+/// public cert store and pin the verifying key, so no contact entry is needed
+/// and the reflector never holds anyone in its (non-existent) address book.
+const REFLECTOR_NULL_ID: &str = "NN-UFtv-8fHu";
+const REFLECTOR_FINGERPRINT: &str = "3957378550B111F2678DC1B4A58C27B22091D5CF";
+
+/// True for a well-known public service (reflector, future bots). Public
+/// services are exempt from the mutual-consent contact-list gate but are still
+/// pinned to their published cert — see `fetch_public_service`.
+fn is_public_service(null_id: &str) -> bool {
+    null_id == REFLECTOR_NULL_ID
+}
+
 /// Discover bootstrap and relay server URLs via DNS SRV records.
 ///
 /// Queries `_add-bootstrap._tcp.gnoppix.org` and
@@ -481,36 +496,6 @@ fn prompt_passphrase() -> Result<String, Box<dyn std::error::Error>> {
 /// Returns the user's own certificate as ASCII-armored text (the same bytes
 /// stored in `own_cert.age` / `own_cert.asc`). Used by the cert-store publish
 /// path (DESIGN.md §4.2) which uploads the armored cert to the opaque blob store.
-fn load_own_cert_armored() -> Result<String, Box<dyn std::error::Error>> {
-    let cert_dir = home_dir().join(GPG_HOME);
-    let enc_path = cert_dir.join("own_cert.age");
-    let plain_path = cert_dir.join("own_cert.asc");
-
-    if enc_path.exists() {
-        let armored = std::fs::read_to_string(&enc_path)?;
-        let password = prompt_passphrase()?;
-        if password.is_empty() {
-            return Err("encrypted own_cert.age requires a passphrase".into());
-        }
-        return Ok(decrypt_cert_armored(&armored, &password)?);
-    }
-
-    if !plain_path.exists() {
-        return Err("no identity found — run 'add init' first".into());
-    }
-    let armored = std::fs::read_to_string(&plain_path)?;
-    let bytes = armored.as_bytes();
-    if !bytes.is_empty()
-        && (bytes[0] == 0xEF && bytes.get(1..3) == Some(&[0xBF, 0xBD]) || bytes[0] == 0x00)
-    {
-        return Err(
-            "corrupt identity file detected — run 'rm -rf ~/.add/gnupg && add init' to recreate"
-                .into(),
-        );
-    }
-    Ok(armored)
-}
-
 /// Tries the age-encrypted `own_cert.age` first, falls back to plaintext `own_cert.asc`.
 fn load_cert() -> Result<sequoia_openpgp::Cert, Box<dyn std::error::Error>> {
     use sequoia_openpgp::parse::Parse;
@@ -1515,69 +1500,6 @@ fn generate_identity() -> Result<Identity, Box<dyn std::error::Error>> {
 
 /// Connect to the seed DHT node and look up a recipient's address.
 /// This uses the centralized seed DHT model (G4: no Kademlia routing).
-async fn dht_lookup(
-    seed_url: &str,
-    null_id: &str,
-    use_addr_key: bool,
-) -> Result<String, Box<dyn std::error::Error>> {
-    use add_protocol::envelope::WireEnvelope;
-
-    // Address records (P2P listener endpoints for contacts/reflector) are stored
-    // under the "addr:{null_id}" key, not the bare null_id. The recipient lookup
-    // for direct P2P delivery must query that key.
-    let dht_key = if use_addr_key {
-        format!("addr:{null_id}")
-    } else {
-        null_id.to_string()
-    };
-
-    // Normalize URL scheme: https:// → wss://, http:// → ws://
-    let ws_url = seed_url
-        .replace("http://", "ws://")
-        .replace("https://", "wss://");
-
-    let mut ws = ws_connect(&ws_url)
-        .await
-        .map_err(|e| format!("DHT connect failed: {}", e))?;
-
-    // SECURITY FIX (C2): Sign the dht-get request with ML-DSA-87
-    let sig_data = format!("dht-get:{}\n", serde_json::json!({"key": dht_key}));
-    let sig = sign_for_transport(&sig_data)?;
-
-    // Send dht-get (construct WireEnvelope manually)
-    let req = WireEnvelope {
-        msg_type: "dht-get".to_string(),
-        msg_id: uuid_hex(),
-        ts: chrono::Utc::now().timestamp() as f64,
-        sig: sig.clone(),
-        payload: {
-            let mut m = serde_json::Map::new();
-            m.insert(
-                "key".to_string(),
-                serde_json::Value::String(dht_key.to_string()),
-            );
-            serde_json::Value::Object(m)
-        },
-    };
-    let req_json = serde_json::to_string(&req)?;
-    ws.send(Message::Text(req_json.into()))
-        .await
-        .map_err(|e| format!("DHT send failed: {}", e))?;
-
-    // Read response
-    if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
-        let resp: WireEnvelope = serde_json::from_str(&resp_text)?;
-        if resp.msg_type == "dht-found" {
-            let address = resp.payload_str("value").unwrap_or("");
-            if !address.is_empty() {
-                return Ok(address.to_string());
-            }
-        }
-    }
-
-    Err("recipient not found in DHT".into())
-}
-
 /// Fetch a peer's ML-DSA-87 verifying key from the DHT and cache it for
 /// signature verification. The bootstrap `dht-found` response carries the
 /// publisher's verifying key alongside the value. Returns true if cached.
@@ -1900,7 +1822,6 @@ async fn dht_publish_cert(
         String::from_utf8(buf).map_err(|e| format!("armored cert invalid UTF-8: {}", e))?
     };
     let cert_b64 = base64::engine::general_purpose::STANDARD.encode(armored.as_bytes());
-    let fp = identity.fingerprint.clone();
 
     // ML-DSA-87 verifying key (for the fetcher to verify signatures later)
     let vk_b64 = if let Some(sk_b64) = &identity.ml_dsa87_signing_key {
@@ -1912,6 +1833,20 @@ async fn dht_publish_cert(
         base64::engine::general_purpose::STANDARD.encode(vk.to_bytes())
     } else {
         String::new()
+    };
+
+    // Cert-store identity is the ML-DSA-87 fingerprint (post-quantum), NOT the
+    // OpenPGP cert fingerprint. The server binds the published VK to this fp,
+    // so the blob key, bundle fp and publisher_fp must all be the PQ fp. Using
+    // the GPG fp here would fail the VK→fp binding check and be rejected.
+    let fp = if let Some(sk_b64) = &identity.ml_dsa87_signing_key {
+        let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
+        use ml_dsa::{KeyInit, Keypair};
+        let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
+            .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
+        add_crypto_pq::fingerprint_from_verifying_key(&Keypair::verifying_key(&sk).clone())
+    } else {
+        return Err("ML-DSA-87 signing key not found - re-run 'add init'".into());
     };
 
     // ML-KEM (Kyber) encapsulation key, derived deterministically from null_id
@@ -1938,7 +1873,11 @@ async fn dht_publish_cert(
     })
     .to_string();
     let value_b64 = base64::engine::general_purpose::STANDARD.encode(bundle.as_bytes());
-    let sign_data = format!("{}|{}", value_b64, fp);
+    // Canonical signed data matches the server's cert: blob verification
+    // contract: "{key}|{value}|{publisher_fp}". The server binds the
+    // self-asserted `publisher_verifying_key` to publisher_fp, so only the
+    // holder of the matching ML-DSA-87 key can publish this cert blob.
+    let sign_data = format!("{}|{}|{}", key, value_b64, fp);
     let sig = sign_for_transport(&sign_data)?;
 
     let (_, bootstraps, _) = discover_all_servers().await;
@@ -1966,7 +1905,10 @@ async fn dht_publish_cert(
                 m.insert("value".to_string(), serde_json::Value::String(value_b64.clone()));
                 m.insert("sig".to_string(), serde_json::Value::String(sig.clone()));
                 m.insert("publisher_fp".to_string(), serde_json::Value::String(fp.clone()));
-                m.insert("ttl".to_string(), serde_json::json!(add_protocol::constants::ADDR_TTL));
+                // Self-asserted verifying key — the server binds it to
+                // publisher_fp before accepting the cert blob (cert-store MITM defense).
+                m.insert("publisher_verifying_key".to_string(), serde_json::Value::String(vk_b64.clone()));
+                m.insert("ttl".to_string(), serde_json::Value::Number(serde_json::Number::from(add_protocol::constants::ADDR_TTL)));
                 m.insert("nonce".to_string(), serde_json::Value::Number((uuid_hex().len() as i64).into()));
                 m.insert("vk".to_string(), serde_json::Value::String(vk_b64.clone()));
                 m.insert("kyber_enc".to_string(), serde_json::Value::String(kyber_enc_b64.clone()));
@@ -2055,6 +1997,88 @@ async fn dht_fetch_cert(
     }
 }
 
+/// Resolve a well-known public service's listener address from the public
+/// cert store, and pin its verifying key (DESIGN.md §6 exception).
+///
+/// Public services publish their `{cert, vk, kyber_enc, fp, address}` bundle to
+/// the same opaque cert store as everyone else (key `cert:<H(fp)>`), so the
+/// server stores only ciphertext + the public cert — no plaintext `addr:ip`
+/// record. Any client may read it (the key is well-known), which is what makes
+/// the service reachable without a contact entry. We pre-pin the VK from this
+/// authoritative bundle so the later `p2p-hello-ack` MITM check (C3) can only
+/// succeed if the responder proves possession of the published key.
+///
+/// Fail-closed: if the bundle is missing/unpublished, the send aborts — this is
+/// the "reflector needs its cert in bootstrap" guarantee made explicit.
+async fn fetch_public_service_addr(null_id: &str) -> Option<String> {
+    let fp = if null_id == REFLECTOR_NULL_ID {
+        REFLECTOR_FINGERPRINT
+    } else {
+        return None;
+    };
+    let (_, bootstraps, _) = discover_all_servers().await;
+    for seed_url in &bootstraps {
+        // Reuse the cert blob-get path; the bundle carries `address`.
+        if let Ok((_cert, vk_b64, _kyber)) = dht_fetch_cert(seed_url, fp).await {
+            // Pin the VK from the authoritative published bundle.
+            if let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(&vk_b64) {
+                if let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes) {
+                    let _ = add_dht_core::crypto_helpers::pin_verifying_key(fp, &vk);
+                }
+            }
+            // The address field is carried in the same bundle; re-fetch the raw
+            // bundle to read it (dht_fetch_cert elides it).
+            if let Some(addr) = fetch_cert_address(seed_url, fp).await {
+                return Some(addr);
+            }
+        }
+    }
+    None
+}
+
+/// Read just the `address` field from a published cert bundle (the public
+/// service's advertised `ws://` endpoint). Returns None if unpublished.
+async fn fetch_cert_address(seed_url: &str, fingerprint: &str) -> Option<String> {
+    use add_protocol::envelope::WireEnvelope;
+    let ws_url = seed_url.replace("http://", "ws://").replace("https://", "wss://");
+    let mut ws = ws_connect(&ws_url).await.ok()?;
+    let key = cert_blob_key(fingerprint);
+    let req = WireEnvelope {
+        msg_type: "blob-get".to_string(),
+        msg_id: uuid_hex(),
+        ts: chrono::Utc::now().timestamp() as f64,
+        sig: String::new(),
+        payload: {
+            let mut m = serde_json::Map::new();
+            m.insert("key".to_string(), serde_json::Value::String(key));
+            serde_json::Value::Object(m)
+        },
+    };
+    ws.send(Message::Text(serde_json::to_string(&req).ok()?.into()))
+        .await
+        .ok()?;
+    if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
+        if let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text) {
+            if resp.msg_type != "dht-found" {
+                return None;
+            }
+            let value = resp.payload_str("value")?;
+            let bundle_bytes = base64::engine::general_purpose::STANDARD.decode(value).ok()?;
+            let bundle: serde_json::Value = serde_json::from_slice(&bundle_bytes).ok()?;
+            let addr = bundle.get("address").and_then(|a| a.as_str())?.to_string();
+            if addr.is_empty() {
+                None
+            } else {
+                Some(addr)
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
 /// SECURITY FIX (L1): Privacy-enhanced DHT lookup using PIR (Private Information Retrieval).
 /// Instead of sending the null_id in plaintext to the DHT server (which would reveal
 /// WHO the user is looking up), this function uses XOR-based PIR with cuckoo hashing
@@ -2064,94 +2088,6 @@ async fn dht_fetch_cert(
 /// The DHT bootstrap server must expose a `/pir-query` WebSocket endpoint that
 /// accepts PIR query tokens and returns bin contents. Falls back to standard
 /// `dht_lookup` if the server doesn't support PIR.
-async fn pir_dht_lookup(
-    seed_url: &str,
-    null_id: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    use add_crypto::pir::PirClient;
-    use sha2::{Digest, Sha256};
-
-    // Compute fingerprint hash from null_id (same as what's stored in PIR bins)
-    let mut hasher = Sha256::new();
-    hasher.update(b"pir-fp-hash-v1:");
-    hasher.update(null_id.as_bytes());
-    let fp_hash: [u8; 32] = hasher.finalize().into();
-
-    let client = PirClient::new();
-    let queries = client.query_contact(&fp_hash)?;
-
-    let ws_url = seed_url
-        .replace("http://", "ws://")
-        .replace("https://", "wss://");
-
-    let mut ws = ws_connect(&ws_url)
-        .await
-        .map_err(|e| format!("PIR DHT connect failed: {}", e))?;
-
-    // Send PIR queries (one per cuckoo bin candidate)
-    let mut result: Option<String> = None;
-    for query in queries.iter() {
-        let req_json = serde_json::json!({
-            "type": "pir-query",
-            "bin_index": query.bin_index,
-            "ephemeral_pk": base64::engine::general_purpose::STANDARD.encode(query.client_ephemeral_pk),
-            "nonce": uuid_hex(),
-        });
-        ws.send(Message::Text(req_json.to_string().into()))
-            .await
-            .map_err(|e| format!("PIR query send failed: {}", e))?;
-
-        // Read PIR response
-        let resp_msg = ws
-            .next()
-            .await
-            .ok_or("PIR DHT connection closed")?
-            .map_err(|e| format!("PIR DHT read failed: {}", e))?;
-        let resp_text = match resp_msg {
-            Message::Text(t) => t.to_string(),
-            _ => continue,
-        };
-        let resp_json: serde_json::Value = serde_json::from_str(&resp_text)?;
-        if resp_json["type"] != "pir-response" {
-            continue;
-        }
-        let bin_data_b64 = resp_json["bin_data"]
-            .as_str()
-            .ok_or("missing bin_data in PIR response")?;
-        let bin_data = base64::engine::general_purpose::STANDARD
-            .decode(bin_data_b64)
-            .map_err(|e| format!("PIR bin_data decode: {}", e))?;
-
-        let pir_resp = add_crypto::pir::PirResponse {
-            bin_data,
-            dht_ephemeral_pk: [0u8; 32],
-            nonce: [0u8; 8],
-        };
-
-        if let Some(entry) = client.process_response(&pir_resp, &query.xor_mask, &fp_hash)? {
-            // Extract the contact address from the entry metadata
-            let metadata = &entry.metadata;
-            let addr = String::from_utf8_lossy(&metadata[32..])
-                .trim_end_matches('\0')
-                .to_string();
-            if !addr.is_empty() {
-                result = Some(addr.to_string());
-                break;
-            }
-        }
-    }
-
-    ws.close(None).await.ok();
-
-    match result {
-        Some(addr) => Ok(addr),
-        None => {
-            println!("PIR lookup returned no result, falling back to standard DHT");
-            dht_lookup(seed_url, null_id, true).await
-        }
-    }
-}
-
 // ------------------------------------------------------------------ //
 //  Relay Client (for G2 Read)                                        //
 // ------------------------------------------------------------------ //
@@ -3158,23 +3094,53 @@ async fn send_message(
     relay_url: &str,
     ttl: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let contacts = load_contacts();
-    let recipient_fp = contacts
-        .get(recipient_nid)
-        .ok_or("unknown contact — add with 'add-contact' first")?;
+    // Mutual-consent gate (DESIGN.md §6): the recipient must be in the local
+    // contact list, EXCEPT for well-known public services (reflector), which are
+    // reachable by anyone without a contact entry. Public services are still
+    // pinned to their published cert below — the gate is relaxed, not the trust.
+    let recipient_fp: String = if is_public_service(recipient_nid) {
+        REFLECTOR_FINGERPRINT.to_string()
+    } else {
+        let contacts = load_contacts();
+        contacts
+            .get(recipient_nid)
+            .cloned()
+            .ok_or("unknown contact — add with 'add-contact' first")?
+    };
+    // Borrow as &str for the rest of the function (downstream fns take &str).
+    let recipient_fp = recipient_fp.as_str();
 
-    println!("Looking up {} in DHT...", recipient_nid);
+    println!("Looking up {} ...", recipient_nid);
 
-    // G1: Look up recipient's listener address from their per-contact encrypted
-    // presence blob (V2.2). Only a mutual contact can decrypt it; the server
-    // learns nothing. Falls back to relay delivery if not found / not decryptable.
-    let recipient_addr = presence::fetch_presence(identity, recipient_fp).await;
+    // Resolve the recipient's listener address.
+    // - Normal contact: per-contact encrypted V2.2 presence blob (only a mutual
+    //   contact can decrypt it; the server learns nothing).
+    // - Public service: its address rides inside the public cert-store bundle
+    //   (opaque to the server, readable by anyone who knows the well-known key).
+    // Either way the server stores only ciphertext; no plaintext IP↔ID.
+    let recipient_addr = if is_public_service(recipient_nid) {
+        fetch_public_service_addr(recipient_nid).await
+    } else {
+        presence::fetch_presence(identity, &recipient_fp).await
+    };
 
     let ws_url = if let Some(ref addr) = recipient_addr {
         println!("Found at: {}", addr);
         addr.replace("http://", "ws://")
             .replace("https://", "wss://")
     } else {
+        // Public services are reached only via the cert store (P2P), never the
+        // relay — the reflector is stateless and never reads relay mail. A
+        // missing bundle means it's unpublished/offline; say so instead of
+        // fake-delivering to a relay it will never collect from.
+        if is_public_service(recipient_nid) {
+            return Err(format!(
+                "{} is a public service but its address is not in the cert store \
+                 (it may be offline or unpublished). Cannot deliver.",
+                recipient_nid
+            )
+            .into());
+        }
         println!("DHT lookup failed — using relay delivery...");
         relay_url
             .replace("http://", "ws://")
@@ -3881,6 +3847,28 @@ async fn handle_incoming_connection(
         .get("public_key")
         .and_then(|k| k.as_str())
         .unwrap_or("unknown");
+
+    // Mutual-consent gate (DESIGN.md §6.1): drop any inbound peer that is not in
+    // the local contact list BEFORE signature verification / ratchet work. This
+    // blocks one-sided contact (Bob→Alice when Alice has not added Bob) and
+    // stops a stranger from burning CPU or probing presence. The gate is
+    // client-enforced, so it survives a hostile/modified server.
+    // `peer_fp` here is the peer's *fingerprint* (it is carried in the hello's
+    // `public_key` field), so match it against the contact fingerprints.
+    // Well-known public services (reflector) are exempt — they are reachable
+    // without a contact entry (DESIGN.md §6 exception), so they must also be
+    // allowed to initiate.
+    {
+        let contacts = load_contacts();
+        let known = contacts.values().any(|fp| fp == peer_fp);
+        if !known && peer_fp != REFLECTOR_FINGERPRINT {
+            return Err(format!(
+                "inbound hello from {} rejected — not in contact list (mutual-consent gate)",
+                peer_fp
+            )
+            .into());
+        }
+    }
 
     if peer_sig.is_empty() {
         return Err("p2p-hello has no signature — rejecting (MITM risk)".into());
@@ -4669,23 +4657,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Null ID:     {}", identity.null_id);
             println!("\nShare your Null ID with contacts to receive messages.");
 
-            // Add Reflector Bot as a default contact (for testing).
-            // NOTE: the contact key MUST be the reflector's real Null ID
-            // (derive via compute_null_id of its fingerprint), because the
-            // reflector registers its DHT addr_record under that same key.
-            // A vanity label here would never resolve to an addr_record.
-            let mut contacts = load_contacts();
-            if !contacts.contains_key("NN-UFtv-8fHu") {
-                contacts.insert(
-                    "NN-UFtv-8fHu".to_string(),
-                    "3957378550B111F2678DC1B4A58C27B22091D5CF".to_string(),
-                );
-                save_contacts(&contacts)?;
-                println!(
-                    "\nAdded Reflector Bot (NN-UFtv-8fHu) as ECHO contact for latency testing."
-                );
-            }
-            // Also add the Reflector-ECHO alias
+            // NOTE: the Reflector Bot (NN-UFtv-8fHu) is a well-known PUBLIC
+            // SERVICE, not a contact. It is reachable without being in the
+            // contact list — `send_message` resolves it via the public cert
+            // store (DESIGN.md §6 exception). We therefore do NOT insert it as
+            // a contact here. The Reflector-ECHO alias is kept as a convenience
+            // shortcut that resolves to its well-known null id.
             let mut aliases = load_aliases();
             if !aliases.contains_key("Reflector-ECHO") {
                 aliases.insert("Reflector-ECHO".to_string(), "NN-UFtv-8fHu".to_string());
@@ -5408,23 +5385,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut contact_status = Vec::new();
 
                 for (null_id, fingerprint) in &contacts {
-                    // Query per-contact encrypted presence; only a mutual contact
-                    // can decrypt the listener address. The server learns nothing.
+                    let fp8 = fingerprint.chars().take(8).collect::<String>();
+                    // Public services (e.g. the reflector) publish no per-contact
+                    // presence — they're stateless. Reachability is the cert-store
+                    // bundle (opaque address), so check that instead of presence.
                     let mut found_online = false;
-                    if let Some(addr) = presence::fetch_presence(&identity, fingerprint).await {
+                    if is_public_service(null_id) {
+                        match fetch_public_service_addr(null_id).await {
+                            Some(addr) => {
+                                println!(
+                                    "  ● {} ({}) - AVAILABLE (public service) at {}",
+                                    fp8, null_id, addr
+                                );
+                                found_online = true;
+                            }
+                            None => {
+                                println!(
+                                    "  ○ {} ({}) - UNAVAILABLE (cert store)",
+                                    fp8, null_id
+                                );
+                            }
+                        }
+                    } else if let Some(addr) = presence::fetch_presence_live(&identity, fingerprint).await {
                         println!(
                             "  ✓ {} ({}) - ONLINE at {}",
-                            fingerprint.chars().take(8).collect::<String>(),
+                            fp8,
                             null_id,
                             addr
                         );
                         found_online = true;
                     }
 
-                    if !found_online {
+                    if !found_online && !is_public_service(null_id) {
                         println!(
                             "  ✗ {} ({}) - OFFLINE",
-                            fingerprint.chars().take(8).collect::<String>(),
+                            fp8,
                             null_id
                         );
                     }

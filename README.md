@@ -33,81 +33,6 @@ Sessions persist across restarts — if you receive a message while offline, it 
 
 ---
 
-## What's new in v0.3.15
-
-### Self-Message Round-Trip (FIXED)
-- **Send to yourself works** — `add send <your-own-Null-ID> "note to self"` then `add read` now retrieves every self-sent message reliably. Previously only the first self-message decrypted; later ones were lost to a Double-Ratchet session-collision (sender and reader shared one per-peer session keyed only by NID, so the reader overwrote the sender's chain). Self-messages now use a dedicated fixed-key session that both directions can read. Cross-party first messages also decrypt correctly as a side effect.
-
-### More reliable delivery & registration
-- **`send` finds the recipient's P2P address** in the DHT (queries `addr:<null_id>`), falling back to relay only when P2P is unreachable.
-- **Address re-registration no longer fails** with `stale sequence` after an IP/port change (uses a real timestamp `seq`).
-- **Proof-of-Work no longer hangs** on address registration — difficulty 12 → 8 and a 30 s wall-clock cap.
-- **`read` purges the relay mailbox cleanly** — fixed the `relay-purge` request (wrong field name + missing server handler) that was printing `Relay purge warning: invalid JSON` after every read.
-
-## What's new in v0.3.14
-
-### Post-Quantum Cryptography (ML-DSA-87 / ML-KEM-1024)
-
-- **New `add-crypto-pq` crate** — Post-quantum cryptography module implementing:
-  - **ML-DSA-87 (FIPS 204)** — Digital signatures replacing Ed25519/GPG across ALL signing operations:
-    - DHT registration (`dht-put` envelopes)
-    - Relay store/fetch (`relay-store`, `relay-fetch`, `relay-ack`, `relay-purge`, `relay-read-receipt`, `relay-delete`)
-    - P2P hello/hello-ack authentication
-    - Reflector bot DHT registration
-  - **ML-KEM-1024 (FIPS 203)** — Key encapsulation for all E2E encryption, wrapping existing `add-crypto::kyber` implementation
-  - `PqKeyPair` unified type combining both signature and KEM key pairs
-  - Proper error handling with `PqError` enum
-  - Available features: `sign`, `verify`, `encapsulate`, `decapsulate`, `generate` for both ML-DSA-87 and ML-KEM-1024
-
-### Complete GPG/Ed25519 Removal
-
-- All Sequoia OpenPGP GPG signing/verification removed from client, relay, DHT core, and reflector
-- ML-DSA-87 signing keys replace GPG certificates for all identity operations
-- TOFU (Trust On First Use) uses ML-DSA-87 verifying keys (base64-encoded) instead of armored GPG certs
-- Relay `cert_cache` → `ml_dsa87_verifying_key_cache` (fingerprint → base64 verifying key)
-
-> **NOTE (accuracy vs. shipping source):** As of the current tree, GPG/Sequoia is **still present and active** —
-> `protocol/src/gpg.rs` is compiled in and used by `envelope.rs` for detached signing/verification, and
-> `client/src/main.rs` still loads/creates Sequoia `Cert`s (`own_cert.asc`). The ML-DSA-87 migration described
-> above is **not yet reflected in the shipping binary**. Treat the GPG-based key model in FAQ.md as current until
-> this migration lands. See FAQ.md "Is my GPG private key stored safely on disk?"
-
-### Desktop App Fixes
-
-- **CLI binary spawn (ENOENT)** — Embedded `add` binary via `electron-builder.json` `extraResources` (bundles 11.4 MB binary at `/opt/Add Desktop/resources/add`)
-- **Command name mismatch** — Fixed IPC handler: `check-contact-status` → `contact-status` (matches CLI subcommand exactly)
-- **PID check logic** — Moved check AFTER `Args::parse()`; now only blocks `listen` subcommand if DIFFERENT process holds PID file (non-listen commands overwrite PID file)
-- **Debian package verified** — 103 MB .deb with embedded binary confirmed via `dpkg -c`
-
-### Reflector Bot & DHT Registration
-
-- **Multi-bootstrap registration** — Reflector now registers `addr:NN-UFtv-8fHu` to ALL 3 bootstrap servers (eu.gnoppix.org, us.gnoppix.org, asia.gnoppix.org) in parallel with PoW difficulty 8
-- **DHT addr: prefix validation** — Fixed `validate_null_id()` in `crypto_helpers.rs` to strip `addr:` prefix before NN-XXXX-XXXX format check
-- **Rustls crypto provider** — Added `CryptoProvider::install_default(default_provider())` at startup (required by rustls 0.23+)
-- **Removed relay polling from reflector** — Relay `relay-fetch` requires ML-DSA-87 signed requests; reflector now handles direct P2P only (always-online service)
-- **Direct P2P echo** — Reflector echoes messages with "🤖 [Reflector Echo]: " prefix via direct P2P connection
-- **Fallback to relay** — If sender is offline, reflector delivers echo message to relay via `relay-store`
-
-## What's new in v0.3.11
-
-- **ACS2.6 Full Compliance** — All 11 specification requirements implemented and verified
-- **Hardware-Bound Key Hierarchy** — Argon2id + HKDF-SHA512 with HSM fallback stub
-- **Edge-Core Architecture** — `NodeRole` (Core/Edge) and `NetworkState` (Unrestricted/Metered/Tactical) with adaptive `TrafficBudget`
-- **Coordinated Baseline Noise Protocol (CBNP)** — Global epoch synchronization, coordinator beacons, slot-aligned cover traffic
-- **Hardened Subspaces** — `mlock` + guard pages + LFENCE/DSB+ISB speculation barriers
-
-## What's new in v0.3.10
-
-- **Message deletion** — `add delete <position>` removes stored messages. Position 1 is the newest message in your inbox.
-
-## What's new in v0.3.9
-
-- **Bidirectional E2E encryption** — Full bidirectional Double Ratchet encryption verified end-to-end. Initiator and responder can both send and receive encrypted messages through the relay, with the ratchet advancing correctly in both directions.
-- **Wire format fix** — Corrected the Kyber ciphertext length field placement in `encrypt_message()` to match what `decrypt_message()` expects. This was causing AES-GCM decryption failures when the responder replied to the initiator.
-- **Regression test** — Added `test_bidirectional_ratchet_roundtrip` to prevent this class of bug from recurring.
-
----
-
 ## How it works (the short version)
 
 1. You run `add init` — it creates a unique "key" (like a lock with two halves).
@@ -318,7 +243,18 @@ Add includes an Electron desktop client with a Signal-inspired interface.
 - Real-time message list with auto-scroll
 - Message status indicators (sending, sent, delivered, read)
 - Unread message badges
+- **Clean contact list** — starts empty (only your real contacts; no pre-injected entries)
+- **Live online status** — probes 5s after launch, then every 27s; "online" means the contact's listener actually answered a connection, not just a stale presence record
 - TypeScript + Zustand state management
+
+### Hard to detect
+
+Both the bootstrap and relay servers listen on the standard **HTTPS port 443** over
+`wss://` (TLS WebSocket). On the wire, Add traffic is indistinguishable from normal
+encrypted web browsing — same port, same TLS handshake, same encrypted stream. A
+network observer can't tell it apart from routine HTTPS, so detection and selective
+blocking are extremely difficult (blocking Add would mean blocking all HTTPS). Pair
+with Tor to also hide *that* you connect and *to whom*.
 
 ### Prerequisites
 
@@ -339,7 +275,7 @@ See [TRANSLATIONS.md](desktop-ui/TRANSLATIONS.md) to add a new language.
 ### Install Desktop on Debian/Ubuntu
 
 ```bash
-sudo dpkg -i desktop-ui/dist-electron/add-desktop_0.2.2_amd64.deb
+sudo dpkg -i desktop-ui/dist-electron/add-desktop_0.2.13_amd64.deb
 ```
 
 The package name is `add-desktop` and the version increments with each build (the bundled `add` CLI is embedded via `electron-builder.json` `extraResources`). Check the actual filename in `desktop-ui/dist-electron/`.

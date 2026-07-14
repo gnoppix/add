@@ -276,7 +276,26 @@ ipcMain.handle('add-init', async () => {
   const output = await queuedCommand(['init'])
   const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
   const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
-  return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
+  const result = { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
+  // Publish the user's cert bundle to the (now authenticated) cert store so
+  // contacts can discover it. Best-effort: if the bootstrap is unreachable,
+  // don't fail onboarding — log and continue.
+  try {
+    await queuedCommand(['publish-cert'])
+    console.log('[add-init] cert published to bootstrap servers')
+  } catch (e) {
+    console.warn('[add-init] cert publish skipped (bootstrap unreachable?):', e.message)
+  }
+  return result
+})
+
+ipcMain.handle('add-publish-cert', async () => {
+  try {
+    const output = await queuedCommand(['publish-cert'])
+    return { success: true, output }
+  } catch (e) {
+    return { success: false, error: e.message }
+  }
 })
 
 ipcMain.handle('add-id', async () => {

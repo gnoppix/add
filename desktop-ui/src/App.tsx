@@ -41,12 +41,18 @@ function App() {
     loadContacts()
   }, [loadContacts])
 
-  // Periodic online status check (every 30 seconds)
+  // Online status check: initial probe 5s after mount, then every 27s.
   useEffect(() => {
+    const initial = setTimeout(() => {
+      checkContactsOnlineStatus()
+    }, 5000)
     const interval = setInterval(() => {
       checkContactsOnlineStatus()
-    }, 30000)
-    return () => clearInterval(interval)
+    }, 27000)
+    return () => {
+      clearTimeout(initial)
+      clearInterval(interval)
+    }
   }, [checkContactsOnlineStatus])
 
   // Periodic relay poll: pull messages you've received (every 10 seconds)
@@ -58,9 +64,9 @@ function App() {
     return () => clearInterval(interval)
   }, [loadMessages])
 
-  // Live P2P inbound messages from the background listener (e.g. reflector
-  // echo). The main process parses the listener stdout and pushes each
-  // message here; we attribute it to the sender conversation and insert it.
+  // Live P2P inbound messages from the background listener. The main process
+  // parses the listener stdout and pushes each message here; we attribute it
+  // to the sender conversation and insert it.
   useEffect(() => {
     const api = getEvaAPI()
     if (!api?.on) return

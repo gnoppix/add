@@ -534,7 +534,7 @@ The desktop client lives in `desktop-ui/`. It is a thin UI over the `add` CLI: t
     - `add-alias` → `['alias', name, nullId]`
     - `add-send` → `['send', nullId, message]` + optional `['--ttl', ttl]`
     - `add-init` / `add-id` → parse `Null ID:` / `Fingerprint:` from stdout
-    - `add-check-contact-status` → parses `NN-xxxx - ONLINE|OFFLINE`
+    - `add-check-contact-status` → parses `NN-xxxx - ONLINE|OFFLINE` (the `contact-status` CLI now probes liveness: it decrypts the DHT presence blob, then opens a real WebSocket to the contact's listener and reports ONLINE only if the listener answers — so "online" means reachable now, not just "published presence recently")
 - **`electron/preload.js`**: `contextBridge.exposeInMainWorld('addAPI', { ... })` exposing the same methods to `window.addAPI` (typed in `src/types/electron.d.ts`).
 - **`src/store/chatStore.ts`** (Zustand): `loadContacts()` calls `api.contacts()` **and** `api.aliases()`, merges the alias map, and stores `name = aliasMap[nullId] || nullId`. `renameAlias(nullId, alias)` updates local state immediately.
 - **`src/components/sidebar/ConversationRow.tsx`**: right-click (`onContextMenu`) opens a context menu showing the NN-ID with a **"Rename alias"** action; selecting it opens an inline input (Enter commits, Escape/blur cancels). Commit calls `renameAlias()` + `window.addAPI.alias(next, nullId)`.
@@ -1025,7 +1025,7 @@ OnMessageReceived -> SendReadReceipt (Double Check ✔️✔️)
 **Default contact integration:**
 - Null ID: `NN-UFtv-8fHu`
 - Auto-added during `add init` in client
-- Auto-added in desktop-ui contact list
+- **Not** auto-added in the desktop UI — it starts with a clean contact list (only your real contacts); add `NN-UFtv-8fHu` manually if you want to use it for testing.
 - Use for latency testing: send any message, receive echo
 
 **Usage:**

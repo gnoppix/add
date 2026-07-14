@@ -156,3 +156,16 @@ add id
 
 5. **No TLS in the daemon**: The bootstrap binary runs in plaintext mode on localhost.
    This simplifies the attack surface — no TLS parsing in the unprivileged process.
+
+## Why port 443 makes Add hard to detect
+
+Because the daemon is fronted by nginx on **standard HTTPS port 443** speaking
+`wss://`, Add traffic is **indistinguishable on the wire from ordinary encrypted web
+browsing** — same port, same TLS handshake, same encrypted byte stream. There is no
+custom port and no protocol signature that an observer could single out as "a
+messenger." A censor or ISP cannot tell Add apart from routine HTTPS by port, by
+protocol, or by payload; blocking Add would require blocking all HTTPS, which would
+break the entire web. Combined with Tor (which hides *that* you connect and *to
+whom*), both the parties and the content of a connection are effectively invisible
+to on-path observers. This is a deliberate anti-detection design choice, not an
+accident of the deployment.

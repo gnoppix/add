@@ -82,7 +82,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   addConversation: (conversation) => {
-    // Never add our own Null ID as a contact (self-echo from relay/reflector).
+    // Never add our own Null ID as a contact (self-echo from relay).
     const myId = get().myId
     if (myId && conversation.id === myId) return
     set((state) => {
@@ -234,7 +234,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const myId = state.myId
     for (const { from, text } of incoming) {
       // Never create a conversation / show a message from our own Null ID.
-      // Self-echoes can arrive via the reflector or relay round-trip.
+      // Self-echoes can arrive via the relay round-trip.
       if (myId && from === myId) continue
       // Ensure a conversation exists for the sender (creates one on first message).
       const exists = state.conversations.some((c) => c.id === from)
@@ -285,21 +285,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           if (m.senderId !== 'me') seenIncoming.add(incomingKey(m.senderId, m.content))
         }
       }
-      // Merge persisted conversations with any already-loaded ones (e.g. contacts
-      // loaded by loadContacts) so neither source clobbers the other.
-      const existing = get().conversations
-      const myId = get().myId
-      const merged = existing.slice()
-      for (const c of saved.conversations || []) {
-        // Never restore our own Null ID as a contact (a stale self-contact
-        // may linger in localStorage from before this fix).
-        if (myId && c.id === myId) continue
-        // Repair Date (JSON serializes Dates to strings) so the
-        // sidebar timestamp render doesn't throw on restart.
-        const fixed = { ...c, lastMessageTimestamp: c.lastMessageTimestamp ? new Date(c.lastMessageTimestamp) : c.lastMessageTimestamp }
-        if (!merged.some((m) => m.id === c.id)) merged.push(fixed)
-      }
-      set({ conversations: merged, messages })
+      // Restore only the message history. The contact list is rebuilt from
+      // live state (CLI contacts + live inbound messages) so it always starts
+      // clean — no stale entries (e.g. the old reflector bot) linger from a
+      // previous version's localStorage.
+      set({ messages })
     } catch {
       /* corrupt state — ignore */
     }
@@ -331,18 +321,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // Build alias map for display names
       const aliasMap = new Map(aliases.map(a => [a.nullId, a.alias]))
       
-      // Add Reflector Bot as default contact (ensures NN-UFtv-8fHu exists)
-      const reflectorBot = {
-        nullId: 'NN-UFtv-8fHu',
-        fingerprint: '3957378550B111F2678DC1B4A58C27B22091D5CF',
-      }
-      
-      // Merge contacts with reflector, using aliases for display names
-      const allContacts = contacts.find(c => c.nullId === reflectorBot.nullId) 
-        ? contacts 
-        : [...contacts, reflectorBot]
-      
-      allContacts.forEach((contact) =>
+      // Only the user's real contacts populate the list — start clean, no
+      // injected default entries.
+      contacts.forEach((contact) =>
         addConversation({
           id: contact.nullId,
           name: aliasMap.get(contact.nullId) || contact.nullId,

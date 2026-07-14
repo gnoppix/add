@@ -15,6 +15,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('addAPI', {
   // Identity
   init: () => ipcRenderer.invoke('add-init'),
+  publishCert: () => ipcRenderer.invoke('add-publish-cert'),
   getMyId: () => ipcRenderer.invoke('add-id'),
   register: () => ipcRenderer.invoke('add-register'),
   registerAllBootstraps: () => ipcRenderer.invoke('add-register-all-bootstraps'),

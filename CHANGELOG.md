@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-07-14 — Desktop clean contact list, live presence probe, port-443 detection docs
+
+### Desktop UI (desktop-ui)
+- Removed the auto-injected **Reflector Bot** (`NN-UFtv-8fHu`) contact. The client
+  now starts with a **clean contact list** — only the user's real contacts (from
+  `add contacts`) are shown; no pre-injected entries.
+- `chatStore.hydrate()` no longer restores persisted conversations from
+  localStorage, so stale entries (e.g. the old reflector bot) from a previous
+  version can never re-surface on launch. Message history is still restored.
+- **Live online-status probe** (`App.tsx`): the desktop now checks contact status
+  5 seconds after launch, then every 27 seconds.
+- Added the missing `addAPI.on()` listener type (and `passwd` args) to
+  `src/types/electron.d.ts` so the UI typechecks cleanly.
+- Rebuilt `add-desktop_0.2.13_amd64.deb` (Electron 43.0.0).
+
+### Client presence (client/src/presence.rs, client/src/main.rs)
+- New `fetch_presence_live()`: decrypts the DHT presence blob (reuses
+  `fetch_presence`), then **opens a real WebSocket to the contact's listener** with
+  a 4s timeout. Reports ONLINE only if the listener answers. `contact-status` now
+  uses this instead of the unprobed `fetch_presence`.
+- **Why:** a contact's presence blob stays in the DHT for its 2-hour TTL after they
+  go offline, so the old code showed them ONLINE for up to 2 hours after quitting.
+  Now "online" means *reachable right now*. The `send` path keeps using the
+  unprobed `fetch_presence` so routing is never gated on liveness.
+
+### Verification
+- `cargo build --release -p add-client` clean.
+- Live `add contact-status` on the reported-false-positive contact
+  `NN-kuU5-XHV2`: now correctly reports `✗ … OFFLINE` (the stale presence address
+  no longer fools the probe).
+- Desktop: `eslint src` clean; `npm run build:react` clean.
+
+### Docs
+- `FAQ.md`: restructured into categories; added deep-dive crypto answers
+  (algorithm strength, who can decrypt — agencies/servers, lost-passphrase),
+  a "Security in 10 seconds" TL;DR, and a port-443 / traffic-mimicking detection
+  section.
+- `README.md`, `DEVELOPER.md`, `bot/README.md`: removed stale "Reflector Bot
+  auto-added in desktop contact list" claims; documented clean list + live probe
+  and port-443 stealth.
+
+### Files Changed
+- `client/src/presence.rs`, `client/src/main.rs`
+- `desktop-ui/src/App.tsx`, `desktop-ui/src/store/chatStore.ts`,
+  `desktop-ui/src/types/electron.d.ts`
+- `FAQ.md`, `README.md`, `DEVELOPER.md`, `bot/README.md`
+
 ## 0.3.19 — Reflector P2P Echo Fix (2026-07-12)
 
 ### Root cause: reflector dropped every inbound P2P message

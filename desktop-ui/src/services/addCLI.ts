@@ -53,6 +53,13 @@ export class AddCLI {
     return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
   }
 
+  // Publish this identity's cert bundle to the (authenticated) cert store.
+  // Required for contact discovery (§4.2); the server rejects unsigned/forged
+  // cert blobs.
+  async publishCert(): Promise<string> {
+    return await this.runCommand(['publish-cert'])
+  }
+
   async getMyId(): Promise<NullId> {
     const output = await this.runCommand(['id'])
     const idMatch = output.match(/Null ID:\s*(NN-[A-Z0-9-]+)/)
