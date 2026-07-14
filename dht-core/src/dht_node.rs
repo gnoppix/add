@@ -409,16 +409,6 @@ impl DhtNodeRuntime {
                     }
                     Self::handle_get(&env, &mut ws_tx, store, stealth_mode).await;
                 }
-                "dht-addr-record" => {
-                    Self::handle_addr_record(
-                        &env,
-                        &mut ws_tx,
-                        store,
-                        stealth_mode,
-                        node_fingerprint,
-                    )
-                    .await;
-                }
                 "pir-query" => {
                     Self::handle_pir_query(&env, &mut ws_tx, pir_registry.clone(), stealth_mode)
                         .await;
@@ -727,139 +717,6 @@ impl DhtNodeRuntime {
         }
     }
 
-    async fn handle_addr_record(
-        env: &WireEnvelope,
-        ws_tx: &mut (impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
-        store: &DhtStore,
-        _stealth_mode: bool,
-        _node_fingerprint: &str,
-    ) {
-        let null_id = env.payload_str("null_id").unwrap_or("").to_string();
-        let address = env.payload_str("address").unwrap_or("").to_string();
-        let ttl = env.payload_i64("ttl").unwrap_or(constants::ADDR_TTL);
-        let publisher_fp = env.payload_str("publisher_fp").unwrap_or("").to_string();
-        let nonce = env.payload_i64("nonce").unwrap_or(0);
-        let sig = env.sig.clone();
-
-        if !validate_null_id(&null_id) {
-            let resp = build_dht_error(&null_id, "invalid null_id format");
-            let _ = ws_tx
-                .send(Message::Text(resp.to_json().unwrap_or_default().into()))
-                .await;
-            return;
-        }
-
-        if !validate_fingerprint(&publisher_fp) {
-            let resp = build_dht_error(&null_id, "invalid publisher fingerprint");
-            let _ = ws_tx
-                .send(Message::Text(resp.to_json().unwrap_or_default().into()))
-                .await;
-            return;
-        }
-
-        let expected_nid = compute_null_id(&publisher_fp);
-        if expected_nid != null_id {
-            let resp = build_dht_error(
-                &null_id,
-                &format!("null_id mismatch: expected {expected_nid}"),
-            );
-            let _ = ws_tx
-                .send(Message::Text(resp.to_json().unwrap_or_default().into()))
-                .await;
-            return;
-        }
-
-        let sign_data = format!("{null_id}|{address}|{ttl}");
-        // Try verifying key-based verification first (preferred path)
-        let verified = if let Some(vk_b64) = env.payload_str("publisher_verifying_key") {
-            let vk_bytes = base64::engine::general_purpose::STANDARD
-                .decode(vk_b64)
-                .unwrap_or_default();
-            if vk_bytes.is_empty() {
-                false
-            } else {
-                // Use crypto_common::KeyInit to decode the verifying key
-                use crypto_common::KeyInit;
-                match add_crypto_pq::MlDsa87VerifyingKey::new_from_slice(&vk_bytes) {
-                    Ok(vk) => verify_signature_with_verifying_key(&sign_data, &sig, &vk),
-                    Err(_) => false,
-                }
-            }
-        } else {
-            verify_signature(&sign_data, &sig, &publisher_fp)
-        };
-        if !verified {
-            let resp = build_dht_error(&null_id, "signature verification failed");
-            let _ = ws_tx
-                .send(Message::Text(resp.to_json().unwrap_or_default().into()))
-                .await;
-            return;
-        }
-
-        // SECURITY FIX (L7): Require proof-of-work for addr-record writes.
-        // Without this, an attacker could flood the DHT with address records
-        // (which are cheaper than full DHT puts since they don't require
-        // the Argon2id PoW that handle_put enforces).
-        // SECURITY FIX (M11): Use the publisher's fingerprint as the per-node
-        // secret (NOT the server's own fingerprint) so the client and server
-        // salt identically. The client solves with its own `publisher_fp`.
-        // The random `salt` from the payload makes every solve produce a unique
-        // nonce, so legitimate re-registration is not blocked by the nonce log.
-        let salt = env.payload_str("salt").unwrap_or("").to_string();
-        let pow_data = format!("{null_id}|{address}|{ttl}|{salt}");
-        let pow_ok = pow_check(
-            &pow_data,
-            nonce as u64,
-            constants::ADDR_POW_DIFFICULTY,
-            publisher_fp.as_bytes(),
-        )
-        .unwrap_or(false);
-        if !pow_ok {
-            let resp = build_dht_error(&null_id, "insufficient proof-of-work");
-            let _ = ws_tx
-                .send(Message::Text(resp.to_json().unwrap_or_default().into()))
-                .await;
-            return;
-        }
-
-        let key = format!("addr:{}", null_id);
-        let salt = format!("addr:{}", rand::random::<u32>());
-        let seq = now_unix() as i64;
-        match store
-            .put(
-                &key,
-                &address,
-                &salt,
-                seq,
-                &publisher_fp,
-                ttl,
-                &sig,
-                nonce,
-            )
-            .await
-        {
-            Ok(true) => {
-                let resp = build_dht_found(&null_id, &address, &salt, seq);
-                let _ = ws_tx
-                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
-                    .await;
-            }
-            Ok(false) => {
-                let resp = build_dht_error(&null_id, "stale sequence");
-                let _ = ws_tx
-                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
-                    .await;
-            }
-            Err(e) => {
-                error!("addr-record storage error: {}", e);
-                let resp = build_dht_error(&null_id, "storage error");
-                let _ = ws_tx
-                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
-                    .await;
-            }
-        }
-    }
-
     fn stealth_response() -> String {
         let payload = serde_json::json!({ "key": "", "value": "", "salt": "", "seq": 0 });
         serde_json::json!({
@@ -910,21 +767,24 @@ impl DhtNodeRuntime {
         }
         let sig = env.payload_str("sig").unwrap_or("").to_string();
         let publisher_fp = env.payload_str("publisher_fp").unwrap_or("").to_string();
-        let nonce: i64 = env.payload_i64("nonce").unwrap_or(0);
         let ttl: i64 = env.payload_i64("ttl").unwrap_or(constants::ADDR_TTL);
         let salt = format!("blob:{}", rand::random::<u32>());
-        let seq = now_unix() as i64;
-
+        // Content-addressed "latest wins" upsert — no seq/nonce replay games
+        // (those are for the mutable addr-record model). Client owns the key.
         match store
-            .put(&key, &value_b64, &salt, seq, &publisher_fp, ttl, &sig, nonce)
+            .put_blob(&key, &value_b64, &salt, &publisher_fp, ttl, &sig)
             .await
         {
             Ok(true) => {
-                let resp = build_dht_found(&key, &value_b64, &salt, seq);
+                let seq_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                let resp = build_dht_found(&key, &value_b64, &salt, seq_ms);
                 let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
             }
             Ok(false) => {
-                let resp = build_dht_error(&key, "stale sequence");
+                let resp = build_dht_error(&key, "value too large");
                 let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
             }
             Err(e) => {

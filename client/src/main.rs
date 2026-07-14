@@ -37,6 +37,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing_subscriber::EnvFilter;
 use zeroize::ZeroizeOnDrop;
 
+// Privacy-first per-contact presence (PART VII V2.2).
+mod presence;
+
 // ------------------------------------------------------------------ //
 //  Configuration                                                     //
 // ------------------------------------------------------------------ //
@@ -777,7 +780,7 @@ impl Identity {
 
 type Contacts = HashMap<String, String>; // null_id -> fingerprint
 
-fn load_contacts() -> Contacts {
+pub(crate) fn load_contacts() -> Contacts {
     let path = home_dir().join(CONTACTS_PATH);
     if !path.exists() {
         return HashMap::new();
@@ -1865,173 +1868,6 @@ async fn dht_register(
     }
 
     Err("DHT register failed: server closed connection".into())
-}
-
-/// Register a DHT address record (listener address) with the bootstrap server.
-/// This allows other clients to discover our P2P listener address for direct P2P connections.
-async fn dht_register_addr_record(
-    seed_url: String,
-    identity: &Identity,
-    address: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use add_protocol::constants::ADDR_POW_DIFFICULTY;
-    use add_protocol::envelope::WireEnvelope;
-
-    let ws_url = seed_url
-        .replace("http://", "ws://")
-        .replace("https://", "wss://");
-
-    let mut ws = ws_connect(&ws_url)
-        .await
-        .map_err(|e| format!("DHT connect failed: {}", e))?;
-
-    // Solve PoW for addr-record
-    // Server expects: {null_id}|{address}|{ttl}|{salt} (PoW uses same format
-    // for verification). The random `salt` makes every solve produce a unique
-    // nonce, so re-registration is not blocked by the DHT nonce-replay log.
-    let ttl = add_protocol::constants::ADDR_TTL;
-    let salt = uuid_hex();
-    let pow_data = format!("{}|{}|{}|{}", identity.null_id, address, ttl, salt);
-    // Owned copy of the per-node secret for the spawned blocking task
-    // (spawn_blocking requires 'static; `identity` is only borrowed here).
-    let publisher_fp_secret = identity.fingerprint.clone();
-    tracing::info!(
-        "Solving PoW for addr-record (difficulty {})...",
-        ADDR_POW_DIFFICULTY
-    );
-    let pow_nonce = match tokio::task::spawn_blocking(move || {
-        // SECURITY FIX (M11): salt with the publisher's own fingerprint so the
-        // server (which validates with the same publisher_fp) reproduces the
-        // identical Argon2id salt. Must match dht-core/handle_put addr path.
-        add_dht_core::pow_solve(
-            &pow_data,
-            ADDR_POW_DIFFICULTY,
-            10_000_000,
-            publisher_fp_secret.as_bytes(),
-        )
-    })
-    .await
-    {
-        Ok(Ok(Some(n))) => {
-            tracing::info!("PoW solved for addr-record");
-            n
-        }
-        Ok(Ok(None)) => {
-            return Err("addr-record: could not solve PoW in time".into());
-        }
-        Ok(Err(e)) => return Err(format!("addr-record PoW error: {}", e).into()),
-        Err(e) => return Err(format!("addr-record PoW task error: {}", e).into()),
-    };
-
-    // Sign the put request with ML-DSA-87
-    // Server expects: {null_id}|{address}|{ttl}
-    let ttl = add_protocol::constants::ADDR_TTL;
-    let sign_data = format!("{}|{}|{}", identity.null_id, address, ttl);
-    let sig = sign_for_transport(&sign_data)?;
-
-    // Include ML-DSA-87 verifying key in the payload for the DHT to verify
-    let vk_b64 = if let Some(sk_b64) = &identity.ml_dsa87_signing_key {
-        let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
-        use ml_dsa::{KeyInit, Keypair};
-        let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
-            .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
-        let vk = Keypair::verifying_key(&sk).clone();
-        use ml_dsa::KeyExport;
-        let vk_bytes = vk.to_bytes();
-        base64::engine::general_purpose::STANDARD.encode(vk_bytes)
-    } else {
-        String::new()
-    };
-
-    let req = WireEnvelope {
-        msg_type: "dht-addr-record".to_string(),
-        msg_id: uuid_hex(),
-        ts: chrono::Utc::now().timestamp() as f64,
-        sig,
-        payload: {
-            let mut m = serde_json::Map::new();
-            m.insert(
-                "null_id".to_string(),
-                serde_json::Value::String(identity.null_id.clone()),
-            );
-            m.insert("address".to_string(), serde_json::Value::String(address.to_string()));
-            m.insert("ttl".to_string(), serde_json::json!(add_protocol::constants::ADDR_TTL));
-            m.insert("salt".to_string(), serde_json::Value::String(salt.clone()));
-            m.insert(
-                "publisher_fp".to_string(),
-                serde_json::Value::String(identity.fingerprint.clone()),
-            );
-            m.insert(
-                "publisher_verifying_key".to_string(),
-                serde_json::Value::String(vk_b64),
-            );
-            m.insert("nonce".to_string(), serde_json::Value::Number(pow_nonce.into()));
-            serde_json::Value::Object(m)
-        },
-    };
-    let req_json = serde_json::to_string(&req)?;
-    ws.send(Message::Text(req_json.into()))
-        .await
-        .map_err(|e| format!("DHT addr_record send failed: {}", e))?;
-
-    // Read response
-    if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
-        let resp: WireEnvelope = serde_json::from_str(&resp_text)
-            .map_err(|e| format!("DHT addr_record: bad response: {}", e))?;
-        if resp.msg_type == "dht-found" {
-            tracing::info!(
-                "Address record registered for {} at {}",
-                identity.null_id,
-                address
-            );
-            return Ok(());
-        } else {
-            let payload = resp.payload.to_string();
-            return Err(format!("DHT addr_record failed: {} ({})", resp.msg_type, payload).into());
-        }
-    }
-
-    Err("DHT addr_record failed: server closed connection".into())
-}
-
-/// Register a DHT address record (listener address) with ALL bootstrap servers.
-/// This allows other clients to discover our P2P listener address for direct P2P connections.
-/// Uses low difficulty (8) similar to first registration, not the higher re-registration difficulty.
-async fn dht_register_addr_record_all(
-    identity: &Identity,
-    address: &str,
-    _ttl: i64,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Discover all bootstrap servers
-    let (_, bootstraps, _) = discover_all_servers().await;
-
-    let mut last_error = None;
-    let mut success_count = 0;
-
-    // Try each bootstrap server
-    for seed_url in &bootstraps {
-        match dht_register_addr_record(seed_url.clone(), identity, address).await {
-            Ok(_) => {
-                tracing::debug!("Address record registered on {}", seed_url);
-                success_count += 1;
-            }
-            Err(e) => {
-                tracing::warn!("Failed to register address record on {}: {}", seed_url, e);
-                last_error = Some(e);
-            }
-        }
-    }
-
-    if success_count > 0 {
-        tracing::info!(
-            "Address record registered on {}/{} bootstrap servers",
-            success_count,
-            bootstraps.len()
-        );
-        Ok(())
-    } else {
-        Err(last_error.unwrap_or_else(|| "No bootstrap servers available".into()))
-    }
 }
 
 /// Content-addressing key for the cert store: SHA-256 of the fingerprint.
@@ -3317,8 +3153,8 @@ async fn send_message(
     recipient_nid: &str,
     message: &str,
     store: &MessageStore,
-    use_pir: bool,
-    seed_url: &str,
+    _use_pir: bool,
+    _seed_url: &str,
     relay_url: &str,
     ttl: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -3329,23 +3165,10 @@ async fn send_message(
 
     println!("Looking up {} in DHT...", recipient_nid);
 
-    // G1: Look up recipient's address via DHT (PIR or standard).
-    // If DHT lookup fails (recipient not registered), fall back to relay delivery.
-    let recipient_addr = if use_pir {
-        pir_dht_lookup(seed_url, recipient_nid).await.ok()
-    } else {
-        dht_lookup(seed_url, recipient_nid, true).await.ok()
-    };
-
-    // DHT addr-records are stored base64-encoded (see dht_register_addr_record).
-    // Decode before use; fall back to the raw value if it isn't valid base64.
-    let recipient_addr = recipient_addr.map(|a| {
-        base64::engine::general_purpose::STANDARD
-            .decode(&a)
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-            .unwrap_or(a)
-    });
+    // G1: Look up recipient's listener address from their per-contact encrypted
+    // presence blob (V2.2). Only a mutual contact can decrypt it; the server
+    // learns nothing. Falls back to relay delivery if not found / not decryptable.
+    let recipient_addr = presence::fetch_presence(identity, recipient_fp).await;
 
     let ws_url = if let Some(ref addr) = recipient_addr {
         println!("Found at: {}", addr);
@@ -3896,15 +3719,16 @@ async fn run_listener(
     println!("Your address for incoming connections: {}", listen_address);
     println!("Registering address in DHT for direct P2P discovery...");
 
-    // Register address record in DHT for P2P discovery (all bootstrap servers, low difficulty)
-    if let Err(e) = dht_register_addr_record_all(&identity, &listen_address, 3600).await {
-        tracing::warn!("Failed to register address record in DHT: {}", e);
+    // Publish per-contact encrypted presence (V2.2) so mutual contacts can
+    // discover our listener address without the server learning it.
+    if let Err(e) = presence::publish_presence(&identity, &listen_address).await {
+        tracing::warn!("Failed to publish presence: {}", e);
         println!(
-            "Warning: Could not register address in DHT. Direct P2P may not work: {}",
+            "Warning: Could not publish presence. Direct P2P may not work: {}",
             e
         );
     } else {
-        println!("Address registered in DHT for direct P2P discovery.");
+        println!("Presence published for direct P2P discovery.");
     }
 
     // Start background task to periodically refresh the address record (every 30 min).
@@ -3952,30 +3776,29 @@ async fn run_listener(
                     current_addr
                 );
                 if let Err(e) =
-                    dht_register_addr_record_all(&identity_clone, &current_addr, 3600).await
+                    presence::publish_presence(&identity_clone, &current_addr).await
                 {
                     tracing::warn!(
-                        "Failed to re-register address record after IP change: {}",
+                        "Failed to re-publish presence after IP change: {}",
                         e
                     );
                 } else {
                     tracing::info!(
-                        "Address record re-registered after IP change: {}",
+                        "Presence re-published after IP change: {}",
                         current_addr
                     );
                     last_registered_address = current_addr;
                 }
             } else {
-                // Host unchanged: refresh the record's TTL. Keep advertising the
-                // already-registered address (not the churned port).
+                // Host unchanged: refresh presence (re-encrypt + re-store under
+                // the same opaque keys; keeps the record live for contacts).
                 if let Err(e) =
-                    dht_register_addr_record_all(&identity_clone, &last_registered_address, 3600)
-                        .await
+                    presence::publish_presence(&identity_clone, &last_registered_address).await
                 {
-                    tracing::warn!("Failed to refresh address record: {}", e);
+                    tracing::warn!("Failed to refresh presence: {}", e);
                 } else {
                     tracing::debug!(
-                        "Address record refreshed (no change): {}",
+                        "Presence refreshed (no change): {}",
                         identity_clone.null_id
                     );
                 }
@@ -5042,16 +4865,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 identity.null_id, interval
             );
 
-            // Register our DHT addr-record so contacts see us ONLINE and direct
-            // P2P works for non-NAT peers. Advertise the host's primary IP.
+            // Publish per-contact encrypted presence so mutual contacts can
+            // discover us without the server learning our address.
             let advertised = match primary_ipv4() {
                 Some(ip) => format!("ws://{}:8765", ip),
                 None => format!("ws://{}:8765", "0.0.0.0"),
             };
-            if let Err(e) = dht_register_addr_record_all(&identity, &advertised, 3600).await {
-                tracing::warn!("initial DHT register failed: {}", e);
+            if let Err(e) = presence::publish_presence(&identity, &advertised).await {
+                tracing::warn!("initial presence publish failed: {}", e);
             }
-            // Refresh the record every 30 min (no IP re-detection churn).
+            // Refresh presence every 30 min (no IP re-detection churn).
             let identity_refresh = identity.clone();
             let advertised_refresh = advertised.clone();
             tokio::spawn(async move {
@@ -5061,10 +4884,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 loop {
                     interval_timer.tick().await;
                     if let Err(e) =
-                        dht_register_addr_record_all(&identity_refresh, &advertised_refresh, 3600)
-                            .await
+                        presence::publish_presence(&identity_refresh, &advertised_refresh).await
                     {
-                        tracing::warn!("DHT register refresh failed: {}", e);
+                        tracing::warn!("presence publish refresh failed: {}", e);
                     }
                 }
             });
@@ -5568,7 +5390,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::ContactStatus => {
-            let _identity = Identity::load()?;
+            let identity = Identity::load()?;
             let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
             let contacts = load_contacts();
 
@@ -5586,30 +5408,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut contact_status = Vec::new();
 
                 for (null_id, fingerprint) in &contacts {
-                    // Query each bootstrap for addr record
+                    // Query per-contact encrypted presence; only a mutual contact
+                    // can decrypt the listener address. The server learns nothing.
                     let mut found_online = false;
-                    for bootstrap_url in &bootstraps {
-                        let addr_key = format!("addr:{}", null_id);
-                        match dht_get(bootstrap_url, &addr_key).await {
-                            Ok(Some(value)) => {
-                                // Decode the base64 address
-                                if let Ok(decoded) =
-                                    base64::engine::general_purpose::STANDARD.decode(&value)
-                                    && let Ok(addr) = String::from_utf8(decoded)
-                                {
-                                    println!(
-                                        "  ✓ {} ({}) - ONLINE at {}",
-                                        fingerprint.chars().take(8).collect::<String>(),
-                                        null_id,
-                                        addr
-                                    );
-                                    found_online = true;
-                                    break;
-                                }
-                            }
-                            Ok(None) => continue,
-                            Err(_) => continue,
-                        }
+                    if let Some(addr) = presence::fetch_presence(&identity, fingerprint).await {
+                        println!(
+                            "  ✓ {} ({}) - ONLINE at {}",
+                            fingerprint.chars().take(8).collect::<String>(),
+                            null_id,
+                            addr
+                        );
+                        found_online = true;
                     }
 
                     if !found_online {

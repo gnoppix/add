@@ -12,9 +12,11 @@ use sqlx::{Pool, Row, Sqlite, sqlite::SqlitePoolOptions};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::DhtResult;
+use add_protocol::constants;
 
-/// Default value for max encrypted blob size.
-const MAX_VALUE_SIZE: usize = 4096;
+/// Default value for max encrypted blob size (delegates to protocol crate so
+/// all layers agree — 16 KB, sized for cert bundles).
+pub const MAX_VALUE_SIZE: usize = constants::MAX_VALUE_SIZE;
 
 /// Retention window for the DHT nonce-replay log (seconds). Entries older than
 /// this are pruned by the background task (SECURITY FIX L5). 7 days keeps a
@@ -246,6 +248,43 @@ impl DhtStore {
 
         tx.commit().await?;
 
+        Ok(true)
+    }
+
+    /// Opaque blob upsert (PART VII V2.1). Unlike `put` (mutable addr-record
+    /// model with seq/nonce replay guards), the blob store is content-addressed
+    /// and "latest wins": the client owns the key (H(...)) and re-publishes
+    /// freely. Only the size bound applies. Returns true on store.
+    pub async fn put_blob(
+        &self,
+        key: &str,
+        value: &str,
+        salt: &str,
+        publisher_fp: &str,
+        ttl: i64,
+        sig: &str,
+    ) -> DhtResult<bool> {
+        if value.len() > MAX_VALUE_SIZE {
+            tracing::warn!("blob value too large: {} bytes", value.len());
+            return Ok(false);
+        }
+        let now = now_unix();
+        let expires = now + ttl as f64;
+        sqlx::query(
+            "INSERT OR REPLACE INTO kv_store \
+             (key, value, salt, seq, publisher_fp, stored_at, expires_at, sig) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(salt)
+        .bind(now as i64)
+        .bind(publisher_fp)
+        .bind(now)
+        .bind(expires)
+        .bind(sig)
+        .execute(&self.pool)
+        .await?;
         Ok(true)
     }
 

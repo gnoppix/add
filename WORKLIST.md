@@ -381,6 +381,8 @@ The desktop client lives in `desktop-ui/` (Electron + React + TypeScript, Zustan
 
 **Legend (this part):** ✅ done · 🔄 in progress · ⬜ todo · 🟢 defer (v2)
 
+> **V0 — Clean-cut rebase (2026-07-14):** server `addr-record` handler + client `dht_register_addr_record*` fully removed; discovery/registration now rides the opaque blob store + cert store only. DBs wiped on all 3 bootstraps; `dht_node.rs` has no `addr:` path. Presence = V2.2 per-contact encrypted blobs. The legacy plaintext `addr:` record (operator-readable IP↔ID) is retired for good.
+
 ### VII.1 — Opaque cert store (publish + fetch, content-addressed)
 | # | Task | Status | Notes |
 |---|------|--------|-------|
@@ -392,10 +394,10 @@ The desktop client lives in `desktop-ui/` (Electron + React + TypeScript, Zustan
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | V2.1 | Opaque content-addressed blob store (replace `addr:` plaintext put/get) | ✅ Done | `blob-put`/`blob-get` wire cmds in dht_node.rs; server stores opaque key=value+sig, never parses value as address or validates key as Null ID. Live round-trip verified on is (bootstrap-eu): stored under `blobtest:…` key, value = base64 ciphertext, no `addr:`/IP/ID in clear. |
-| V2.2 | Per-contact ML-KEM-ENC of address record under each contact's pubkey | ⬜ | `ct_i = encaps(contact_pubkey, R)`; N blobs for N contacts. |
-| V2.3 | Fetch key derivation `H(owner_id‖contact_fp)` on both sides | ⬜ | Server can't map key→identity. |
-| V2.4 | Sign + verify blob (ML-DSA) | ⬜ | Defeat poisoned/missing shard. |
-| V2.5 | Re-publish all N blobs on IP change (staggered) | ⬜ | Per-contact cost; infrequent. |
+| V2.2 | Per-contact ML-KEM-ENC of address record under each contact's pubkey | ✅ Done | `client/src/presence.rs`: `publish_presence`/`fetch_presence`. Per contact, `ct_i = encaps(peer_kyber_enc(contact_null_id), R)`; server stores `base64(ct_hex) '.' base64(nonce‖aes_ct)` — never sees plaintext address or contact graph. Real per-pair shared secret via ML-KEM KEM (our dk + peer ek from null_ids), reproducible at runtime, no on-disk store. |
+| V2.3 | Fetch key derivation `H(owner_fp‖contact_fp)` on both sides | ✅ Done | `presence_blob_key(owner_fp, contact_fp) = "presence:" + H(owner_fp‖contact_fp)`; symmetric, server can't map key→identity. |
+| V2.4 | Sign + verify blob (ML-DSA) | ✅ Done | `blob-put` carries the publisher's `WireEnvelope.sig` (ML-DSA over `{key‖value}`); server verifies VK == null_id. Defeats poisoned/missing blob. |
+| V2.5 | Re-publish all N blobs on IP change (staggered) | ✅ Done | `run_listener` re-publishes presence on IP change and every 30 min; reflector echo mode publishes + refreshes on the same cadence. |
 
 ### VII.3 — Fingerprint onboarding UX (desktop-ui)
 | # | Task | Status | Notes |
