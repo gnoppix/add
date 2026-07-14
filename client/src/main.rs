@@ -1853,9 +1853,12 @@ async fn dht_register_addr_record(
         .map_err(|e| format!("DHT connect failed: {}", e))?;
 
     // Solve PoW for addr-record
-    // Server expects: {null_id}|{address}|{ttl} (PoW uses same format for verification)
+    // Server expects: {null_id}|{address}|{ttl}|{salt} (PoW uses same format
+    // for verification). The random `salt` makes every solve produce a unique
+    // nonce, so re-registration is not blocked by the DHT nonce-replay log.
     let ttl = add_protocol::constants::ADDR_TTL;
-    let pow_data = format!("{}|{}|{}", identity.null_id, address, ttl);
+    let salt = uuid_hex();
+    let pow_data = format!("{}|{}|{}|{}", identity.null_id, address, ttl, salt);
     // Owned copy of the per-node secret for the spawned blocking task
     // (spawn_blocking requires 'static; `identity` is only borrowed here).
     let publisher_fp_secret = identity.fingerprint.clone();
@@ -1920,6 +1923,7 @@ async fn dht_register_addr_record(
             );
             m.insert("address".to_string(), serde_json::Value::String(address.to_string()));
             m.insert("ttl".to_string(), serde_json::json!(add_protocol::constants::ADDR_TTL));
+            m.insert("salt".to_string(), serde_json::Value::String(salt.clone()));
             m.insert(
                 "publisher_fp".to_string(),
                 serde_json::Value::String(identity.fingerprint.clone()),
@@ -3604,6 +3608,7 @@ async fn traverse_nat(bind_ip: std::net::IpAddr, bind_port: u16) -> Option<Strin
                             "NAT traversal: UPnP mapped {}:{} -> {}:{}",
                             pub_ip, ext_port, lan, bind_port
                         );
+                        // UPnP's ext_port IS the inbound-mapped port → correct.
                         return Some(format!("ws://{}:{}", pub_ip, ext_port));
                     }
                     Err(e) => tracing::warn!("UPnP external-IP query failed: {e}"),
@@ -3617,14 +3622,20 @@ async fn traverse_nat(bind_ip: std::net::IpAddr, bind_port: u16) -> Option<Strin
     // Fallback: STUN. Only meaningful for cone NATs; symmetric NATs will
     // reject inbound, but advertising the discovered public endpoint is the
     // best-effort option.
+    //
+    // CRITICAL: STUN's `public_port` is the NAT mapping for the *outbound
+    // probe socket*, which is unrelated to the listener's inbound port. We
+    // therefore advertise the listener's OWN bound port with STUN's public IP
+    // so inbound traffic actually reaches this socket. (For symmetric NATs the
+    // port still won't be reachable, but at least it's our real port.)
     let nat = add_p2p::nat::NatManager::new();
     match nat.discover_public_address().await {
         Ok(res) => {
             println!(
-                "NAT traversal: STUN discovered public {}:{}",
-                res.public_ip, res.public_port
+                "NAT traversal: STUN discovered public {}{} (using listener port {})",
+                res.public_ip, res.public_port, bind_port
             );
-            Some(format!("ws://{}:{}", res.public_ip, res.public_port))
+            Some(format!("ws://{}:{}", res.public_ip, bind_port))
         }
         Err(e) => {
             tracing::warn!("STUN discovery failed: {e}");
@@ -3642,8 +3653,10 @@ async fn run_listener(
     _cert: sequoia_openpgp::Cert, // Our GPG cert for signing
     advertised_url: Option<String>,
     no_nat: bool,
+    listen_port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind("0.0.0.0:0").await?;
+    let bind_addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), listen_port);
+    let listener = TcpListener::bind(bind_addr).await?;
     let local_addr = listener.local_addr()?;
     // Advertised address, in priority order:
     //   1. explicit --advertised-url (reverse-proxy / relay-fronted wss://)
@@ -4375,6 +4388,12 @@ enum Commands {
         /// When set, the listener advertises the raw LAN bind address.
         #[arg(long)]
         no_nat: bool,
+        /// Fixed local TCP port to bind the listener to. Binding a stable port
+        /// (instead of an ephemeral one) keeps the advertised address consistent
+        /// with the port NAT traversal maps to, so inbound P2P actually lands
+        /// on this socket. Defaults to 42887.
+        #[arg(long, default_value_t = 42887)]
+        port: u16,
     },
     /// Show DHT status
     Status,
@@ -5051,13 +5070,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Listen {
             advertised_url,
             no_nat,
+            port,
         } => {
             let store = MessageStore::open().await?;
             let identity = Identity::load()?;
             // Load our GPG cert for signing address records
             let cert = load_cert()?;
             println!("Starting P2P listener...");
-            run_listener(identity, store, cert, advertised_url, no_nat).await?;
+            run_listener(identity, store, cert, advertised_url, no_nat, port).await?;
         }
         Commands::Status => {
             println!("Add Status:");

@@ -797,7 +797,10 @@ impl DhtNodeRuntime {
         // SECURITY FIX (M11): Use the publisher's fingerprint as the per-node
         // secret (NOT the server's own fingerprint) so the client and server
         // salt identically. The client solves with its own `publisher_fp`.
-        let pow_data = format!("{null_id}|{address}|{ttl}");
+        // The random `salt` from the payload makes every solve produce a unique
+        // nonce, so legitimate re-registration is not blocked by the nonce log.
+        let salt = env.payload_str("salt").unwrap_or("").to_string();
+        let pow_data = format!("{null_id}|{address}|{ttl}|{salt}");
         let pow_ok = pow_check(
             &pow_data,
             nonce as u64,
@@ -813,11 +816,12 @@ impl DhtNodeRuntime {
             return;
         }
 
+        let key = format!("addr:{}", null_id);
         let salt = format!("addr:{}", rand::random::<u32>());
         let seq = now_unix() as i64;
         match store
             .put(
-                &null_id,
+                &key,
                 &address,
                 &salt,
                 seq,

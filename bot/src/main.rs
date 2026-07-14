@@ -204,6 +204,31 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Periodic self-heal: re-register our addr-record so that after a
+    // restart (new listen port) the DHT entry is refreshed before the old
+    // TTL (2h) expires. Without this, clients keep getting the stale
+    // port until the record naturally lapses.
+    let rereg_listen = listen_address.clone();
+    tokio::spawn(async move {
+        let bootstraps = vec![
+            "wss://bootstrap-eu.gnoppix.org/ws".to_string(),
+            "wss://bootstrap-asia.gnoppix.org/ws".to_string(),
+            "wss://bootstrap-us.gnoppix.org/ws".to_string(),
+        ];
+        // First re-register quickly (within ~10s) to overwrite any stale
+        // record left by a previous instance, then settle into a 5-min cadence.
+        let mut first = true;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(if first { 10 } else { 300 })).await;
+            first = false;
+            for url in &bootstraps {
+                if let Err(e) = register_addr_record(url, &rereg_listen).await {
+                    warn!("Periodic re-register to {} failed: {}", url, e);
+                }
+            }
+        }
+    });
+
     info!("Waiting for P2P connections...");
     info!("Press Ctrl+C to stop");
 
@@ -236,11 +261,10 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
 
     // SECURITY FIX (M11): PoW salted with the publisher's own fingerprint
     let sign_data = format!("{}|{}|{}", REFLECTOR_NULL_ID, listen_address, add_protocol::constants::ADDR_TTL);
+    let (sk_seed, vk_b64) = load_reflector_signing_key()?;
     let sig = {
         use add_crypto_pq::{MlDsa87KeyPair, sign_ml_dsa87};
 
-        // Load signing key from seed file (persists identity across reboots)
-        let (sk_seed, _vk_b64) = load_reflector_signing_key()?;
         let seed_arr: [u8; 32] = sk_seed.as_slice().try_into()
             .map_err(|_| anyhow!("Invalid seed length"))?;
         let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
@@ -277,6 +301,7 @@ async fn register_addr_record(bootstrap_url: &str, listen_address: &str) -> Resu
             m.insert("address".to_string(), serde_json::Value::String(listen_address.to_string()));
             m.insert("ttl".to_string(), serde_json::json!(add_protocol::constants::ADDR_TTL));
             m.insert("publisher_fp".to_string(), serde_json::Value::String(REFLECTOR_FINGERPRINT.to_string()));
+            m.insert("publisher_verifying_key".to_string(), serde_json::Value::String(vk_b64.clone()));
             m.insert("nonce".to_string(), serde_json::Value::Number(pow_nonce.into()));
             serde_json::Value::Object(m)
         },
