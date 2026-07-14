@@ -5077,7 +5077,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Load our GPG cert for signing address records
             let cert = load_cert()?;
             println!("Starting P2P listener...");
-            run_listener(identity, store, cert, advertised_url, no_nat, port).await?;
+            // Abort on SIGINT/SIGTERM so the listener exits cleanly (key material
+            // zeroized via Drop) instead of being orphaned when its parent dies.
+            tokio::select! {
+                res = run_listener(identity, store, cert, advertised_url, no_nat, port) => {
+                    res?;
+                }
+                _ = shutdown.notified() => {
+                    tracing::info!("listener interrupted by signal, shutting down");
+                }
+            }
         }
         Commands::Status => {
             println!("Add Status:");

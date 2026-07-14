@@ -399,3 +399,22 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
+
+// Robust cleanup: kill the background listener on ANY exit path, including
+// when the main process is terminated by a signal (SIGINT/SIGTERM) or via
+// app.quit(). Without this the spawned `add listen` child is orphaned and
+// keeps holding the listen port after the UI exits.
+function cleanupOnExit() {
+  killListenProcess()
+}
+
+app.on('before-quit', cleanupOnExit)
+
+process.on('SIGINT', () => {
+  cleanupOnExit()
+  process.exit(130)
+})
+process.on('SIGTERM', () => {
+  cleanupOnExit()
+  process.exit(143)
+})
