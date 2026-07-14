@@ -12,6 +12,7 @@
 
 /** Main App layout with split-pane structure */
 import { useEffect } from 'react'
+import { generateInitialsAvatar } from './lib/identicon'
 import Sidebar from './components/sidebar/Sidebar'
 import ChatPane from './components/chat/ChatPane'
 import { useChatStore, getEvaAPI } from './store/chatStore'
@@ -72,7 +73,7 @@ function App() {
         state.addConversation({
           id: from,
           name: from,
-          avatarUrl: `https://i.pravatar.cc/150?u=${from}`,
+          avatarUrl: generateInitialsAvatar(from),
           lastMessage: '',
           lastMessageTimestamp: new Date(),
           unreadCount: 0,
