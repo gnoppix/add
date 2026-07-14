@@ -423,6 +423,12 @@ impl DhtNodeRuntime {
                     Self::handle_pir_query(&env, &mut ws_tx, pir_registry.clone(), stealth_mode)
                         .await;
                 }
+                "blob-put" => {
+                    Self::handle_blob_put(&env, &mut ws_tx, store).await;
+                }
+                "blob-get" => {
+                    Self::handle_blob_get(&env, &mut ws_tx, store).await;
+                }
                 other => {
                     bot_logger.log(
                         &peer_addr.ip().to_string(),
@@ -864,6 +870,120 @@ impl DhtNodeRuntime {
             "sig": "",
         })
         .to_string()
+    }
+
+    /// Opaque content-addressed blob store (DESIGN.md §4 / PART VII V2.1).
+    ///
+    /// The server treats `key`/`value` as opaque: it never parses the value as
+    /// an address and never validates `key` as a Null ID. The client supplies a
+    /// content-addressing key (e.g. H(owner_id || contact_fp) or H(pubkey)) and
+    /// an ML-DSA signature over `key || value`. This lets the later per-contact
+    /// encrypted-address and cert stores run WITHOUT the server learning IPs,
+    /// IDs, or the contact graph. Contrast with `handle_addr_record`, which
+    /// stores the IP:port in clear.
+    async fn handle_blob_put(
+        env: &WireEnvelope,
+        ws_tx: &mut (impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
+        store: &DhtStore,
+    ) {
+        let key = match env.payload_str("key") {
+            Some(k) if !k.is_empty() => k.to_string(),
+            _ => {
+                let resp = build_dht_error("", "missing key");
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                return;
+            }
+        };
+        let value_b64 = match env.payload_str("value") {
+            Some(v) => v.to_string(),
+            None => {
+                let resp = build_dht_error(&key, "missing value");
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                return;
+            }
+        };
+        // Bound blob size (ciphertext + signature overhead is small).
+        if value_b64.len() > constants::MAX_VALUE_SIZE {
+            let resp = build_dht_error(&key, "value too large");
+            let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+            return;
+        }
+        let sig = env.payload_str("sig").unwrap_or("").to_string();
+        let publisher_fp = env.payload_str("publisher_fp").unwrap_or("").to_string();
+        let nonce: i64 = env.payload_i64("nonce").unwrap_or(0);
+        let ttl: i64 = env.payload_i64("ttl").unwrap_or(constants::ADDR_TTL);
+        let salt = format!("blob:{}", rand::random::<u32>());
+        let seq = now_unix() as i64;
+
+        match store
+            .put(&key, &value_b64, &salt, seq, &publisher_fp, ttl, &sig, nonce)
+            .await
+        {
+            Ok(true) => {
+                let resp = build_dht_found(&key, &value_b64, &salt, seq);
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+            }
+            Ok(false) => {
+                let resp = build_dht_error(&key, "stale sequence");
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+            }
+            Err(e) => {
+                error!("blob-put storage error for key {}: {}", key, e);
+                let resp = build_dht_error(&key, "storage error");
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+            }
+        }
+    }
+
+    /// Opaque blob fetch (DESIGN.md §4 / PART VII V2.1). Returns the stored
+    /// ciphertext blob keyed by the client-chosen opaque key. No semantic
+    /// interpretation by the server.
+    async fn handle_blob_get(
+        env: &WireEnvelope,
+        ws_tx: &mut (impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
+        store: &DhtStore,
+    ) {
+        let key = match env.payload_str("key") {
+            Some(k) if !k.is_empty() => k.to_string(),
+            _ => {
+                let resp = build_dht_error("", "missing key");
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                return;
+            }
+        };
+        match store.get(&key).await {
+            Ok(Some(rec)) => {
+                let json = serde_json::json!({
+                    "type": "dht-found",
+                    "payload": {
+                        "key": key,
+                        "value": rec.value,
+                        "salt": rec.salt,
+                        "seq": rec.seq,
+                        "publisher_fp": rec.publisher_fp,
+                        "sig": rec.sig,
+                        "expires_at": rec.expires_at,
+                    },
+                    "msg_id": uuid_hex(),
+                    "ts": now_unix(),
+                    "sig": "",
+                });
+                let resp = match WireEnvelope::from_json(&json.to_string()) {
+                    Ok(e) => e,
+                    Err(_) => build_dht_found(&key, &rec.value, &rec.salt, rec.seq),
+                };
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+            }
+            Ok(None) => {
+                let resp = build_dht_error(&key, "not found");
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+            }
+            Err(e) => {
+                error!("blob-get error for key {}: {}", key, e);
+                let resp = build_dht_error(&key, "storage error");
+                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+            }
+        }
     }
 
     /// Handle PIR query for private contact lookup.

@@ -370,3 +370,58 @@ The desktop client lives in `desktop-ui/` (Electron + React + TypeScript, Zustan
 **Completed 2026-07-09 (v0.3.16 — SPQR Braid fully wired):**
 25. ✅ SPQR Braid wired into live P2P handshake + ratchet — `p2p/src/braid_handshake.rs` streams the 1568B ML-KEM-1024 EK as `p2p-braid-chunk` frames; `send_message` + `handle_incoming_connection` negotiate `braid:true` and feed the reassembled key into KEM + Double Ratchet. Inline `kyber_enc_key` kept as fallback.
 26. ✅ Removed broken `crypto::BraidState` ct1/ct2 design — re-ran randomized `encapsulate` during reconciliation (could never match) and had 0 consumers. SPQR now has one correct implementation.
+
+---
+
+## PART VII: Privacy-First Discovery & Routing (DESIGN.md target)
+
+**Date opened:** 2026-07-14
+**Spec:** `DESIGN.md` (§4 cert store, §4.2–§4.3 encrypted address store, §6 mutual-consent gating) + `SECURITY.md`.
+**Goal:** replace the open plaintext DHT `addr:` record (operator can read IP↔ID) with (a) an opaque content-addressed cert store, (b) per-contact **encrypted** address blobs the server cannot read, (c) fingerprint onboarding, (d) mutual-consent traffic gating. Trust from out-of-band fingerprint, NOT server count — the earlier 3-server shard sketch is DROPPED.
+
+**Legend (this part):** ✅ done · 🔄 in progress · ⬜ todo · 🟢 defer (v2)
+
+### VII.1 — Opaque cert store (publish + fetch, content-addressed)
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| V1.1 | New-ID publishes signed cert+fingerprint to opaque store (key=`H(pubkey)`) | ⬜ | Client signs `{cert‖fp}`; server stores blob+sig, no trusted ID↔key map. DESIGN §4.2 Publish. |
+| V1.2 | Cert fetch by ID + verify hash == spoken fingerprint | ⬜ | Onboarding verify path. |
+| V1.3 | Retire plaintext `addr:`-style public-key directory keyed by Null ID | ⬜ | No roster enumeration. |
+
+### VII.2 — Per-contact encrypted address store (replaces open DHT addr_record)
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| V2.1 | Opaque content-addressed blob store (replace `addr:` plaintext put/get) | ✅ Done | `blob-put`/`blob-get` wire cmds in dht_node.rs; server stores opaque key=value+sig, never parses value as address or validates key as Null ID. Live round-trip verified on is (bootstrap-eu): stored under `blobtest:…` key, value = base64 ciphertext, no `addr:`/IP/ID in clear. |
+| V2.2 | Per-contact ML-KEM-ENC of address record under each contact's pubkey | ⬜ | `ct_i = encaps(contact_pubkey, R)`; N blobs for N contacts. |
+| V2.3 | Fetch key derivation `H(owner_id‖contact_fp)` on both sides | ⬜ | Server can't map key→identity. |
+| V2.4 | Sign + verify blob (ML-DSA) | ⬜ | Defeat poisoned/missing shard. |
+| V2.5 | Re-publish all N blobs on IP change (staggered) | ⬜ | Per-contact cost; infrequent. |
+
+### VII.3 — Fingerprint onboarding UX (desktop-ui)
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| V3.1 | ID + fingerprint entry modal | ⬜ | Reuse existing Add-Contact modal. |
+| V3.2 | Safe fingerprint encoding (base32 groups-of-4 + checksum) | ⬜ | Typos fail loudly; prefer paste/scan. |
+| V3.3 | "Both sides confirm SAME fingerprint" screen | ⬜ | Signal-model TOFU. |
+| V3.4 | Verify downloaded cert hash == spoken fingerprint; cache as verified | ⬜ | |
+
+### VII.4 — Mutual-consent gating
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| V4.1 | Outbound refuse to non-contacts | ⬜ | Client-side. |
+| V4.2 | Inbound drop-before-decrypt from non-contacts | ⬜ | Stops one-sided contact (Bob→Alice when Alice hasn't added Bob). |
+| V4.3 | Remove → stop publishing that contact's blob | ⬜ | Couples to V2. |
+| V4.4 | Pending-add local UI state (no network probe) | ⬜ | |
+
+### VII.5 — Hardening (defer to v2)
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| V5.1 | PIR on address store (close traffic-analysis leak) | 🟢 | `handle_pir_query` stub exists; hardest piece. |
+
+### VII — Build order (phased)
+1. **V2.1 opaque blob store** — kills plaintext IP↔ID exposure on the server. Cheapest, highest value. ← **starting here**
+2. V1.1–V1.3 cert store publish/fetch.
+3. V2.2–V2.5 per-contact encryption.
+4. V3.1–V3.4 fingerprint UX.
+5. V4.1–V4.4 mutual-consent gate.
+6. V5.1 PIR (deferred).
