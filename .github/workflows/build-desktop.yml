@@ -47,6 +47,7 @@ jobs:
 
       - name: Build Electron app (NSIS)
         working-directory: desktop-ui
+        shell: bash
         run: npm run build:react && npm run fix:index && npx electron-builder --config electron-builder.js --win --publish=never
         env:
           # On CI we do NOT codesign; remove these when certs are supplied.
@@ -105,6 +106,7 @@ jobs:
 
       - name: Build Electron app (DMG)
         working-directory: desktop-ui
+        shell: bash
         run: npm run build:react && npm run fix:index && npx electron-builder --config electron-builder.js --mac --publish=never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # set to 'true' + import certs for notarization
@@ -156,6 +158,7 @@ jobs:
 
       - name: Build Electron app (deb)
         working-directory: desktop-ui
+        shell: bash
         run: npm run build:react && npm run fix:index && npx electron-builder --config electron-builder.js --linux --publish=never
 
       - name: Diagnostics before upload
