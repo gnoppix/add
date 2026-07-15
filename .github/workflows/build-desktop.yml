@@ -54,6 +54,7 @@ jobs:
 
       - name: Diagnostics before upload
         working-directory: desktop-ui
+        shell: bash
         run: |
           echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
           echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
@@ -110,6 +111,7 @@ jobs:
 
       - name: Diagnostics before upload
         working-directory: desktop-ui
+        shell: bash
         run: |
           echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
           echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
@@ -158,6 +160,7 @@ jobs:
 
       - name: Diagnostics before upload
         working-directory: desktop-ui
+        shell: bash
         run: |
           echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
           echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
