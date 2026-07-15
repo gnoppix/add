@@ -54,12 +54,11 @@ impl Igd {
 
         let mut buf = [0u8; 4096];
         let mut location: Option<String> = None;
-        // Collect responses until timeout; grab the first usable LOCATION.
+        // Collect responses until the deadline; grab the first usable LOCATION.
+        // IGDs answer M-SEARCH within MX (3s), so we must keep receiving across
+        // multiple 500ms windows — NOT bail out on the first empty window.
         let deadline = tokio::time::Instant::now() + SSDP_TIMEOUT;
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                break;
-            }
+        while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(Duration::from_millis(500), sock.recv_from(&mut buf)).await {
                 Ok(Ok((n, _src))) => {
                     let text = String::from_utf8_lossy(&buf[..n]);
@@ -67,8 +66,17 @@ impl Igd {
                         location = Some(loc);
                         break;
                     }
+                    // No LOCATION in this datagram yet — keep listening until deadline.
                 }
-                _ => break, // timeout or socket error -> stop collecting
+                Ok(Err(e)) => {
+                    // Real socket error — stop collecting.
+                    warn!("UPnP: SSDP recv error: {e}");
+                    break;
+                }
+                Err(_) => {
+                    // 500ms idle window — continue until the deadline.
+                    continue;
+                }
             }
         }
 

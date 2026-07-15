@@ -13,12 +13,12 @@
 // decapsulation key and cannot recover the address.
 //-------------------------------------------------------------------------------
 
-use crate::{null_id_from_fingerprint, uuid_hex, Identity};
+use crate::{Identity, null_id_from_fingerprint, uuid_hex};
 use add_crypto::kyber::KyberKeypair;
 use add_protocol::constants::ADDR_TTL;
 use add_protocol::envelope::WireEnvelope;
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use futures::{SinkExt as _, StreamExt as _};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -140,7 +140,7 @@ pub async fn publish_presence(
     }
 
     let mut best = 0usize;
-    for (_null_id, contact_fp) in &contacts {
+    for contact_fp in contacts.values() {
         let contact_null_id = null_id_from_fingerprint(contact_fp);
         let (kem_ct_hex, ss) = match pair_encapsulate(&identity.null_id, &contact_null_id) {
             Ok(v) => v,
@@ -188,7 +188,10 @@ pub async fn publish_presence(
                 payload: {
                     let mut m = serde_json::Map::new();
                     m.insert("key".to_string(), serde_json::Value::String(key.clone()));
-                    m.insert("value".to_string(), serde_json::Value::String(value.clone()));
+                    m.insert(
+                        "value".to_string(),
+                        serde_json::Value::String(value.clone()),
+                    );
                     m.insert("ttl".to_string(), serde_json::json!(ADDR_TTL));
                     m.insert(
                         "publisher_fp".to_string(),
@@ -201,12 +204,11 @@ pub async fn publish_presence(
             if ws.send(Message::Text(req_json.into())).await.is_err() {
                 continue;
             }
-            if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
-                if let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text) {
-                    if resp.msg_type == "dht-found" {
-                        stored_on += 1;
-                    }
-                }
+            if let Some(Ok(Message::Text(resp_text))) = ws.next().await
+                && let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text)
+                && resp.msg_type == "dht-found"
+            {
+                stored_on += 1;
             }
         }
         if stored_on > best {
@@ -249,19 +251,17 @@ pub async fn fetch_presence(identity: &Identity, contact_fp: &str) -> Option<Str
         if ws.send(Message::Text(req_json.into())).await.is_err() {
             continue;
         }
-        if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
-            if let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text) {
-                if resp.msg_type != "dht-found" {
-                    continue;
-                }
-                let sealed = resp.payload_str("value")?;
-                // value = base64(kem_ct_hex) '.' base64(nonce || aes_ct)
-                let (ct_b64, aes_b64) = sealed.split_once('.')?;
-                let kem_ct_hex = String::from_utf8(B64.decode(ct_b64).ok()?).ok()?;
-                let ss = pair_decapsulate(&identity.null_id, &kem_ct_hex).ok()?;
-                let plain = open(&ss, aes_b64).ok()?;
-                return String::from_utf8(plain).ok();
-            }
+        if let Some(Ok(Message::Text(resp_text))) = ws.next().await
+            && let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text)
+            && resp.msg_type == "dht-found"
+        {
+            let sealed = resp.payload_str("value")?;
+            // value = base64(kem_ct_hex) '.' base64(nonce || aes_ct)
+            let (ct_b64, aes_b64) = sealed.split_once('.')?;
+            let kem_ct_hex = String::from_utf8(B64.decode(ct_b64).ok()?).ok()?;
+            let ss = pair_decapsulate(&identity.null_id, &kem_ct_hex).ok()?;
+            let plain = open(&ss, aes_b64).ok()?;
+            return String::from_utf8(plain).ok();
         }
     }
     None
@@ -314,7 +314,8 @@ mod tests {
 
         let addr = "ws://203.0.113.7:8765";
         let key = presence_blob_key(&alice.null_id, bob_fp);
-        let (ct_hex, ss) = pair_encapsulate(&alice.null_id, &null_id_from_fingerprint(bob_fp)).unwrap();
+        let (ct_hex, ss) =
+            pair_encapsulate(&alice.null_id, &null_id_from_fingerprint(bob_fp)).unwrap();
         let ct_hex_clone = ct_hex.clone();
 
         // seal with the shared secret
@@ -323,14 +324,19 @@ mod tests {
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
         let ct = cipher.encrypt(nonce, addr.as_bytes()).unwrap();
-        let blob = format!("{}.{}", base64::engine::general_purpose::STANDARD.encode(ct_hex),
-                                   base64::engine::general_purpose::STANDARD.encode([nonce.as_slice(), &ct].concat()));
+        let blob = format!(
+            "{}.{}",
+            base64::engine::general_purpose::STANDARD.encode(ct_hex),
+            base64::engine::general_purpose::STANDARD.encode([nonce.as_slice(), &ct].concat())
+        );
 
         // Now Bob fetches: he derives the SAME ss via his dk + the embedded ct.
         let bob = fake_identity(&null_id_from_fingerprint(bob_fp));
         let recovered = {
             let kem_ct_hex = String::from_utf8(
-                base64::engine::general_purpose::STANDARD.decode(blob.split('.').next().unwrap()).unwrap(),
+                base64::engine::general_purpose::STANDARD
+                    .decode(blob.split('.').next().unwrap())
+                    .unwrap(),
             )
             .unwrap();
             let ss = pair_decapsulate(&bob.null_id, &kem_ct_hex).unwrap();
@@ -345,7 +351,10 @@ mod tests {
         let ct_hex_for_eve = ct_hex_clone.clone();
         let eve_ss = pair_decapsulate(&eve.null_id, &ct_hex_for_eve).ok();
         let eve_opened = eve_ss.and_then(|ss| open(&ss, blob.split('.').nth(1).unwrap()).ok());
-        assert!(eve_opened.is_none(), "outsider must NOT recover the address");
+        assert!(
+            eve_opened.is_none(),
+            "outsider must NOT recover the address"
+        );
         let _ = key;
     }
 }

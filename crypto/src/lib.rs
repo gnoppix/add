@@ -578,7 +578,9 @@ mod tests {
         // A receives them OUT OF ORDER: 2, 0, 3, 1, then replays 0 and 2.
         let mut got = std::collections::HashMap::new();
         for seq in [2u64, 0, 3, 1, 0, 2] {
-            let plain = sess_a.decrypt_message(&cts[seq as usize], &kp, seq).unwrap();
+            let plain = sess_a
+                .decrypt_message(&cts[seq as usize], &kp, seq)
+                .unwrap();
             got.insert(seq, plain);
         }
         assert_eq!(got[&0], "m0");

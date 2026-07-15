@@ -1,0 +1,173 @@
+name: Add Desktop — Windows / macOS / Linux
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow the action to upload release artifacts.
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Windows (NSIS installer) — built natively on a Windows runner.
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Build add core (x86_64-pc-windows-msvc)
+        working-directory: desktop-ui
+        run: |
+          cargo build --package add-client --release --target x86_64-pc-windows-msvc
+          New-Item -ItemType Directory -Force -Path ..\target\bundle
+          Copy-Item ..\target\x86_64-pc-windows-msvc\release\add.exe ..\target\bundle\add.exe
+
+      - name: Install npm deps
+        working-directory: desktop-ui
+        run: npm ci
+
+      - name: Build Electron app (NSIS)
+        working-directory: desktop-ui
+        run: npm run build
+        env:
+          # On CI we do NOT codesign; remove these when certs are supplied.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: add-desktop-windows
+          path: desktop-ui/dist-electron/*.exe
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # macOS (universal DMG) — built natively on a macOS runner.
+  # ---------------------------------------------------------------------------
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, universal)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Build add core (universal via lipo)
+        working-directory: desktop-ui
+        run: |
+          cargo build --package add-client --release --target x86_64-apple-darwin
+          cargo build --package add-client --release --target aarch64-apple-darwin
+          mkdir -p ../target/bundle
+          lipo -create \
+            ../target/x86_64-apple-darwin/release/add \
+            ../target/aarch64-apple-darwin/release/add \
+            -output ../target/bundle/add
+          chmod +x ../target/bundle/add
+
+      - name: Install npm deps
+        working-directory: desktop-ui
+        run: npm ci
+
+      - name: Build Electron app (DMG)
+        working-directory: desktop-ui
+        run: npm run build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # set to 'true' + import certs for notarization
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: add-desktop-macos
+          path: desktop-ui/dist-electron/*.dmg
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Linux (deb) — built natively on an Ubuntu runner.
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Build add core (x86_64-unknown-linux-gnu)
+        working-directory: desktop-ui
+        run: |
+          cargo build --package add-client --release --target x86_64-unknown-linux-gnu
+          mkdir -p ../target/bundle
+          cp ../target/x86_64-unknown-linux-gnu/release/add ../target/bundle/add
+          chmod +x ../target/bundle/add
+
+      - name: Install npm deps
+        working-directory: desktop-ui
+        run: npm ci
+
+      - name: Build Electron app (deb)
+        working-directory: desktop-ui
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: add-desktop-linux
+          path: desktop-ui/dist-electron/*.deb
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Release — attach all artifacts to a GitHub Release on tag push.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish Release
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: List artifacts
+        run: find artifacts -type f
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/add-desktop-windows/*.exe
+            artifacts/add-desktop-macos/*.dmg
+            artifacts/add-desktop-linux/*.deb

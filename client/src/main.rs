@@ -582,7 +582,10 @@ fn decrypt_cert_armored(
 /// Change the passphrase protecting the GPG secret key (own_cert.age)
 /// Decrypts with old passphrase, re-encrypts with new passphrase.
 /// If encrypt=true and only plaintext exists, encrypt it without prompting for old password.
-fn change_passphrase(current_pass: Option<String>, new_pass_in: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn change_passphrase(
+    current_pass: Option<String>,
+    new_pass_in: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let cert_dir = home_dir().join(GPG_HOME);
     let enc_path = cert_dir.join("own_cert.age");
     let plain_path = cert_dir.join("own_cert.asc");
@@ -623,7 +626,9 @@ fn change_passphrase(current_pass: Option<String>, new_pass_in: Option<String>) 
 
     // Normal flow: decrypt + re-encrypt
     if !enc_path.exists() {
-        return Err("No encrypted cert found (run 'add init' with a passphrase to create one)".into());
+        return Err(
+            "No encrypted cert found (run 'add init' with a passphrase to create one)".into(),
+        );
     }
 
     // Prompt for current passphrase
@@ -1814,7 +1819,9 @@ async fn dht_publish_cert(
     // SECURITY: publish the PUBLIC cert only — strip all secret key material.
     let armored = {
         use sequoia_openpgp::serialize::Serialize;
-        let cert = load_cert().map_err(|e| e.to_string())?.strip_secret_key_material();
+        let cert = load_cert()
+            .map_err(|e| e.to_string())?
+            .strip_secret_key_material();
         let mut buf = Vec::new();
         cert.armored()
             .serialize(&mut buf)
@@ -1902,16 +1909,36 @@ async fn dht_publish_cert(
             payload: {
                 let mut m = serde_json::Map::new();
                 m.insert("key".to_string(), serde_json::Value::String(key.clone()));
-                m.insert("value".to_string(), serde_json::Value::String(value_b64.clone()));
+                m.insert(
+                    "value".to_string(),
+                    serde_json::Value::String(value_b64.clone()),
+                );
                 m.insert("sig".to_string(), serde_json::Value::String(sig.clone()));
-                m.insert("publisher_fp".to_string(), serde_json::Value::String(fp.clone()));
+                m.insert(
+                    "publisher_fp".to_string(),
+                    serde_json::Value::String(fp.clone()),
+                );
                 // Self-asserted verifying key — the server binds it to
                 // publisher_fp before accepting the cert blob (cert-store MITM defense).
-                m.insert("publisher_verifying_key".to_string(), serde_json::Value::String(vk_b64.clone()));
-                m.insert("ttl".to_string(), serde_json::Value::Number(serde_json::Number::from(add_protocol::constants::ADDR_TTL)));
-                m.insert("nonce".to_string(), serde_json::Value::Number((uuid_hex().len() as i64).into()));
+                m.insert(
+                    "publisher_verifying_key".to_string(),
+                    serde_json::Value::String(vk_b64.clone()),
+                );
+                m.insert(
+                    "ttl".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        add_protocol::constants::ADDR_TTL,
+                    )),
+                );
+                m.insert(
+                    "nonce".to_string(),
+                    serde_json::Value::Number((uuid_hex().len() as i64).into()),
+                );
                 m.insert("vk".to_string(), serde_json::Value::String(vk_b64.clone()));
-                m.insert("kyber_enc".to_string(), serde_json::Value::String(kyber_enc_b64.clone()));
+                m.insert(
+                    "kyber_enc".to_string(),
+                    serde_json::Value::String(kyber_enc_b64.clone()),
+                );
                 serde_json::Value::Object(m)
             },
         };
@@ -1920,18 +1947,22 @@ async fn dht_publish_cert(
             last_error = Some(format!("cert publish send failed: {}", e));
             continue;
         }
-        if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
-            if let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text) {
-                if resp.msg_type == "dht-found" {
-                    success_count += 1;
-                } else {
-                    last_error = Some(format!("cert publish rejected: {}", resp.msg_type));
-                }
+        if let Some(Ok(Message::Text(resp_text))) = ws.next().await
+            && let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text)
+        {
+            if resp.msg_type == "dht-found" {
+                success_count += 1;
+            } else {
+                last_error = Some(format!("cert publish rejected: {}", resp.msg_type));
             }
         }
     }
     if success_count > 0 {
-        tracing::info!("Certificate published on {}/{} bootstrap servers", success_count, bootstraps.len());
+        tracing::info!(
+            "Certificate published on {}/{} bootstrap servers",
+            success_count,
+            bootstraps.len()
+        );
         Ok(())
     } else {
         Err(last_error
@@ -1949,7 +1980,9 @@ async fn dht_fetch_cert(
     fingerprint: &str,
 ) -> Result<(String, String, String), Box<dyn std::error::Error + Send + Sync>> {
     use add_protocol::envelope::WireEnvelope;
-    let ws_url = seed_url.replace("http://", "ws://").replace("https://", "wss://");
+    let ws_url = seed_url
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
     let mut ws = ws_connect(&ws_url)
         .await
         .map_err(|e| format!("DHT connect failed: {}", e))?;
@@ -1974,9 +2007,7 @@ async fn dht_fetch_cert(
         if resp.msg_type != "dht-found" {
             return Err(format!("cert not found: {}", resp.msg_type).into());
         }
-        let value = resp
-            .payload_str("value")
-            .ok_or("missing cert blob value")?;
+        let value = resp.payload_str("value").ok_or("missing cert blob value")?;
         // value = base64(JSON bundle {cert, vk, kyber_enc, fp})
         let bundle_bytes = base64::engine::general_purpose::STANDARD
             .decode(value)
@@ -1984,13 +2015,21 @@ async fn dht_fetch_cert(
         let bundle: serde_json::Value = serde_json::from_slice(&bundle_bytes)
             .map_err(|e| format!("cert bundle not JSON: {}", e))?;
         let cert_b64 = bundle.get("cert").and_then(|v| v.as_str()).unwrap_or("");
-        let vk_b64 = bundle.get("vk").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let kyber_enc = bundle.get("kyber_enc").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let vk_b64 = bundle
+            .get("vk")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let kyber_enc = bundle
+            .get("kyber_enc")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let armored_bytes = base64::engine::general_purpose::STANDARD
             .decode(cert_b64)
             .map_err(|e| format!("cert not base64: {}", e))?;
-        let armored = String::from_utf8(armored_bytes)
-            .map_err(|e| format!("cert blob not utf8: {}", e))?;
+        let armored =
+            String::from_utf8(armored_bytes).map_err(|e| format!("cert blob not utf8: {}", e))?;
         Ok((armored, vk_b64, kyber_enc))
     } else {
         Err("no response from bootstrap".into())
@@ -2021,10 +2060,10 @@ async fn fetch_public_service_addr(null_id: &str) -> Option<String> {
         // Reuse the cert blob-get path; the bundle carries `address`.
         if let Ok((_cert, vk_b64, _kyber)) = dht_fetch_cert(seed_url, fp).await {
             // Pin the VK from the authoritative published bundle.
-            if let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(&vk_b64) {
-                if let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes) {
-                    let _ = add_dht_core::crypto_helpers::pin_verifying_key(fp, &vk);
-                }
+            if let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(&vk_b64)
+                && let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes)
+            {
+                let _ = add_dht_core::crypto_helpers::pin_verifying_key(fp, &vk);
             }
             // The address field is carried in the same bundle; re-fetch the raw
             // bundle to read it (dht_fetch_cert elides it).
@@ -2040,7 +2079,9 @@ async fn fetch_public_service_addr(null_id: &str) -> Option<String> {
 /// service's advertised `ws://` endpoint). Returns None if unpublished.
 async fn fetch_cert_address(seed_url: &str, fingerprint: &str) -> Option<String> {
     use add_protocol::envelope::WireEnvelope;
-    let ws_url = seed_url.replace("http://", "ws://").replace("https://", "wss://");
+    let ws_url = seed_url
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
     let mut ws = ws_connect(&ws_url).await.ok()?;
     let key = cert_blob_key(fingerprint);
     let req = WireEnvelope {
@@ -2063,14 +2104,12 @@ async fn fetch_cert_address(seed_url: &str, fingerprint: &str) -> Option<String>
                 return None;
             }
             let value = resp.payload_str("value")?;
-            let bundle_bytes = base64::engine::general_purpose::STANDARD.decode(value).ok()?;
+            let bundle_bytes = base64::engine::general_purpose::STANDARD
+                .decode(value)
+                .ok()?;
             let bundle: serde_json::Value = serde_json::from_slice(&bundle_bytes).ok()?;
             let addr = bundle.get("address").and_then(|a| a.as_str())?.to_string();
-            if addr.is_empty() {
-                None
-            } else {
-                Some(addr)
-            }
+            if addr.is_empty() { None } else { Some(addr) }
         } else {
             None
         }
@@ -2362,7 +2401,8 @@ async fn relay_fetch_all(
                     match ws.next().await {
                         Some(Ok(Message::Text(text))) => {
                             let resp: serde_json::Value = serde_json::from_str(&text)?;
-                            if let Some(_error) = resp.get("error").and_then(|e| e.as_str()) {
+                            if let Some(error) = resp.get("error").and_then(|e| e.as_str()) {
+                                tracing::warn!("relay-fetch rejected by {}: {}", url, error);
                                 return Ok(Vec::new());
                             }
                             if let Some(entries) = resp
@@ -2481,7 +2521,8 @@ async fn relay_purge(relay_url: &str, null_id: &str) -> Result<(), Box<dyn std::
     // silent rejections are never hidden.
     match ws.next().await {
         Some(Ok(Message::Text(resp))) => {
-            let resp_val: serde_json::Value = serde_json::from_str(&resp).unwrap_or(serde_json::Value::Null);
+            let resp_val: serde_json::Value =
+                serde_json::from_str(&resp).unwrap_or(serde_json::Value::Null);
             let accepted = resp_val
                 .get("payload")
                 .and_then(|p| p.get("accepted"))
@@ -2986,10 +3027,7 @@ async fn relay_decrypt_message(
         .ok_or("no ciphertext in relay message")?;
 
     // SECURITY FIX (M1): message sequence number drives skipped-key handling.
-    let seq = env
-        .get("seq")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let seq = env.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
 
     // Check if this is a first-message (contains kyber_ciphertext for session init)
     let kyber_ct_hex = env.get("kyber_ciphertext").and_then(|c| c.as_str());
@@ -3121,9 +3159,11 @@ async fn send_message(
     let recipient_addr = if is_public_service(recipient_nid) {
         fetch_public_service_addr(recipient_nid).await
     } else {
-        presence::fetch_presence(identity, &recipient_fp).await
+        presence::fetch_presence(identity, recipient_fp).await
     };
 
+    // Resolve the recipient's listener address. If DHT lookup failed, fall
+    // back to relay delivery below.
     let ws_url = if let Some(ref addr) = recipient_addr {
         println!("Found at: {}", addr);
         addr.replace("http://", "ws://")
@@ -3170,39 +3210,90 @@ async fn send_message(
     // with no hole punch) fails fast and we fall back to relay instead of
     // hanging on a dead TCP endpoint (per architecture: relay is the fallback
     // when the peer is not directly reachable).
-    let connect_fut = tokio_tungstenite::connect_async(&ws_url);
-    let (mut ws, _) =
-        match tokio::time::timeout(std::time::Duration::from_secs(8), connect_fut).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(e)) => {
-                println!("Direct P2P failed ({}), using relay delivery...", e);
-                return send_via_relay(
-                    identity,
-                    recipient_nid,
-                    recipient_fp,
-                    message,
-                    store,
-                    relay_url,
-                    ttl,
-                    true,
-                )
-                .await;
+    //
+    // Candidate order is LOCAL-FIRST: loopback, then our LAN IP, then the
+    // presence (public) address. When sender and receiver share a host, the
+    // loopback/LAN connect succeeds instantly without needing NAT hairpinning;
+    // for remote peers the public address is what ultimately works. The
+    // handshake authenticates the peer, so a local candidate can never
+    // deliver to the wrong party — a refused/wrong peer just fails fast.
+    //
+    // Each candidate gets its OWN short timeout. Without this, a hung connect
+    // to the public IP would consume the entire budget and the loopback
+    // attempt (which would have succeeded) would never be reached.
+    let port = ws_url
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok());
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(p) = port {
+        // Local-first: loopback and LAN connect instantly on a co-located peer.
+        candidates.push(format!("ws://127.0.0.1:{}", p));
+        if let Some(lan) = primary_ipv4() {
+            candidates.push(format!("ws://{}:{}", lan, p));
+        }
+    }
+    candidates.push(ws_url.clone()); // presence / public address last
+    // Deduplicate while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|c| seen.insert(c.clone()));
+
+    const CANDIDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+    const P2P_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+    let connect_result: Result<(tokio_tungstenite::WebSocketStream<_>, _), String> =
+        tokio::time::timeout(P2P_TOTAL_TIMEOUT, async {
+            let mut last_err = String::from("no candidate addresses");
+            for cand in &candidates {
+                match tokio::time::timeout(CANDIDATE_TIMEOUT, tokio_tungstenite::connect_async(cand))
+                    .await
+                {
+                    Ok(Ok(result)) => return Ok(result),
+                    Ok(Err(e)) => {
+                        last_err = format!("{}", e);
+                        continue;
+                    }
+                    Err(_) => {
+                        // This candidate hung (e.g. public IP with no hairpin) —
+                        // move on to the next without burning the whole budget.
+                        last_err = format!("{} timed out", cand);
+                        continue;
+                    }
+                }
             }
-            Err(_) => {
-                println!("Direct P2P timed out, using relay delivery...");
-                return send_via_relay(
-                    identity,
-                    recipient_nid,
-                    recipient_fp,
-                    message,
-                    store,
-                    relay_url,
-                    ttl,
-                    true,
+            Err(last_err)
+        })
+        .await
+        .unwrap_or_else(|_| Err(String::from("timed out")));
+
+    let (mut ws, _) = match connect_result {
+        Ok(result) => result,
+        Err(e) => {
+            // If presence lookup failed entirely and this is a public service
+            // (which never reads relay mail), say so instead of fake-delivering
+            // to a relay it will never collect from.
+            if recipient_addr.is_none() && is_public_service(recipient_nid) {
+                return Err(format!(
+                    "{} is a public service but its address is not in the cert store \
+                     (it may be offline or unpublished). Cannot deliver.",
+                    recipient_nid
                 )
-                .await;
+                .into());
             }
-        };
+            println!("Direct P2P failed ({}), using relay delivery...", e);
+            return send_via_relay(
+                identity,
+                recipient_nid,
+                recipient_fp,
+                message,
+                store,
+                relay_url,
+                ttl,
+                true,
+            )
+            .await;
+        }
+    };
 
     // SECURITY FIX (C1): Load our Kyber keypair deterministically derived from null_id
     let our_kyber = load_or_generate_kyber(&identity.null_id, store)?;
@@ -3322,11 +3413,11 @@ async fn send_message(
             let inline_ek = base64::engine::general_purpose::STANDARD
                 .decode(&inline_ek_b64)
                 .map_err(|e| format!("inline kyber_enc_key decode: {}", e))?;
-            let peer_ek_bytes = add_p2p::braid_handshake::verify_peer_ek_from_bytes(
-                &peer_ek_bytes,
-                &inline_ek,
-            )
-            .map_err(|e| format!("[braid] peer EK failed authentication ({}), aborting", e))?;
+            let peer_ek_bytes =
+                add_p2p::braid_handshake::verify_peer_ek_from_bytes(&peer_ek_bytes, &inline_ek)
+                    .map_err(|e| {
+                        format!("[braid] peer EK failed authentication ({}), aborting", e)
+                    })?;
             let peer_ek_b64 = base64::engine::general_purpose::STANDARD.encode(&peer_ek_bytes);
             peer_kyber_enc = add_crypto::kyber::decode_enc_key(&peer_ek_b64).ok();
         } else if !inline_ek_b64.is_empty() {
@@ -3491,10 +3582,7 @@ async fn send_message(
                         .unwrap_or("");
                     // Strip a cosmetic prefix the reflector may prepend (e.g. "/"
                     // or "🤖 [Reflector Echo]: ").
-                    let stripped = raw_ct
-                        .rsplit_once(": ")
-                        .map(|(_, b)| b)
-                        .unwrap_or(raw_ct);
+                    let stripped = raw_ct.rsplit_once(": ").map(|(_, b)| b).unwrap_or(raw_ct);
                     // If the returned body equals what we sent, or is just the
                     // opaque ciphertext (doesn't match our plaintext), show the
                     // plaintext we already have — that's the real loopback content.
@@ -3626,23 +3714,22 @@ async fn traverse_nat(bind_ip: std::net::IpAddr, bind_port: u16) -> Option<Strin
         }
     }
 
-    // Fallback: STUN. Only meaningful for cone NATs; symmetric NATs will
-    // reject inbound, but advertising the discovered public endpoint is the
-    // best-effort option.
-    //
-    // CRITICAL: STUN's `public_port` is the NAT mapping for the *outbound
-    // probe socket*, which is unrelated to the listener's inbound port. We
-    // therefore advertise the listener's OWN bound port with STUN's public IP
-    // so inbound traffic actually reaches this socket. (For symmetric NATs the
-    // port still won't be reachable, but at least it's our real port.)
+    // Fallback: STUN. For a cone NAT (the common case) the binding the NAT
+    // created for the *outbound probe socket* is the very endpoint that inbound
+    // traffic is forwarded to — and it forwards to whatever internal socket sent
+    // the probe (our listener). So we MUST advertise the STUN-discovered
+    // `public_port`, not our LAN bind port; otherwise inbound connects hit a
+    // port nothing is listening on publicly and P2P times out. (On a symmetric
+    // NAT the mapping is per-destination and won't accept the peer's inbound
+    // packet regardless — there P2P is expected to fail and relay covers it.)
     let nat = add_p2p::nat::NatManager::new();
     match nat.discover_public_address().await {
         Ok(res) => {
             println!(
-                "NAT traversal: STUN discovered public {}{} (using listener port {})",
+                "NAT traversal: STUN discovered public {}{} (advertising this endpoint; listener bound on {})",
                 res.public_ip, res.public_port, bind_port
             );
-            Some(format!("ws://{}:{}", res.public_ip, bind_port))
+            Some(format!("ws://{}:{}", res.public_ip, res.public_port))
         }
         Err(e) => {
             tracing::warn!("STUN discovery failed: {e}");
@@ -3662,7 +3749,10 @@ async fn run_listener(
     no_nat: bool,
     listen_port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let bind_addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), listen_port);
+    let bind_addr = std::net::SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+        listen_port,
+    );
     let listener = TcpListener::bind(bind_addr).await?;
     let local_addr = listener.local_addr()?;
     // Advertised address, in priority order:
@@ -3741,18 +3831,10 @@ async fn run_listener(
                     last_registered_address,
                     current_addr
                 );
-                if let Err(e) =
-                    presence::publish_presence(&identity_clone, &current_addr).await
-                {
-                    tracing::warn!(
-                        "Failed to re-publish presence after IP change: {}",
-                        e
-                    );
+                if let Err(e) = presence::publish_presence(&identity_clone, &current_addr).await {
+                    tracing::warn!("Failed to re-publish presence after IP change: {}", e);
                 } else {
-                    tracing::info!(
-                        "Presence re-published after IP change: {}",
-                        current_addr
-                    );
+                    tracing::info!("Presence re-published after IP change: {}", current_addr);
                     last_registered_address = current_addr;
                 }
             } else {
@@ -3763,10 +3845,7 @@ async fn run_listener(
                 {
                     tracing::warn!("Failed to refresh presence: {}", e);
                 } else {
-                    tracing::debug!(
-                        "Presence refreshed (no change): {}",
-                        identity_clone.null_id
-                    );
+                    tracing::debug!("Presence refreshed (no change): {}", identity_clone.null_id);
                 }
             }
         }
@@ -3807,6 +3886,8 @@ async fn run_listener(
         });
     }
 }
+
+
 async fn handle_incoming_connection(
     stream: TcpStream,
     _peer_addr: std::net::SocketAddr,
@@ -3962,11 +4043,9 @@ async fn handle_incoming_connection(
         let inline_ek = base64::engine::general_purpose::STANDARD
             .decode(inline_ek_b64)
             .map_err(|e| format!("inline kyber_enc_key decode: {}", e))?;
-        let peer_ek_bytes = add_p2p::braid_handshake::verify_peer_ek_from_bytes(
-            &peer_ek_bytes,
-            &inline_ek,
-        )
-        .map_err(|e| format!("[braid] peer EK failed authentication ({}), aborting", e))?;
+        let peer_ek_bytes =
+            add_p2p::braid_handshake::verify_peer_ek_from_bytes(&peer_ek_bytes, &inline_ek)
+                .map_err(|e| format!("[braid] peer EK failed authentication ({}), aborting", e))?;
         let peer_ek_b64 = base64::engine::general_purpose::STANDARD.encode(&peer_ek_bytes);
         peer_kyber_enc = add_crypto::kyber::decode_enc_key(&peer_ek_b64).ok();
         if peer_kyber_enc.is_none() {
@@ -3998,7 +4077,11 @@ async fn handle_incoming_connection(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if v.get("msg_type").or_else(|| v.get("type")).and_then(|x| x.as_str()) == Some("p2p-message") {
+                if v.get("msg_type")
+                    .or_else(|| v.get("type"))
+                    .and_then(|x| x.as_str())
+                    == Some("p2p-message")
+                {
                     msg = v;
                     break;
                 }
@@ -4011,7 +4094,12 @@ async fn handle_incoming_connection(
             _ => continue,
         }
     }
-    if msg.get("msg_type").or_else(|| msg.get("type")).and_then(|t| t.as_str()) == Some("p2p-message") {
+    if msg
+        .get("msg_type")
+        .or_else(|| msg.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("p2p-message")
+    {
         // SECURITY FIX (C2): Verify the peer's message signature — FAIL-CLOSED.
         // The message is rejected (never decrypted) if the signature is missing
         // or fails to verify against the verified peer identity established by
@@ -4113,10 +4201,7 @@ async fn handle_incoming_connection(
 
         // SECURITY FIX (M1): thread the message sequence number into the
         // ratchet so skipped-key handling can recover out-of-order delivery.
-        let p2p_seq = payload
-            .get("seq")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let p2p_seq = payload.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
 
         // SECURITY FIX (C1): Decrypt using Double Ratchet + Kyber-768
         let padded_plaintext = ratchet_session
@@ -4748,8 +4833,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Build a null_id -> alias reverse map so messages show the
                     // sender's alias (or the raw Null ID when no alias exists).
                     let aliases = load_aliases();
-                    let reverse_aliases: std::collections::HashMap<String, String> =
-                        aliases.iter().map(|(a, n)| (n.clone(), a.clone())).collect();
+                    let reverse_aliases: std::collections::HashMap<String, String> = aliases
+                        .iter()
+                        .map(|(a, n)| (n.clone(), a.clone()))
+                        .collect();
 
                     if json {
                         // Machine-readable: one JSON object per line, so the UI
@@ -5400,28 +5487,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 found_online = true;
                             }
                             None => {
-                                println!(
-                                    "  ○ {} ({}) - UNAVAILABLE (cert store)",
-                                    fp8, null_id
-                                );
+                                println!("  ○ {} ({}) - UNAVAILABLE (cert store)", fp8, null_id);
                             }
                         }
-                    } else if let Some(addr) = presence::fetch_presence_live(&identity, fingerprint).await {
-                        println!(
-                            "  ✓ {} ({}) - ONLINE at {}",
-                            fp8,
-                            null_id,
-                            addr
-                        );
+                    } else if let Some(addr) =
+                        presence::fetch_presence_live(&identity, fingerprint).await
+                    {
+                        println!("  ✓ {} ({}) - ONLINE at {}", fp8, null_id, addr);
                         found_online = true;
                     }
 
                     if !found_online && !is_public_service(null_id) {
-                        println!(
-                            "  ✗ {} ({}) - OFFLINE",
-                            fp8,
-                            null_id
-                        );
+                        println!("  ✗ {} ({}) - OFFLINE", fp8, null_id);
                     }
                     contact_status.push((null_id.clone(), fingerprint.clone(), found_online));
                 }
@@ -5459,12 +5536,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Passwd { current, new } => {
-            match change_passphrase(current, new) {
-                Ok(()) => println!("Passphrase changed successfully."),
-                Err(e) => eprintln!("Failed to change passphrase: {}", e),
-            }
-        }
+        Commands::Passwd { current, new } => match change_passphrase(current, new) {
+            Ok(()) => println!("Passphrase changed successfully."),
+            Err(e) => eprintln!("Failed to change passphrase: {}", e),
+        },
     }
 
     Ok(())

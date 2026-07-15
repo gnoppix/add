@@ -34,26 +34,28 @@ function getAddCliPath() {
     return process.env.ADD_CLI_PATH
   }
 
-  // 2. Packaged mode: resources/extra/add
+  // Windows binaries carry a .exe suffix; everything else is extensionless.
+  const ext = process.platform === 'win32' ? '.exe' : ''
+
+  // 2. Packaged mode: resources/extra/add[.exe]
   if (app.isPackaged) {
-    const packagedPath = path.join(process.resourcesPath, 'add')
+    const packagedPath = path.join(process.resourcesPath, 'add' + ext)
     if (fs.existsSync(packagedPath)) {
       return packagedPath
     }
   }
 
   // 3. Development mode: relative to project
-  const devPath = path.join(__dirname, '../../target/release/add')
+  const devPath = path.join(__dirname, '../../target/release/add' + ext)
   if (fs.existsSync(devPath)) {
     return devPath
   }
 
   // 4. Fallback to current directory
-  return './add'
+  return './add' + ext
 }
 
 const ADD_CLI = getAddCliPath()
-
 // PID file paths
 const PID_DIR = path.join(os.homedir(), '.add')
 const LISTEN_PID_FILE = path.join(PID_DIR, 'add_listen.pid')

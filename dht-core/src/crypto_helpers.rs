@@ -83,10 +83,7 @@ pub fn cache_verifying_key(fingerprint: &str, vk: &MlDsa87VerifyingKey) {
 /// ML-DSA-87 key cannot rebind `fingerprint F` (claimed by the victim) to their
 /// own `VK_MITM`, because the first honest binding wins and any later mismatch
 /// is rejected. The `Ok(false)` return means "conflict, not updated".
-pub fn pin_verifying_key(
-    fingerprint: &str,
-    vk: &MlDsa87VerifyingKey,
-) -> Result<bool, String> {
+pub fn pin_verifying_key(fingerprint: &str, vk: &MlDsa87VerifyingKey) -> Result<bool, String> {
     let key = fingerprint.to_uppercase();
     let mut guard = verifying_key_cache_write();
     if guard.is_none() {
@@ -357,6 +354,9 @@ mod tests {
         let conflict = pin_verifying_key(fp, &vk_b);
         assert!(conflict.is_err(), "identity substitution must be blocked");
         // The original binding is preserved.
-        assert_eq!(get_cached_verifying_key(fp).unwrap().to_bytes(), vk_a.to_bytes());
+        assert_eq!(
+            get_cached_verifying_key(fp).unwrap().to_bytes(),
+            vk_a.to_bytes()
+        );
     }
 }

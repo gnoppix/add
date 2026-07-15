@@ -91,10 +91,13 @@ fn load_reflector_signing_key() -> Result<(Vec<u8>, String), anyhow::Error> {
 
     let seed_path = reflector_seed_path();
     if seed_path.exists() {
-        let seed_hex = std::fs::read_to_string(&seed_path).map_err(|e| anyhow!("seed read: {}", e))?;
+        let seed_hex =
+            std::fs::read_to_string(&seed_path).map_err(|e| anyhow!("seed read: {}", e))?;
         if seed_hex.trim().len() == 64 {
             let seed_bytes = hex::decode(seed_hex.trim()).map_err(|_| anyhow!("invalid hex"))?;
-            let seed_arr: [u8; 32] = seed_bytes.try_into().map_err(|_| anyhow!("invalid seed length"))?;
+            let seed_arr: [u8; 32] = seed_bytes
+                .try_into()
+                .map_err(|_| anyhow!("invalid seed length"))?;
             let kp = add_crypto_pq::MlDsa87KeyPair::from_seed(&seed_arr)?;
             let sk_seed = kp.to_seed();
             let vk_b64 = base64_standard.encode(kp.verifying_key().to_bytes());
@@ -106,7 +109,10 @@ fn load_reflector_signing_key() -> Result<(Vec<u8>, String), anyhow::Error> {
     let kp = add_crypto_pq::MlDsa87KeyPair::generate()?;
     let sk_seed = kp.to_seed();
     let vk_b64 = base64_standard.encode(kp.verifying_key().to_bytes());
-    let seed_hex = sk_seed.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    let seed_hex = sk_seed
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
 
     // Try to persist seed; ignore errors if directory not writable (e.g., tests)
     if let Some(parent) = seed_path.parent() {
@@ -214,9 +220,9 @@ async fn main() -> Result<()> {
     let rereg_listen = listen_address.clone();
     tokio::spawn(async move {
         let bootstraps = vec![
-        "wss://bootstrap-eu.gnoppix.org/ws".to_string(),
-        "wss://bootstrap-asia.gnoppix.org/ws".to_string(),
-        "wss://bootstrap-us.gnoppix.org/ws".to_string(),
+            "wss://bootstrap-eu.gnoppix.org/ws".to_string(),
+            "wss://bootstrap-asia.gnoppix.org/ws".to_string(),
+            "wss://bootstrap-us.gnoppix.org/ws".to_string(),
         ];
         // First re-publish quickly (within ~10s) to overwrite any stale
         // bundle left by a previous instance, then settle into a 5-min cadence.
@@ -298,12 +304,17 @@ async fn publish_service_bundle(bootstrap_url: &str, listen_address: &str) -> Re
     .to_string();
     let value_b64 = base64_standard.encode(bundle.as_bytes());
 
-    let key = format!("cert:{}", hex::encode(Sha256::digest(REFLECTOR_FINGERPRINT.as_bytes())));
+    let key = format!(
+        "cert:{}",
+        hex::encode(Sha256::digest(REFLECTOR_FINGERPRINT.as_bytes()))
+    );
 
     let sign_data = format!("{}|{}|{}", key, value_b64, REFLECTOR_FINGERPRINT);
     let sig = {
         use add_crypto_pq::{MlDsa87KeyPair, sign_ml_dsa87};
-        let seed_arr: [u8; 32] = sk_seed.as_slice().try_into()
+        let seed_arr: [u8; 32] = sk_seed
+            .as_slice()
+            .try_into()
             .map_err(|_| anyhow!("Invalid seed length"))?;
         let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
         sign_ml_dsa87(sign_data.as_bytes(), &kp.signing_key())?
@@ -341,14 +352,31 @@ async fn publish_service_bundle(bootstrap_url: &str, listen_address: &str) -> Re
             m.insert("key".to_string(), serde_json::Value::String(key));
             m.insert("value".to_string(), serde_json::Value::String(value_b64));
             m.insert("sig".to_string(), serde_json::Value::String(sig));
-            m.insert("publisher_fp".to_string(), serde_json::Value::String(REFLECTOR_FINGERPRINT.to_string()));
+            m.insert(
+                "publisher_fp".to_string(),
+                serde_json::Value::String(REFLECTOR_FINGERPRINT.to_string()),
+            );
             // Self-asserted verifying key — the server binds it to publisher_fp
             // before accepting the cert blob (cert-store MITM defense).
-            m.insert("publisher_verifying_key".to_string(), serde_json::Value::String(vk_b64.clone()));
-            m.insert("ttl".to_string(), serde_json::Value::Number(serde_json::Number::from(add_protocol::constants::ADDR_TTL)));
-            m.insert("nonce".to_string(), serde_json::Value::Number(serde_json::Number::from(pow_nonce as i64)));
+            m.insert(
+                "publisher_verifying_key".to_string(),
+                serde_json::Value::String(vk_b64.clone()),
+            );
+            m.insert(
+                "ttl".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(
+                    add_protocol::constants::ADDR_TTL,
+                )),
+            );
+            m.insert(
+                "nonce".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(pow_nonce as i64)),
+            );
             m.insert("vk".to_string(), serde_json::Value::String(vk_b64.clone()));
-            m.insert("kyber_enc".to_string(), serde_json::Value::String(kyber_enc_b64.clone()));
+            m.insert(
+                "kyber_enc".to_string(),
+                serde_json::Value::String(kyber_enc_b64.clone()),
+            );
             serde_json::Value::Object(m)
         },
     };
@@ -421,7 +449,9 @@ async fn handle_connection(stream: tokio::net::TcpStream, config: BotConfig) -> 
 
             // Load signing key from seed file (persists identity across reboots)
             let (sk_seed, vk_b64) = load_reflector_signing_key()?;
-            let seed_arr: [u8; 32] = sk_seed.as_slice().try_into()
+            let seed_arr: [u8; 32] = sk_seed
+                .as_slice()
+                .try_into()
                 .map_err(|_| anyhow!("Invalid seed length"))?;
             let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
             let sk = kp.signing_key();
@@ -543,7 +573,9 @@ mod tests {
 
         let _server = tokio::spawn(async move {
             // Set env for this test
-            unsafe { std::env::set_var("ADD_REFLECTOR_SEED_PATH", test_seed_path); }
+            unsafe {
+                std::env::set_var("ADD_REFLECTOR_SEED_PATH", test_seed_path);
+            }
             let (stream, _) = listener.accept().await.unwrap();
             handle_connection(stream, config).await.unwrap();
         });
@@ -585,8 +617,10 @@ mod tests {
         let echoed: serde_json::Value = serde_json::from_str(echoed.to_text().unwrap()).unwrap();
         assert_eq!(echoed["type"], "p2p-message");
         // Prefix is 🤖 [Reflector Echo]: which starts with 🤖 (U+1F916)
-        assert!(echoed["ciphertext"].as_str().unwrap().starts_with("🤖") ||
-                echoed["ciphertext"].as_str().unwrap().starts_with("ECHO:"));
+        assert!(
+            echoed["ciphertext"].as_str().unwrap().starts_with("🤖")
+                || echoed["ciphertext"].as_str().unwrap().starts_with("ECHO:")
+        );
     }
 
     /// Test that reflector rejects non-hello messages
@@ -600,7 +634,9 @@ mod tests {
         let config = BotConfig::default();
 
         let _server = tokio::spawn(async move {
-            unsafe { std::env::set_var("ADD_REFLECTOR_SEED_PATH", test_seed_path); }
+            unsafe {
+                std::env::set_var("ADD_REFLECTOR_SEED_PATH", test_seed_path);
+            }
             let (stream, _) = listener.accept().await.unwrap();
             let result = handle_connection(stream, config).await;
             assert!(result.is_err());
@@ -613,9 +649,7 @@ mod tests {
 
         // Send non-hello message (will cause connection to close/ignore)
         ws.send(Message::Text(
-            serde_json::json!({ "type": "other" })
-                .to_string()
-                .into(),
+            serde_json::json!({ "type": "other" }).to_string().into(),
         ))
         .await
         .unwrap();

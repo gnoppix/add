@@ -753,7 +753,9 @@ impl DhtNodeRuntime {
             Some(k) if !k.is_empty() => k.to_string(),
             _ => {
                 let resp = build_dht_error("", "missing key");
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
                 return;
             }
         };
@@ -761,14 +763,18 @@ impl DhtNodeRuntime {
             Some(v) => v.to_string(),
             None => {
                 let resp = build_dht_error(&key, "missing value");
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
                 return;
             }
         };
         // Bound blob size (ciphertext + signature overhead is small).
         if value_b64.len() > constants::MAX_VALUE_SIZE {
             let resp = build_dht_error(&key, "value too large");
-            let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+            let _ = ws_tx
+                .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                .await;
             return;
         }
         let sig = env.payload_str("sig").unwrap_or("").to_string();
@@ -804,16 +810,22 @@ impl DhtNodeRuntime {
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
                 let resp = build_dht_found(&key, &value_b64, &salt, seq_ms);
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
             }
             Ok(false) => {
                 let resp = build_dht_error(&key, "value too large");
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
             }
             Err(e) => {
                 error!("blob-put storage error for key {}: {}", key, e);
                 let resp = build_dht_error(&key, "storage error");
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
             }
         }
     }
@@ -830,7 +842,9 @@ impl DhtNodeRuntime {
             Some(k) if !k.is_empty() => k.to_string(),
             _ => {
                 let resp = build_dht_error("", "missing key");
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
                 return;
             }
         };
@@ -855,16 +869,22 @@ impl DhtNodeRuntime {
                     Ok(e) => e,
                     Err(_) => build_dht_found(&key, &rec.value, &rec.salt, rec.seq),
                 };
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
             }
             Ok(None) => {
                 let resp = build_dht_error(&key, "not found");
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
             }
             Err(e) => {
                 error!("blob-get error for key {}: {}", key, e);
                 let resp = build_dht_error(&key, "storage error");
-                let _ = ws_tx.send(Message::Text(resp.to_json().unwrap_or_default().into())).await;
+                let _ = ws_tx
+                    .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                    .await;
             }
         }
     }

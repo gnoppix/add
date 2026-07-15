@@ -38,7 +38,7 @@ RUSTFLAGS   ?=
 #  Targets                                                           #
 # ------------------------------------------------------------------ #
 
-.PHONY: all client relay bootstrap install clean test check docs docker help
+.PHONY: all client relay bootstrap install clean test check docs docker help deb-desktop deb-desktop-win deb-desktop-mac
 
 ## Build all binaries (release)
 all: client relay bootstrap
@@ -162,19 +162,19 @@ info:
 ## Build Debian package (relay)
 deb-relay: relay
 	@echo "Building add-relay Debian package..."
-	$(CARGO) deb --package add-relay --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
+	$(CARGO) deb --package add-relay 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
 	@echo "  -> $(TARGET_DIR)/add-relay_*.deb"
 
 ## Build Debian package (bootstrap)
 deb-bootstrap: bootstrap
 	@echo "Building add-bootstrap Debian package..."
-	$(CARGO) deb --package add-bootstrap --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
+	$(CARGO) deb --package add-bootstrap 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
 	@echo "  -> $(TARGET_DIR)/add-bootstrap_*.deb"
 
 ## Build Debian package
 deb: client
 	@echo "Building add Debian package..."
-	$(CARGO) deb --package add-client --$(BUILD_MODE) 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
+	$(CARGO) deb --package add-client 2>/dev/null || echo "Install cargo-deb: cargo install cargo-deb"
 	@echo "  -> $(TARGET_DIR)/add_*.deb"
 
 ## Build static binary (musl target required)
@@ -192,9 +192,40 @@ docker:
 # Debian package for desktop (Electron)
 deb-desktop:
 	@echo "Building desktop Debian package..."
+	cargo build --package add-client --release --target x86_64-unknown-linux-gnu
+	mkdir -p target/bundle
+	cp target/x86_64-unknown-linux-gnu/release/add target/bundle/add
+	chmod +x target/bundle/add
+	cd desktop-ui && npm ci
 	cd desktop-ui && npm run build
-	cd desktop-ui && npm run build:electron
 	@echo "  -> desktop-ui/dist-electron/add-desktop_*.deb"
+
+# Windows installer (NSIS) — CROSS-COMPILED on Linux.
+# Requires: rustup target add x86_64-pc-windows-gnu && sudo apt install mingw-w64
+deb-desktop-win:
+	@echo "Building Windows NSIS installer (cross-compile)..."
+	rustup target add x86_64-pc-windows-gnu || true
+	cargo build --package add-client --release --target x86_64-pc-windows-gnu
+	mkdir -p target/bundle
+	cp target/x86_64-pc-windows-gnu/release/add.exe target/bundle/add.exe
+	cd desktop-ui && npm ci
+	cd desktop-ui && npm run build
+	@echo "  -> desktop-ui/dist-electron/*.exe (NSIS)"
+
+# macOS disk image (DMG) — CROSS-COMPILE via osxcross is unreliable from Linux.
+# This target ASSUMES you run it on a macOS host (or CI macos runner). See
+# .github/workflows/build-desktop.yml for the canonical macOS build.
+deb-desktop-mac:
+	@echo "Building macOS DMG (run this on a macOS host)..."
+	rustup target add x86_64-apple-darwin aarch64-apple-darwin || true
+	cargo build --package add-client --release --target x86_64-apple-darwin
+	cargo build --package add-client --release --target aarch64-apple-darwin
+	mkdir -p target/bundle
+	lipo -create target/x86_64-apple-darwin/release/add target/aarch64-apple-darwin/release/add -output target/bundle/add
+	chmod +x target/bundle/add
+	cd desktop-ui && npm ci
+	cd desktop-ui && npm run build
+	@echo "  -> desktop-ui/dist-electron/*.dmg"
 
 ## Build all Debian packages
 deb-all: client deb-relay deb-bootstrap deb-desktop
@@ -229,7 +260,9 @@ help:
 	@echo "  uninstall    Remove installed binaries"
 	@echo "  deb          Build add Debian package"
 	@echo "  deb-all      Build all Debian packages (add, add-relay, add-bootstrap, add-desktop)"
-	@echo "  deb-desktop  Build desktop Electron .deb"
+	@echo "  deb-desktop  Build desktop Electron .deb (Linux)"
+	@echo "  deb-desktop-win  Build Windows NSIS installer (cross-compile on Linux)"
+	@echo "  deb-desktop-mac  Build macOS DMG (run on a macOS host / CI)"
 	@echo ""
 	@echo "Utility targets:"
 	@echo "  clean        Remove build artifacts"

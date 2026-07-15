@@ -11,10 +11,11 @@
  */
 
 /**
- * Split-screen message list:
- *  - Left column  → messages I send (outgoing)
- *  - Right column → messages I receive (incoming)
- * Each column keeps its own chronological order and auto-scrolls to bottom.
+ * Single conversation thread:
+ *  - Incoming messages (from the contact) align LEFT.
+ *  - Outgoing messages (from me) align RIGHT.
+ * Messages keep their own chronological order and the view auto-scrolls to the
+ * newest message at the bottom.
  */
 import { useEffect, useRef } from 'react'
 import { useChatStore } from '../../store/chatStore'
@@ -26,21 +27,14 @@ const OUTGOING_ID = 'me'
 function MessageList() {
   const { activeConversationId, messages } = useChatStore()
 
-  const sentRef = useRef<HTMLDivElement>(null)
-  const receivedRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const conversationMessages = activeConversationId ? messages[activeConversationId] || [] : []
 
-  const sent = conversationMessages.filter((m) => m.senderId === OUTGOING_ID)
-  const received = conversationMessages.filter((m) => m.senderId !== OUTGOING_ID)
-
-  // Auto-scroll both columns to the bottom when their content changes.
+  // Auto-scroll to the bottom as new messages arrive.
   useEffect(() => {
-    if (sentRef.current) sentRef.current.scrollTop = sentRef.current.scrollHeight
-  }, [sent])
-  useEffect(() => {
-    if (receivedRef.current) receivedRef.current.scrollTop = receivedRef.current.scrollHeight
-  }, [received])
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [conversationMessages])
 
   if (conversationMessages.length === 0) {
     return (
@@ -50,39 +44,18 @@ function MessageList() {
     )
   }
 
-  const Column = ({
-    title,
-    list,
-    refEl,
-  }: {
-    title: string
-    list: typeof conversationMessages
-    refEl: React.RefObject<HTMLDivElement>
-  }) => (
-    <div className="flex h-full min-w-0 flex-1 flex-col border-x border-gray-200 dark:border-gray-700">
-      <div className="border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
-        {title} ({list.length})
-      </div>
-      <div ref={refEl} className="flex-1 overflow-y-auto p-4 bg-light-background dark:bg-dark-background">
-        {list.length === 0 ? (
-          <p className="text-xs text-gray-400 dark:text-gray-500">—</p>
-        ) : (
-          list.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              isOutgoing={message.senderId === OUTGOING_ID}
-            />
-          ))
-        )}
-      </div>
-    </div>
-  )
-
   return (
-    <div className="flex flex-1 overflow-hidden">
-      <Column title="Sent" list={sent} refEl={sentRef} />
-      <Column title="Received" list={received} refEl={receivedRef} />
+    <div
+      ref={scrollRef}
+      className="flex flex-1 flex-col gap-1 overflow-y-auto p-4 bg-light-background dark:bg-dark-background"
+    >
+      {conversationMessages.map((message) => (
+        <MessageBubble
+          key={message.id}
+          message={message}
+          isOutgoing={message.senderId === OUTGOING_ID}
+        />
+      ))}
     </div>
   )
 }

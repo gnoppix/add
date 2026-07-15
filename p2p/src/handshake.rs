@@ -172,13 +172,7 @@ pub async fn handshake_responder(
     );
 
     // SECURITY FIX (H4): nonce/pow_bits are 0 — the responder performs no PoW.
-    let ack = build_p2p_hello_ack(
-        public_key_b64,
-        0,
-        0,
-        &server_challenge,
-        kyber_enc_key_b64,
-    );
+    let ack = build_p2p_hello_ack(public_key_b64, 0, 0, &server_challenge, kyber_enc_key_b64);
     send_envelope(ws, &ack).await?;
 
     Ok(hello)

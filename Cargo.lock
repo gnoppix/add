@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "add-bootstrap"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-crypto",
  "add-dht-core",
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "add-bot"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-crypto",
  "add-crypto-pq",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "add-client"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-crypto",
  "add-crypto-pq",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "add-crypto"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-protocol",
  "aes-gcm",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "add-crypto-pq"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-crypto",
  "base64 0.22.1",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "add-crypto-utils"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-protocol",
  "dirs",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "add-dht-core"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-crypto",
  "add-crypto-pq",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "add-p2p"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-crypto",
  "add-protocol",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "add-protocol"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "argon2",
  "blake2",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "add-relay"
-version = "0.3.20"
+version = "0.3.21"
 dependencies = [
  "add-crypto",
  "add-crypto-pq",
