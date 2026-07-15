@@ -48,10 +48,16 @@ jobs:
       - name: Build Electron app (NSIS)
         working-directory: desktop-ui
         shell: bash
-        run: npm run build:react && npm run fix:index && npx electron-builder --config electron-builder.js --win --publish=never
+        run: |
+          set -x
+          npm run build:react
+          npm run fix:index
+          ./node_modules/.bin/electron-builder --config electron-builder.js --win --publish=never; echo "electron-builder exit=$?"
+          echo "=== dist-electron ==="; ls -la dist-electron/ || echo "EMPTY dist-electron"
         env:
           # On CI we do NOT codesign; remove these when certs are supplied.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          DEBUG: electron-builder
 
       - name: Diagnostics before upload
         working-directory: desktop-ui
