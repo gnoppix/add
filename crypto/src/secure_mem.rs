@@ -350,6 +350,7 @@ impl Drop for GuardedKeyMaterial {
     fn drop(&mut self) {
         unsafe {
             secure_zero_memory(std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len));
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             dealloc_guarded(self.ptr, self.len);
         }
     }

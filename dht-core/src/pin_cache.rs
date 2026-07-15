@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -38,21 +39,28 @@ pub fn pin_cache_save(cache: &HashMap<String, serde_json::Value>) {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(json) = serde_json::to_string_pretty(cache) {
-        // SECURITY FIX (H1): Write with restrictive permissions
-        use std::os::unix::fs::OpenOptionsExt;
-        if let Ok(mut f) = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
+        // SECURITY FIX (H1): Write with restrictive permissions (Unix only)
+        #[cfg(unix)]
         {
-            use std::io::Write;
-            let _ = f.write_all(json.as_bytes());
-        } else {
-            // Fallback: write then set permissions
+            use std::os::unix::fs::OpenOptionsExt;
+            if let Ok(mut f) = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)
+            {
+                use std::io::Write;
+                let _ = f.write_all(json.as_bytes());
+            } else {
+                // Fallback: write then set permissions
+                let _ = fs::write(&path, &json);
+                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            }
+        }
+        #[cfg(not(unix))]
+        {
             let _ = fs::write(&path, &json);
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
         }
     }
 }
@@ -200,21 +208,28 @@ pub fn bootstrap_pin_check(
                 "last_verified": now,
             }),
         );
-        // SECURITY FIX (H1): Write with restrictive permissions
+        // SECURITY FIX (H1): Write with restrictive permissions (Unix only)
         if let Ok(json) = serde_json::to_string_pretty(&new_cache) {
-            use std::os::unix::fs::OpenOptionsExt;
-            if let Ok(mut f) = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&pin_path)
+            #[cfg(unix)]
             {
-                use std::io::Write;
-                let _ = f.write_all(json.as_bytes());
-            } else {
+                use std::os::unix::fs::OpenOptionsExt;
+                if let Ok(mut f) = fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&pin_path)
+                {
+                    use std::io::Write;
+                    let _ = f.write_all(json.as_bytes());
+                } else {
+                    let _ = fs::write(&pin_path, &json);
+                    let _ = fs::set_permissions(&pin_path, fs::Permissions::from_mode(0o600));
+                }
+            }
+            #[cfg(not(unix))]
+            {
                 let _ = fs::write(&pin_path, &json);
-                let _ = fs::set_permissions(&pin_path, fs::Permissions::from_mode(0o600));
             }
         }
         true

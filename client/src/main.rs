@@ -17,6 +17,7 @@
 //-------------------------------------------------------------------------------
 
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -364,6 +365,7 @@ impl DbEncryptionKey {
             }
             let hex_key = hex::encode(key);
             std::fs::write(&path, &hex_key).expect("failed to write db key");
+            #[cfg(unix)]
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
             Self { key }
         }
@@ -397,6 +399,7 @@ impl DbEncryptionKey {
             }
             let hex_key = hex::encode(key);
             tokio::fs::write(&path, &hex_key).await?;
+            #[cfg(unix)]
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
 
             Ok(Self { key })
@@ -1049,6 +1052,7 @@ impl MessageStore {
             .await?;
 
         // Set permissions on the database file (may need to retry on race condition)
+        #[cfg(unix)]
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
 
         sqlx::query(
@@ -4584,7 +4588,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Check if the PID is still alive
         if let Ok(old_pid) = std::fs::read_to_string(&pid_path) {
             let old_pid: i32 = old_pid.trim().parse().unwrap_or(0);
-            if old_pid > 0 && unsafe { libc::kill(old_pid, 0) } == 0 {
+            #[cfg(unix)]
+            let pid_alive = old_pid > 0 && unsafe { libc::kill(old_pid, 0) } == 0;
+            #[cfg(not(unix))]
+            let pid_alive = false; // No POSIX kill on Windows; treat stale PID as not running.
+            if pid_alive {
                 // Only block if we're trying to run listen and there's another process
                 if matches!(args.cmd, Commands::Listen { .. }) {
                     return Err(format!(
@@ -4616,7 +4624,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if listen_pid_path.exists() {
                 if let Ok(old_pid) = std::fs::read_to_string(&listen_pid_path) {
                     let old_pid: i32 = old_pid.trim().parse().unwrap_or(0);
-                    if old_pid > 0 && unsafe { libc::kill(old_pid, 0) } == 0 {
+                    #[cfg(unix)]
+                    let pid_alive = old_pid > 0 && unsafe { libc::kill(old_pid, 0) } == 0;
+                    #[cfg(not(unix))]
+                    let pid_alive = false; // No POSIX kill on Windows; treat stale PID as not running.
+                    if pid_alive {
                         return Err(format!(
                             "A add listen process is already running (PID {}). Kill it first or use 'add listen' from the Electron app.",
                             old_pid

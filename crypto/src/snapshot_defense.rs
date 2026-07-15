@@ -36,6 +36,7 @@ use crate::secure_mem;
 use rand::RngCore;
 use std::ffi::CString;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
