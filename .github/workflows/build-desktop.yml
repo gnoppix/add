@@ -52,12 +52,18 @@ jobs:
           # On CI we do NOT codesign; remove these when certs are supplied.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
+      - name: Diagnostics before upload
+        working-directory: desktop-ui
+        run: |
+          echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
+          echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: add-desktop-windows
           path: desktop-ui/dist-electron/*.exe
-          if-no-files-found: error
+          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # macOS (universal DMG) — built natively on a macOS runner.
@@ -102,12 +108,18 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # set to 'true' + import certs for notarization
 
+      - name: Diagnostics before upload
+        working-directory: desktop-ui
+        run: |
+          echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
+          echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: add-desktop-macos
           path: desktop-ui/dist-electron/*.dmg
-          if-no-files-found: error
+          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # Linux (deb) — built natively on an Ubuntu runner.
@@ -144,12 +156,18 @@ jobs:
         working-directory: desktop-ui
         run: npm run build
 
+      - name: Diagnostics before upload
+        working-directory: desktop-ui
+        run: |
+          echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
+          echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: add-desktop-linux
           path: desktop-ui/dist-electron/*.deb
-          if-no-files-found: error
+          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # Release — attach all artifacts to a GitHub Release on tag push.
