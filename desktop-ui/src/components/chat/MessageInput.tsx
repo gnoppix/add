@@ -208,12 +208,13 @@ function MessageInput() {
     e.preventDefault()
     if (!message.trim() || !activeConversationId) return
 
-    await sendMessage(
-      message.trim(),
+    const msg = message.trim()
+    setMessage('') // Clear BEFORE awaiting send to show immediate clearing
+    resetTextareaHeight()
+    sendMessage(
+      msg,
       selectedTtl && selectedTtl !== 'none' ? (selectedTtl as string) : undefined
     )
-    setMessage('')
-    resetTextareaHeight()
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
