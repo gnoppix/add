@@ -16,10 +16,11 @@ import { useChatStore } from '../../store/chatStore'
 
 interface SafetyNumberModalProps {
   nullId: string
+  fingerprint: string
   onClose: () => void
 }
 
-function SafetyNumberModal({ nullId, onClose }: SafetyNumberModalProps) {
+function SafetyNumberModal({ nullId, fingerprint, onClose }: SafetyNumberModalProps) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
       <div className="w-80 rounded-lg bg-white p-6 shadow-xl">
@@ -27,6 +28,10 @@ function SafetyNumberModal({ nullId, onClose }: SafetyNumberModalProps) {
         <div className="space-y-3 text-sm">
           <p>
             <span className="font-medium">Friend's ID:</span> {nullId}
+          </p>
+          <p>
+            <span className="font-medium">Fingerprint:</span>{' '}
+            <span className="font-mono break-all">{fingerprint}</span>
           </p>
         </div>
         <button
@@ -65,7 +70,6 @@ function ChatHeader() {
 
   const handleDelete = () => {
     if (activeConversation) {
-      deleteConversation(activeConversation.id)
       clearMessages(activeConversation.id)
     }
     setShowMenu(false)
@@ -145,6 +149,7 @@ function ChatHeader() {
       {showSafetyNumbers && (
         <SafetyNumberModal
           nullId={activeConversation.id}
+          fingerprint={activeConversation.fingerprint || 'Unknown'}
           onClose={() => setShowSafetyNumbers(false)}
         />
       )}
