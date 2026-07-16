@@ -37,7 +37,8 @@ jobs:
       - name: Build add core (x86_64-pc-windows-msvc)
         working-directory: desktop-ui
         run: |
-          cargo build --package add-client --release --target x86_64-pc-windows-msvc
+          # Windows runs without TPM feature (tss-esapi requires native TPM libs)
+          cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features
           New-Item -ItemType Directory -Force -Path ..\target\bundle
           Copy-Item ..\target\x86_64-pc-windows-msvc\release\add.exe ..\target\bundle\add.exe
 
@@ -91,8 +92,11 @@ jobs:
       - name: Build add core (universal via lipo)
         working-directory: desktop-ui
         run: |
-          cargo build --package add-client --release --target x86_64-apple-darwin
-          cargo build --package add-client --release --target aarch64-apple-darwin
+          # macOS runs without TPM feature (tss-esapi requires native TPM libs)
+          cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features --features tpm || \
+            cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features
+          cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features --features tpm || \
+            cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features
           mkdir -p ../target/bundle
           lipo -create \
             ../target/x86_64-apple-darwin/release/add \

@@ -4774,13 +4774,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Null ID:     {}", identity.null_id);
             println!();
 
-            // Create MAK vault (TPM PIN or passphrase) - protect the ML-DSA seed
+            // Create MAK vault (protect the ML-DSA seed)
             if let Some(ref pin) = pin {
                 let mak = add_crypto::MasterAppKey::generate()?;
-                let vault = add_crypto::VaultFile::seal_to_tpm(&mak, pin.as_bytes())?;
-                add_crypto::cache_mak(mak);
-                vault.write_to(&home_dir().join(VAULT_PATH))?;
-                println!("Vault created at ~/.add/vault.json");
+                #[cfg(feature = "tpm")]
+                {
+                    let vault = add_crypto::VaultFile::seal_to_tpm(&mak, pin.as_bytes())?;
+                    add_crypto::cache_mak(mak);
+                    vault.write_to(&home_dir().join(VAULT_PATH))?;
+                    println!("Vault created at ~/.add/vault.json");
+                }
+                #[cfg(not(feature = "tpm"))]
+                {
+                    // No TPM: treat PIN as passphrase
+                    let vault = add_crypto::seal_with_passphrase(&mak, pin.as_bytes())?;
+                    add_crypto::cache_mak(mak);
+                    vault.write_to(&home_dir().join(VAULT_PATH))?;
+                    println!("Vault created at ~/.add/vault.json (passphrase mode, no TPM)");
+                }
             } else if let Some(ref pw) = password {
                 let mak = add_crypto::MasterAppKey::generate()?;
                 let vault = add_crypto::seal_with_passphrase(&mak, pw.as_bytes())?;
@@ -4823,9 +4834,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mak = (|| -> Result<add_crypto::MasterAppKey, Box<dyn std::error::Error>> {
                 let vault: add_crypto::VaultFile =
                     add_crypto::VaultFile::read_from(&vault_path)?;
+                #[cfg(feature = "tpm")]
                 if let Some(ref pin) = pin {
                     vault.unseal_from_tpm(pin.as_bytes()).map_err(|e| e.into())
-                } else if let Some(ref pw) = password {
+                } else {
+                    Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+                }
+                #[cfg(not(feature = "tpm"))]
+                if let Some(ref pw) = password {
                     add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())
                         .map_err(|e| e.into())
                 } else {

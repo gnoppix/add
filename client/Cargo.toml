@@ -32,7 +32,7 @@ url.workspace = true
 add-protocol = { path = "../protocol" }
 add-dht-core = { path = "../dht-core" }
 add-p2p = { path = "../p2p" }
-add-crypto = { path = "../crypto", features = ["tpm"] }
+add-crypto = { path = "../crypto" }  # Always needed (VaultFile, passphrase mode)
 add-crypto-pq = { path = "../crypto-pq" }
 ml-dsa = { version = "0.1", features = ["pkcs8"] }
 age = { workspace = true }
@@ -41,11 +41,14 @@ zeroize = { workspace = true, features = ["derive"] }
 hickory-resolver = { workspace = true, features = ["system-config", "tokio"] }
 libc = "0.2"
 
+[features]
+default = ["tpm"]
+tpm = ["add-crypto/tpm"]  # Enable TPM on Linux (tss-esapi native deps)
+
 [[bin]]
 name = "add"
 path = "src/main.rs"
 
-# Debian package metadata
 [package.metadata.deb]
 name = "add"
 section = "net"
