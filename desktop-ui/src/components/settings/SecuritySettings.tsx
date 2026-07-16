@@ -5,7 +5,6 @@
  */
 
 import { useSettingsStore } from '../../store/settingsStore'
-import { useEffect } from 'react'
 
 interface SecuritySettingsProps {
   onClose?: () => void
@@ -13,15 +12,6 @@ interface SecuritySettingsProps {
 
 export default function SecuritySettings({ onClose }: SecuritySettingsProps) {
   const { security, setSelfDestructEnabled, setSelfDestructThreshold } = useSettingsStore()
-
-  // Sync settings to ~/.add/settings.json on change
-  useEffect(() => {
-    const syncSettings = async () => {
-      const { cli } = await import('../../services/addCLI')
-      await cli.saveSecuritySettings(security)
-    }
-    syncSettings()
-  }, [security])
 
   return (
     <div className="p-4">

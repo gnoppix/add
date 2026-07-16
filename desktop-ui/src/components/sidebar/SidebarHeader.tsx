@@ -15,6 +15,7 @@ import { useChatStore } from '../../store/chatStore'
 import ThemeToggle from './ThemeToggle'
 import ProfileAvatar from './ProfileAvatar'
 import { generateInitialsAvatar } from '../../lib/identicon'
+import SecuritySettings from '../settings/SecuritySettings'
 
 interface AddContactForm {
   nullId: string
@@ -30,6 +31,7 @@ interface PasswdForm {
 
 function SidebarHeader() {
   const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [showSecurityModal, setShowSecurityModal] = useState(false)
   const [showAddContact, setShowAddContact] = useState(false)
   const [showPasswdModal, setShowPasswdModal] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -322,9 +324,7 @@ function SidebarHeader() {
                 <div className="flex flex-col gap-1 mt-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-gray-600">P2P Listener</span>
-                    <span className={`px-1.5 py-0.5 rounded text-xs ${
-                      listenRunning ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                    }`}>
+                    <span className={`px-1.5 py-0.5 rounded text-xs ${listenRunning ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                       {listenRunning ? 'Running' : 'Stopped'}
                     </span>
                   </div>
@@ -363,7 +363,7 @@ function SidebarHeader() {
                 </button>
               </div>
 
-              {/* Security: Change Passphrase */}
+              {/* Security: Change Passphrase / Self-destruct */}
               {isAuthenticated && (
                 <div className="border-t pt-3">
                   <p className="font-medium">Security</p>
@@ -372,6 +372,15 @@ function SidebarHeader() {
                     className="mt-1 rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600"
                   >
                     Change GPG Key Passphrase
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowSettingsModal(false)
+                      setShowSecurityModal(true)
+                    }}
+                    className="ml-2 rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
+                  >
+                    Self-destruct Settings
                   </button>
                 </div>
               )}
@@ -383,6 +392,15 @@ function SidebarHeader() {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Security Settings Modal */}
+      {showSecurityModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
+            <SecuritySettings onClose={() => setShowSecurityModal(false)} />
           </div>
         </div>
       )}
