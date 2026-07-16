@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-07-16 — Self-destruct after failed unlock attempts
+
+### Security feature (crypto/src/tpm_vault.rs)
+- Added automatic identity wipe after 10 consecutive failed unlock attempts
+- Configurable threshold via `~/.add/settings.json` (range: 3-20 attempts)
+- Counter persists in `~/.add/failed_attempts.json` across app restarts
+- On threshold reached: `self_destruct()` removes all of `~/.add/` (vault, keys, messages, identity)
+- Works in TPM mode (hardware PIN) and passphrase mode (Argon2id-wrapped MAK)
+
+### UI integration (desktop-ui)
+- `VaultUnlockDialog.tsx`: shows warning banner at 7+ failed attempts, triggers wipe at threshold
+- `SecuritySettings.tsx`: new toggle to enable/disable self-destruct, threshold selector dropdown
+- `settingsStore.ts`: Zustand store with localStorage persistence, auto-syncs to `~/.add/settings.json`
+- Electron IPC: `add-self-destruct` handler executes the wipe
+
+### Rust CLI (client/src/main.rs)
+- Unlock command calls `check_failed_attempts()` on auth failure
+- Successful unlock calls `reset_failed_attempts()` to clear the counter
+- On 10th failure: exits with message "IDENTITY DESTROYED - Too many failed attempts"
+
+### Cross-platform notes
+- TPM mode requires `tpm` feature flag (Linux/Windows with TPM 2.0 chip)
+- macOS: passphrase-only mode, compiles without `tpm` feature
+- All paths use `dirs::home_dir()` for correct resolution on each platform
+
 ## 2026-07-14 — Desktop clean contact list, live presence probe, port-443 detection docs
 
 ### Desktop UI (desktop-ui)

@@ -282,6 +282,28 @@ The package name is `add-desktop` and the version increments with each build (th
 
 ---
 
+## Security Features
+
+### Hardware-bound vault (TPM mode)
+
+On Linux and Windows with a TPM 2.0 chip, your encryption key is bound to the hardware. The vault seal uses SHA-256(PIN) as the TPM auth value, so an incorrect PIN is rejected by the TPM itself — the key never leaves the chip.
+
+### Passphrase mode
+
+On macOS or systems without TPM, the vault uses Argon2id (19 MiB, 3 iterations) + AES-256-GCM to protect your key. A 16-character minimum passphrase is required.
+
+### Self-destruct protection
+
+After 10 consecutive failed unlock attempts (configurable 3-20 in Settings), the application automatically wipes all identity data:
+- `~/.add/vault.json` (encrypted key)
+- `~/.add/identity.json` (your keys)
+- `~/.add/messages.db` (message history)
+- All other files in `~/.add/`
+
+This protects against brute-force attacks on the PIN/passphrase. Enable/disable in Desktop Settings.
+
+---
+
 ## Debian Packages
 
 Pre-built .deb packages for all components:

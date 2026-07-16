@@ -217,8 +217,33 @@ session.encrypt_message(plaintext: &str, peer_kyber_enc: &KyberEncapsulationKey)
 session.decrypt_message(message_b64: &str, our_kyber_keypair: &MlKem1024Keypair) -> Result<String, CryptoError>
 session.serialize() -> Result<String, CryptoError>
 DoubleRatchetSession::deserialize(json: &str) -> Result<Self, CryptoError>
-session.save(path: &Path) -> Result<(), CryptoError>
-DoubleRatchetSession::load(path: &Path) -> Result<Self, CryptoError>
+```
+
+**Master App Key (MAK) Vault (hardware-bound or passphrase-wrapped):**
+```rust
+// TPM mode (Linux/Windows with TPM 2.0 chip)
+MasterAppKey::generate() -> Result<MasterAppKey, CryptoError>  // Random 256-bit key
+VaultFile::seal_to_tpm(&mak, pin_bytes) -> Result<Self, CryptoError>  // TPM-sealed under SRK
+VaultFile::unseal_from_tpm(&self, pin_bytes) -> Result<MasterAppKey, CryptoError>
+
+// Passphrase mode (macOS or no TPM)
+VaultFile::seal_with_passphrase(&mak, password) -> Result<Self, CryptoError>  // Argon2id + AES-256-GCM
+VaultFile::unseal_with_passphrase(&self, password) -> Result<MasterAppKey, CryptoError>
+
+// In-memory cache (secure)
+cache_mak(mak: MasterAppKey)  // Stores in thread-local zeroizing buffer
+encrypt_with_mak(mak, plaintext) -> Result<Vec<u8>>
+decrypt_with_mak(mak, wrapped) -> Result<Vec<u8>>
+```
+
+**Self-destruct (failed unlock attempt counter):**
+```rust
+check_failed_attempts(home: &Path, increment: bool) -> Result<bool, CryptoError>  // Returns true if threshold reached
+reset_failed_attempts(home: &Path) -> Result<(), CryptoError>  // Clears on successful unlock
+self_destruct(home: &Path) -> Result<(), CryptoError>  // Wipes ~/.add/ directory
+
+// Threshold read from ~/.add/settings.json (key: "selfDestructThreshold")
+// Range: 3-20 attempts (default: 10)
 ```
 
 **Session persistence in client:**

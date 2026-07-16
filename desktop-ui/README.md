@@ -134,3 +134,14 @@ Strings are in `src/i18n/index.ts`. Add new languages by extending the `resource
 - Vite dev server runs on port 5173
 - Electron loads from Vite dev server in development
 - Production loads from `dist/index.html`
+
+## Security Settings
+
+The vault unlock dialog includes anti-bruteforce protection:
+
+- **Self-destruct counter**: Tracks failed unlock attempts in `~/.add/failed_attempts.json`
+- **Threshold**: Configurable 3-20 attempts (default: 10) via Settings → Security
+- **Warning**: Banner appears at 7+ failed attempts
+- **Wipe action**: At threshold, all `~/.add/` data is deleted (vault, keys, messages)
+
+Access Settings via the sidebar header menu to configure the self-destruct threshold.
