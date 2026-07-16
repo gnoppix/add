@@ -348,6 +348,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         addConversation({
           id: contact.nullId,
           name: aliasMap.get(contact.nullId) || contact.nullId,
+          fingerprint: contact.fingerprint,
           avatarUrl: generateInitialsAvatar(contact.nullId),
           lastMessage: '',
           lastMessageTimestamp: new Date(),
