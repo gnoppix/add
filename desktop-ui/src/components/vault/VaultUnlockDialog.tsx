@@ -1,23 +1,25 @@
 /**
  *-------------------------------------------------------------------------------
- * Vault Unlock Dialog — TPM PIN or Passphrase entry
+ * Vault Unlock Dialog — TPM PIN or Passphrase entry with self-destruct
  *-------------------------------------------------------------------------------
  */
 
-import { useState } from 'react'
-import { useChatStore } from '../../store/chatStore'
+import { useState, useEffect } from 'react'
+import { useSettingsStore } from '../../store/settingsStore'
 
 interface VaultUnlockDialogProps {
   isOpen: boolean
   onClose: () => void
   onSuccess: () => void
-  hasTpm: boolean // Set true if system has TPM, false for passphrase mode
+  hasTpm: boolean
+  homeDir: string // User's home directory for self-destruct
 }
 
-function VaultUnlockDialog({ isOpen, onClose, onSuccess, hasTpm }: VaultUnlockDialogProps) {
+function VaultUnlockDialog({ isOpen, onClose, onSuccess, hasTpm, homeDir }: VaultUnlockDialogProps) {
   const [pin, setPin] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [failedAttempts, setFailedAttempts] = useState(0)
   const [isUnlocking, setIsUnlocking] = useState(false)
 
   if (!isOpen) return null
@@ -39,15 +41,31 @@ function VaultUnlockDialog({ isOpen, onClose, onSuccess, hasTpm }: VaultUnlockDi
       }
 
       await api.unlock({ pin: pin || undefined, password: password || undefined })
+      setFailedAttempts(0)
       onSuccess()
       setPin('')
       setPassword('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const newAttempts = failedAttempts + 1
+      setFailedAttempts(newAttempts)
+      const msg = err instanceof Error ? err.message : String(err)
+      
+      // 10 failed attempts triggers self-destruct
+      if (newAttempts >= 10) {
+        if (api?.selfDestruct) {
+          await api.selfDestruct(homeDir)
+          setError('IDENTITY DESTROYED - Too many failed attempts')
+        }
+      } else {
+        setError(`${msg} (${newAttempts}/10 attempts)`)
+      }
     } finally {
       setIsUnlocking(false)
     }
   }
+
+  const warnThreshold = 7
+  const showWarning = failedAttempts >= warnThreshold
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -55,6 +73,11 @@ function VaultUnlockDialog({ isOpen, onClose, onSuccess, hasTpm }: VaultUnlockDi
         <h2 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
           {hasTpm ? 'Enter TPM PIN' : 'Enter Passphrase'}
         </h2>
+        {showWarning && (
+          <p className="mb-2 text-sm text-orange-500">
+            WARNING: {10 - failedAttempts} attempts remaining before identity wipe
+          </p>
+        )}
         <form onSubmit={handleSubmit}>
           {hasTpm ? (
             <input

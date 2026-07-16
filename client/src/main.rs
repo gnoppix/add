@@ -4819,18 +4819,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Run 'add init --pin <PIN> or --password <pw>' to create one.");
                 return Ok(());
             }
-            let vault: add_crypto::VaultFile =
-                add_crypto::VaultFile::read_from(&vault_path)?;
-            let mak = if let Some(ref pin) = pin {
-                vault.unseal_from_tpm(pin.as_bytes())?
-            } else if let Some(ref pw) = password {
-                add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())?
-            } else {
-                return Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into());
-            };
-            // Cache MAK in secure memory (zeroized on process exit)
-            add_crypto::cache_mak(mak);
-            println!("Vault unlocked successfully.");
+            let home = home_dir();
+            let mak = (|| -> Result<add_crypto::MasterAppKey, Box<dyn std::error::Error>> {
+                let vault: add_crypto::VaultFile =
+                    add_crypto::VaultFile::read_from(&vault_path)?;
+                if let Some(ref pin) = pin {
+                    vault.unseal_from_tpm(pin.as_bytes()).map_err(|e| e.into())
+                } else if let Some(ref pw) = password {
+                    add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())
+                        .map_err(|e| e.into())
+                } else {
+                    Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+                }
+            })();
+            
+            match mak {
+                Ok(m) => {
+                    add_crypto::reset_failed_attempts(&home)?;
+                    add_crypto::cache_mak(m);
+                    println!("Vault unlocked successfully.");
+                }
+                Err(e) => {
+                    let should_destroy = add_crypto::check_failed_attempts(&home, true)?;
+                    if should_destroy {
+                        add_crypto::self_destruct(&home)?;
+                        println!("WRONG PASSWORD ENTERED 10 TIMES - IDENTITY DESTROYED");
+                        std::process::exit(1);
+                    }
+                    return Err(e);
+                }
+            }
         }
         Commands::Send {
             to,

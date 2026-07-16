@@ -23,6 +23,7 @@ subtle.workspace = true
 blake2 = "0.10"
 serde_bytes = "0.11"
 argon2 = { version = "0.5", features = ["std"] }
+dirs.workspace = true
 
 add-protocol = { path = "../protocol" }
 

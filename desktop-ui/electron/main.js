@@ -418,6 +418,15 @@ ipcMain.handle('add-unlock', async (_, opts) => {
   await queuedCommand(args)
 })
 
+// Self-destruct: delete ~/.add directory (messages, keys, identity)
+ipcMain.handle('add-self-destruct', async (_, homeDir) => {
+  const addDir = path.join(homeDir, '.add')
+  if (fs.existsSync(addDir)) {
+    fs.rmSync(addDir, { recursive: true, force: true })
+  }
+  return { success: true, message: 'Identity destroyed' }
+})
+
 ipcMain.handle('add-passwd', async (_, current, newPass) => {
   runCliCommand(['passwd', '--current', current, '--new', newPass])
 })

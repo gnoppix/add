@@ -115,6 +115,20 @@ export class AddCLI {
     await this.runCommand(args)
   }
 
+  // Write security settings to ~/.add/settings.json
+  async saveSecuritySettings(settings: { selfDestructEnabled: boolean; selfDestructThreshold: number }): Promise<void> {
+    const { writeFile, mkdir } = await import('fs/promises')
+    const { homedir } = await import('os')
+    const path = `${homedir()}/.add/settings.json`
+    const addDir = `${homedir()}/.add`
+    try {
+      await mkdir(addDir, { recursive: true })
+      await writeFile(path, JSON.stringify(settings, null, 2), { mode: 0o600 })
+    } catch (err) {
+      console.error('Failed to save settings:', err)
+    }
+  }
+
   async passwd(): Promise<string> {
     return await this.runCommand(['passwd'])
   }

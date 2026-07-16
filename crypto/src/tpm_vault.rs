@@ -132,6 +132,71 @@ const ARGON2_MEMORY_KIB: u32 = 19456; // ~19 MiB
 const ARGON2_ITERATIONS: u32 = 3;
 const ARGON2_PARALLELISM: u32 = 1;
 
+/// Failed unlock attempts counter (used for self-destruct after N wrong tries).
+/// Stored as JSON in ~/.add/failed_attempts.json.
+fn max_wrong_attempts() -> u8 {
+    // Try to read from settings file
+    let home = if let Some(h) = dirs::home_dir() {
+        h
+    } else {
+        return 10;
+    };
+    let settings_path = home.join(".add/settings.json");
+    if let Ok(content) = std::fs::read_to_string(&settings_path) {
+        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(threshold) = settings.get("selfDestructThreshold").and_then(|v| v.as_u64()) {
+                return threshold.clamp(3, 20) as u8; // Configurable: 3-20 attempts
+            }
+        }
+    }
+    10 // Default: 10 attempts
+}
+
+/// Increment the failed-attempt counter, return Ok(true) if self-destruct should trigger.
+pub fn check_failed_attempts(home: &std::path::Path, increment: bool) -> Result<bool, CryptoError> {
+    let path = home.join(".add/failed_attempts.json");
+    let mut count: u8 = if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| CryptoError::Io(format!("failed-read: {e}")))?;
+        serde_json::from_str(&content).unwrap_or(0)
+    } else {
+        0
+    };
+
+    if increment {
+        count = count.saturating_add(1);
+        if count >= max_wrong_attempts() {
+            // Return true to trigger self-destruct (caller handles purge)
+            return Ok(true);
+        }
+        // Persist the incremented counter
+        let json = serde_json::to_string(&count)
+            .map_err(|e| CryptoError::Serialization(format!("failed-serialize: {e}")))?;
+        std::fs::write(&path, json).map_err(|e| CryptoError::Io(format!("failed-write: {e}")))?;
+    }
+
+    Ok(false)
+}
+
+/// Reset the failed-attempt counter (called on successful unlock).
+pub fn reset_failed_attempts(home: &std::path::Path) -> Result<(), CryptoError> {
+    let path = home.join(".add/failed_attempts.json");
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| CryptoError::Io(format!("failed-remove: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Nuclear wipe: delete all identity/vault/message data.
+pub fn self_destruct(home: &std::path::Path) -> Result<(), CryptoError> {
+    let add_dir = home.join(".add");
+    if add_dir.exists() {
+        let _ = std::fs::remove_dir_all(&add_dir);
+    }
+    Ok(())
+}
+
 /// Argon2id(password, salt) -> 32-byte KEK.
 fn derive_kek(credential: &[u8], salt: &SaltString) -> Result<[u8; 32], CryptoError> {
     let argon2 = Argon2::new(

@@ -51,6 +51,9 @@ declare global {
       // Vault unlock (TPM PIN or passphrase)
       unlock: (opts: { pin?: string; password?: string }) => Promise<void>
 
+      // Self-destruct: wipe all identity data (messages, keys, vault)
+      selfDestruct: (homeDir: string) => Promise<{ success: boolean; message: string }>
+
       // Subscribe to main-process push events (e.g. live P2P inbound messages).
       // Returns an unsubscribe function.
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void

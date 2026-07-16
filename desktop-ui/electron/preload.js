@@ -52,6 +52,9 @@ contextBridge.exposeInMainWorld('addAPI', {
   // Vault unlock (TPM PIN or passphrase)
   unlock: (opts) => ipcRenderer.invoke('add-unlock', opts),
 
+  // Self-destruct: wipe all identity data (messages, keys, vault)
+  selfDestruct: (homeDir) => ipcRenderer.invoke('add-self-destruct', homeDir),
+
   // Subscribe to main-process push events (e.g. live P2P inbound messages
   // from the background listener). Returns an unsubscribe function.
   on: (channel, callback) => {
