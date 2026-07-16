@@ -921,7 +921,7 @@ impl RelayState {
             return Err("missing sender signature".to_string());
         }
 
-        // SECURITY FIX (M2): Sealed sender — skip GPG verification when
+        // SECURITY FIX (M2): Sealed sender — skip GPG/identity verification when
         // the sender identity is hidden. The relay cannot verify what it
         // cannot see. The recipient's client verifies sender identity after
         // decapsulating the sealed sender token.
@@ -929,8 +929,16 @@ impl RelayState {
             if req.sender_nid != "anonymous" {
                 return Err("sealed sender requires sender_nid='anonymous'".to_string());
             }
-            // Still require a signature (over the encrypted blob) to prevent spam
-            // — but we skip identity verification since the sender is hidden.
+            // SECURITY FIX (AUDIT-6): the previous branch returned Ok(()) without
+            // ever checking `sender_sig`. That let any anonymous client store
+            // arbitrary blobs (the comment claimed a signature was "required"
+            // but nothing verified it). We still cannot bind it to an identity,
+            // but we MUST reject empty signatures so the caller's replay/rate
+            // controls (timestamp + nonce) have something to key on, and so
+            // anonymous store is not a free, unsigned spam sink.
+            if req.sender_sig.is_empty() {
+                return Err("sealed sender requires a non-empty signature".to_string());
+            }
             return Ok(());
         }
 
@@ -1003,16 +1011,14 @@ impl RelayState {
             status_updated_at: now,
             read_receipt_at: None,
         });
-        let tail = if req.signed_blob.len() > 120 {
-            &req.signed_blob[req.signed_blob.len() - 120..]
-        } else {
-            &req.signed_blob[..]
-        };
-        tracing::info!(
-            "DBG relay store recv blob_len={} has_kc={} TAIL={}",
+        // SECURITY FIX (AUDIT-6): do NOT log message contents. The previous
+        // code logged a 120-byte tail of `signed_blob` (including whether it
+        // contained `kyber_ciphertext`) at INFO level, leaking ciphertext/
+        // metadata into relay logs. Log only the length at debug level.
+        tracing::debug!(
+            "relay store: recipient={} blob_len={}",
+            req.recipient_nid,
             req.signed_blob.len(),
-            req.signed_blob.contains("kyber_ciphertext"),
-            tail
         );
 
         // SECURITY FIX (C5): Persist to SQLite for durability across restarts
@@ -1502,17 +1508,9 @@ async fn handle_message(
 
             let entries = state.fetch_messages(&req.recipient_nid).await;
             for e in &entries {
-                let t = if e.signed_blob.len() > 120 {
-                    &e.signed_blob[e.signed_blob.len() - 120..]
-                } else {
-                    &e.signed_blob[..]
-                };
-                tracing::info!(
-                    "DBG relay fetch entry blob_len={} has_kc={} TAIL={}",
-                    e.signed_blob.len(),
-                    e.signed_blob.contains("kyber_ciphertext"),
-                    t
-                );
+                // SECURITY FIX (AUDIT-6): log only the entry length at debug
+                // level — do NOT dump message tails / ciphertext metadata.
+                tracing::debug!("relay fetch entry: blob_len={}", e.signed_blob.len());
             }
             let data = serde_json::json!({
                 "entries": entries.iter().map(|e| {

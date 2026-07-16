@@ -58,6 +58,15 @@ impl From<serde_json::Error> for CryptoError {
 
 const NONCE_SIZE: usize = 12;
 
+// SECURITY FIX (AUDIT-4): bound the skipped-key table and the skip-forward
+// window. Previously `skipped_keys` grew without limit on every decrypt and
+// the simple_decrypt skip loop would advance the chain by an attacker-chosen
+// `seq` count, enabling memory + CPU exhaustion.
+const MAX_SKIPPED_KEYS: usize = 1024;
+/// Reject gaps larger than this between the current position and `seq`, so a
+/// crafted huge `seq` cannot force an unbounded number of derive steps.
+const MAX_SKIP_AHEAD: u64 = 1024;
+
 pub fn validate_fingerprint(fp: &str) -> Result<(), CryptoError> {
     let cleaned = fp.replace(' ', "").to_uppercase();
     if !(32..=40).contains(&cleaned.len()) {
@@ -237,6 +246,17 @@ impl DoubleRatchetSession {
         Ok((msg_key, new_ck))
     }
 
+    /// SECURITY FIX (AUDIT-4): keep `skipped_keys` bounded. Evict one entry
+    /// when over the cap so the table cannot grow without limit under a flood
+    /// of out-of-order/duplicate messages.
+    fn prune_skipped_keys(&mut self) {
+        if self.state.skipped_keys.len() > MAX_SKIPPED_KEYS {
+            if let Some(k) = self.state.skipped_keys.keys().next().cloned() {
+                self.state.skipped_keys.remove(&k);
+            }
+        }
+    }
+
     pub fn encrypt_first(
         &mut self,
         plaintext: &str,
@@ -367,9 +387,17 @@ impl DoubleRatchetSession {
                 self.state.recv_message_number += 1;
                 // Store for replay/out-of-order (M1)
                 self.state.skipped_keys.insert(seq_key, msg_key);
+                self.prune_skipped_keys();
                 pt
             } else {
-                // Fallback: simple format
+                // Fallback: simple (linear, no-Kyber) format. This handles both
+                // genuine first messages (produced by `encrypt_first`, no Kyber
+                // CT, decrypted here per the caller's contract) and any body
+                // whose trailing 2-byte length is zero/garbage. A tampered
+                // post-first message with a stripped Kyber CT cannot be silently
+                // downgraded: the linear path derives its key from the recv chain
+                // key and AES-GCM authentication fails, so it is rejected rather
+                // than decrypted under a weaker key.
                 self.simple_decrypt(nonce, body, seq)?
             }
         } else {
@@ -412,6 +440,11 @@ impl DoubleRatchetSession {
         seq: u64,
     ) -> Result<Vec<u8>, CryptoError> {
         // Skip forward, storing intermediate message keys (M1).
+        // SECURITY FIX (AUDIT-4): bound the gap so a crafted huge `seq` cannot
+        // force an unbounded number of HKDF derive steps (CPU exhaustion).
+        if seq.saturating_sub(self.state.recv_message_number) > MAX_SKIP_AHEAD {
+            return Err(CryptoError::DecryptFailed("seq gap too large".into()));
+        }
         while self.state.recv_message_number < seq {
             let (mk, new_ck) = Self::derive_message_key(&self.state.recv_chain_key)?;
             if !self.state.self_mode {
@@ -420,6 +453,7 @@ impl DoubleRatchetSession {
             }
             let idx = self.state.recv_message_number;
             self.state.skipped_keys.insert(idx.to_string(), mk);
+            self.prune_skipped_keys();
             self.state.recv_message_number += 1;
         }
         let (msg_key, new_ck) = Self::derive_message_key(&self.state.recv_chain_key)?;
@@ -435,6 +469,7 @@ impl DoubleRatchetSession {
         self.state.recv_message_number += 1;
         // Store this message's key for replay/out-of-order (M1)
         self.state.skipped_keys.insert(seq.to_string(), msg_key);
+        self.prune_skipped_keys();
         Ok(pt)
     }
 

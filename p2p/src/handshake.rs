@@ -35,12 +35,15 @@ pub async fn handshake_initiator(
     public_key_b64: &str,
     kyber_enc_key_b64: &str,
 ) -> Result<WireEnvelope, P2pError> {
-    // Generate nonce and find valid PoW
+    // SECURITY FIX (AUDIT-5): bind the PoW salt to the initiator's public key
+    // (passed as `node_secret` to pow_check/solve). Previously the handshake
+    // called these with an empty node_secret, so the "per-node salt" reduced to
+    // the constant POW_SALT — letting an attacker precompute valid PoW nonces
+    // offline and replay them across all handshakes. Tying the salt to the
+    // specific peer's public key makes each handshake's PoW peer-specific.
     let mut rng = rand::thread_rng();
     let base_nonce: u64 = rng.r#gen();
-
-    // Solve PoW: find nonce such that Argon2id(public_key || nonce) has enough leading zero bits
-    let nonce = match solve_hello_pow(public_key_b64, base_nonce, HELLO_POW_BITS) {
+    let nonce = match solve_hello_pow(public_key_b64, base_nonce, HELLO_POW_BITS, public_key_b64.as_bytes()) {
         Some(n) => n,
         None => {
             return Err(P2pError::Handshake(
@@ -153,7 +156,10 @@ pub async fn handshake_responder(
     }
 
     let pow_data = format!("{}{}", peer_key, peer_nonce);
-    if !pow_check(&pow_data, peer_nonce, peer_pow_bits, &[]).unwrap_or(false) {
+    // SECURITY FIX (AUDIT-5): verify with the initiator's public key as the
+    // PoW salt (matches what the initiator used when solving). Empty salt
+    // would let precomputed solutions replay across handshakes.
+    if !pow_check(&pow_data, peer_nonce, peer_pow_bits, peer_key.as_bytes()).unwrap_or(false) {
         return Err(P2pError::Handshake(
             "peer PoW verification failed".to_string(),
         ));
@@ -180,18 +186,25 @@ pub async fn handshake_responder(
 
 /// Solve PoW for a hello message.
 /// Uses a simple brute-force approach starting from base_nonce.
-/// SECURITY FIX (M11): Passes empty node_secret since P2P hello PoW
-/// is ephemeral (per-connection via server_challenge), not per-node.
+///
+/// SECURITY FIX (AUDIT-5): `node_secret` is the initiator's public key, bound
+/// into the PoW salt so solutions are peer-specific (no cross-handshake
+/// precomputation). Previously this passed an empty node_secret.
 ///
 /// SECURITY FIX (L3): Returns `None` if no valid nonce is found within the
 /// attempt budget. The caller must fail loudly — returning an unsolved nonce
 /// would let a handshake proceed with a PoW that fails verification later.
-fn solve_hello_pow(public_key_b64: &str, base_nonce: u64, difficulty: u32) -> Option<u64> {
+fn solve_hello_pow(
+    public_key_b64: &str,
+    base_nonce: u64,
+    difficulty: u32,
+    node_secret: &[u8],
+) -> Option<u64> {
     // Try up to 1M attempts
     for i in 0..1_000_000 {
         let nonce = base_nonce.wrapping_add(i);
         let data = format!("{}{}", public_key_b64, nonce);
-        if pow_check(&data, nonce, difficulty, &[]).unwrap_or(false) {
+        if pow_check(&data, nonce, difficulty, node_secret).unwrap_or(false) {
             return Some(nonce);
         }
     }
@@ -200,9 +213,8 @@ fn solve_hello_pow(public_key_b64: &str, base_nonce: u64, difficulty: u32) -> Op
 }
 
 /// Verify a received handshake message's PoW.
-/// SECURITY FIX (M11): Passes empty node_secret since P2P hello PoW
-/// is ephemeral, not per-node.
-pub fn verify_hello_pow(public_key_b64: &str, nonce: u64, difficulty: u32) -> bool {
+/// `node_secret` is the initiator's public key (see SECURITY FIX AUDIT-5).
+pub fn verify_hello_pow(public_key_b64: &str, nonce: u64, difficulty: u32, node_secret: &[u8]) -> bool {
     let data = format!("{}{}", public_key_b64, nonce);
-    pow_check(&data, nonce, difficulty, &[]).unwrap_or(false)
+    pow_check(&data, nonce, difficulty, node_secret).unwrap_or(false)
 }

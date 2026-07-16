@@ -168,10 +168,23 @@ pub fn unlock_memory(buffer: &mut [u8]) -> bool {
 ///
 /// Automatically scrubs memory on drop using secure_zero_memory.
 /// Optionally locks pages in RAM via mlock to prevent swap leakage.
-#[derive(Zeroize, ZeroizeOnDrop, Debug)]
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct SecureKeyMaterial {
     key_material: Vec<u8>,
     locked: bool,
+}
+
+// SECURITY FIX (AUDIT-2): manual redacted Debug. The previous `#[derive(Debug)]`
+// printed `key_material: Vec<u8>` in plaintext on any `{:?}`/panic/backtrace,
+// leaking key bytes into logs and crash reporters. The `ZeroizeOnDrop` scrub
+// only runs on free, not on formatting.
+impl std::fmt::Debug for SecureKeyMaterial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecureKeyMaterial")
+            .field("key_material", &"<secret redacted>")
+            .field("locked", &self.locked)
+            .finish()
+    }
 }
 
 impl Clone for SecureKeyMaterial {
