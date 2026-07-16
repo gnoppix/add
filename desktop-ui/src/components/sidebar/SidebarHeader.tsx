@@ -152,21 +152,6 @@ function SidebarHeader() {
     }
   }
 
-  const handleRestartListen = async () => {
-    const api = window.addAPI
-    if (!api) {
-      setErrorMessage('IPC API not available - is the CLI configured? Set ADD_CLI_PATH')
-      return
-    }
-    try {
-      await api.restartListen()
-      setListenRunning(true)
-      setErrorMessage('')
-    } catch (err) {
-      setErrorMessage(`Restart listen failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
   useEffect(() => {
     checkListenStatus()
   }, [])
