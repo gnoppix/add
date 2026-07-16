@@ -46,8 +46,11 @@ export class AddCLI {
     }
   }
 
-  async init(): Promise<NullId> {
-    const output = await this.runCommand(['init'])
+  async init(pin?: string, password?: string): Promise<NullId> {
+    const args = ['init']
+    if (pin) args.push('--pin', pin)
+    if (password) args.push('--password', password)
+    const output = await this.runCommand(args)
     const idMatch = output.match(/Null ID:\s*(NN-[A-Z0-9-]+)/)
     const fpMatch = output.match(/Fingerprint:\s*([A-Z0-9]+)/)
     return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
@@ -102,6 +105,14 @@ export class AddCLI {
     // TODO: Parse CLI output format
     await this.runCommand(['read'])
     return []
+  }
+
+  // Unlock MAK vault (TPM PIN or passphrase)
+  async unlock(pin?: string, password?: string): Promise<void> {
+    const args = ['unlock']
+    if (pin) args.push('--pin', pin)
+    if (password) args.push('--password', password)
+    await this.runCommand(args)
   }
 
   async passwd(): Promise<string> {

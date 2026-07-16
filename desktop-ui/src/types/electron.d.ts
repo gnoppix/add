@@ -15,7 +15,7 @@ declare global {
   interface Window {
     addAPI: {
       // Identity
-      init: () => Promise<{ id: string; fingerprint: string }>
+      init: (opts?: { pin?: string; password?: string }) => Promise<{ id: string; fingerprint: string }>
       getMyId: () => Promise<{ id: string; fingerprint: string }>
       register: () => Promise<void>
       registerAllBootstraps: () => Promise<void>
@@ -47,6 +47,9 @@ declare global {
 
       // Security - Change GPG key passphrase
       passwd: (current: string, newPass: string) => Promise<string>
+
+      // Vault unlock (TPM PIN or passphrase)
+      unlock: (opts: { pin?: string; password?: string }) => Promise<void>
 
       // Subscribe to main-process push events (e.g. live P2P inbound messages).
       // Returns an unsubscribe function.

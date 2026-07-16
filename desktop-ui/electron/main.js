@@ -282,8 +282,11 @@ function createWindow() {
 }
 
 // IPC Handlers
-ipcMain.handle('add-init', async () => {
-  const output = await queuedCommand(['init'])
+ipcMain.handle('add-init', async (_, opts) => {
+  const args = ['init']
+  if (opts?.pin) args.push('--pin', opts.pin)
+  if (opts?.password) args.push('--password', opts.password)
+  const output = await queuedCommand(args)
   const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
   const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
   const result = { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
@@ -406,6 +409,13 @@ ipcMain.handle('add-restart-listen', async () => {
 
 ipcMain.handle('add-listen-status', async () => {
   return { running: !!listenProcess, pid: listenProcess?.pid || null }
+})
+
+ipcMain.handle('add-unlock', async (_, opts) => {
+  const args = ['unlock']
+  if (opts.pin) args.push('--pin', opts.pin)
+  if (opts.password) args.push('--password', opts.password)
+  await queuedCommand(args)
 })
 
 ipcMain.handle('add-passwd', async (_, current, newPass) => {

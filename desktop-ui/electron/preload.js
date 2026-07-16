@@ -14,7 +14,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('addAPI', {
   // Identity
-  init: () => ipcRenderer.invoke('add-init'),
+  init: (opts) => ipcRenderer.invoke('add-init', opts),
   publishCert: () => ipcRenderer.invoke('add-publish-cert'),
   getMyId: () => ipcRenderer.invoke('add-id'),
   register: () => ipcRenderer.invoke('add-register'),
@@ -48,6 +48,9 @@ contextBridge.exposeInMainWorld('addAPI', {
 
   // Security - Change GPG key passphrase
   passwd: (current, newPass) => ipcRenderer.invoke('add-passwd', current, newPass),
+
+  // Vault unlock (TPM PIN or passphrase)
+  unlock: (opts) => ipcRenderer.invoke('add-unlock', opts),
 
   // Subscribe to main-process push events (e.g. live P2P inbound messages
   // from the background listener). Returns an unsubscribe function.
