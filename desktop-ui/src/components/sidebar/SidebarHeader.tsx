@@ -320,12 +320,12 @@ function SidebarHeader() {
               </div>
 
               <div className="border-b pb-3">
-                <p className="font-medium">Connection</p>
+                <p className="font-medium">Your Online Status</p>
                 <div className="flex flex-col gap-1 mt-1">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-gray-600">P2P Listener</span>
+                    <span className="text-gray-600">Status</span>
                     <span className={`px-1.5 py-0.5 rounded text-xs ${listenRunning ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                      {listenRunning ? 'Running' : 'Stopped'}
+                      {listenRunning ? 'Online' : 'Invisible'}
                     </span>
                   </div>
                   <div className="flex gap-1">
@@ -334,21 +334,14 @@ function SidebarHeader() {
                       disabled={listenRunning}
                       className="flex-1 rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Start Listener
+                      Online
                     </button>
                     <button
                       onClick={handleStopListen}
                       disabled={!listenRunning}
-                      className="flex-1 rounded bg-red-500 px-2 py-0.5 text-xs text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Stop Listener
-                    </button>
-                    <button
-                      onClick={handleRestartListen}
-                      disabled={!listenRunning}
-                      className="flex-1 rounded bg-yellow-500 px-2 py-0.5 text-xs text-white hover:bg-yellow-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Restart
+                      Invisible
                     </button>
                   </div>
                 </div>
