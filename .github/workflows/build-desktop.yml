@@ -35,12 +35,11 @@ jobs:
           cache-dependency-path: desktop-ui/package-lock.json
 
       - name: Build add core (x86_64-pc-windows-msvc)
-        working-directory: desktop-ui
         run: |
           # Windows runs without TPM feature (tss-esapi requires native TPM libs)
           cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features
-          New-Item -ItemType Directory -Force -Path ..\target\bundle
-          Copy-Item ..\target\x86_64-pc-windows-msvc\release\add.exe ..\target\bundle\add.exe
+          New-Item -ItemType Directory -Force -Path target\\bundle
+          Copy-Item target\\x86_64-pc-windows-msvc\\release\\add.exe target\\bundle\\add.exe
 
       - name: Install npm deps
         working-directory: desktop-ui
@@ -51,7 +50,6 @@ jobs:
         shell: bash
         run: npm run build:react && npm run fix:index && ./node_modules/.bin/electron-builder --config electron-builder.js --win --publish=never
         env:
-          # On CI we do NOT codesign; remove these when certs are supplied.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Diagnostics before upload
@@ -90,19 +88,16 @@ jobs:
           cache-dependency-path: desktop-ui/package-lock.json
 
       - name: Build add core (universal via lipo)
-        working-directory: desktop-ui
         run: |
           # macOS runs without TPM feature (tss-esapi requires native TPM libs)
-          cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features --features tpm || \
-            cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features
-          cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features --features tpm || \
-            cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features
-          mkdir -p ../target/bundle
+          cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features
+          cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features
+          mkdir -p target/bundle
           lipo -create \
-            ../target/x86_64-apple-darwin/release/add \
-            ../target/aarch64-apple-darwin/release/add \
-            -output ../target/bundle/add
-          chmod +x ../target/bundle/add
+            target/x86_64-apple-darwin/release/add \
+            target/aarch64-apple-darwin/release/add \
+            -output target/bundle/add
+          chmod +x target/bundle/add
 
       - name: Install npm deps
         working-directory: desktop-ui
@@ -113,7 +108,7 @@ jobs:
         shell: bash
         run: npm run build:react && npm run fix:index && ./node_modules/.bin/electron-builder --config electron-builder.js --mac --publish=never
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # set to 'true' + import certs for notarization
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Diagnostics before upload
         working-directory: desktop-ui
@@ -141,6 +136,9 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install TPM dev libs
+        run: sudo apt-get update && sudo apt-get install -y libtss2-dev libssl-dev
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -149,12 +147,12 @@ jobs:
           cache-dependency-path: desktop-ui/package-lock.json
 
       - name: Build add core (x86_64-unknown-linux-gnu)
-        working-directory: desktop-ui
         run: |
-          cargo build --package add-client --release --target x86_64-unknown-linux-gnu
-          mkdir -p ../target/bundle
-          cp ../target/x86_64-unknown-linux-gnu/release/add ../target/bundle/add
-          chmod +x ../target/bundle/add
+          # Linux uses TPM feature (requires tss-esapi packages)
+          cargo build --package add-client --release --target x86_64-unknown-linux-gnu --features tpm
+          mkdir -p target/bundle
+          cp target/x86_64-unknown-linux-gnu/release/add target/bundle/add
+          chmod +x target/bundle/add
 
       - name: Install npm deps
         working-directory: desktop-ui
