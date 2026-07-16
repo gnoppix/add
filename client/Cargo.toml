@@ -32,7 +32,7 @@ url.workspace = true
 add-protocol = { path = "../protocol" }
 add-dht-core = { path = "../dht-core" }
 add-p2p = { path = "../p2p" }
-add-crypto = { path = "../crypto" }
+add-crypto = { path = "../crypto", features = ["tpm"] }
 add-crypto-pq = { path = "../crypto-pq" }
 ml-dsa = { version = "0.1", features = ["pkcs8"] }
 age = { workspace = true }

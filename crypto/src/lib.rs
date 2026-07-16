@@ -32,7 +32,7 @@ pub mod pir;
 pub mod secure_mem;
 pub mod snapshot_defense;
 pub mod tpm_vault;
-pub use tpm_vault::{MasterAppKey, VaultFile, VaultKind};
+pub use tpm_vault::{cache_mak, encrypt_with_mak, decrypt_with_mak, seal_with_passphrase, unseal_with_passphrase, MasterAppKey, VaultFile, VaultKind};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {

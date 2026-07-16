@@ -51,6 +51,7 @@ const CONTACTS_PATH: &str = ".add/contacts.json";
 const ALIASES_PATH: &str = ".add/aliases.json";
 const DELIVERY_SECRETS_PATH: &str = ".add/delivery_secrets.json";
 const IDENTITY_PATH: &str = ".add/identity.json";
+const VAULT_PATH: &str = ".add/vault.json";
 const BOOTSTRAP_PATH: &str = ".add/bootstrap_pin_cache.json";
 const MESSAGES_DB: &str = ".add/messages.db";
 const DB_KEY_PATH: &str = ".add/db_key.json";
@@ -4440,8 +4441,24 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Commands {
-    /// Initialize a new identity
-    Init,
+    /// Initialize a new identity (creates MAK vault if TPM present)
+    Init {
+        /// 6-digit TPM PIN
+        #[arg(long)]
+        pin: Option<String>,
+        /// 16-character passphrase (upper+lower+digit+special)
+        #[arg(long)]
+        password: Option<String>,
+    },
+    /// Unlock the MAK vault (loads into secure memory)
+    Unlock {
+        /// 6-digit TPM PIN (if TPM vault)
+        #[arg(long)]
+        pin: Option<String>,
+        /// 16-character passphrase (if passphrase vault)
+        #[arg(long)]
+        password: Option<String>,
+    },
     /// Show your Null ID
     Id,
     /// Send a message
@@ -4726,7 +4743,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match args.cmd {
-        Commands::Init => {
+        Commands::Init { pin, password } => {
             // Check if identity already exists — require confirmation to overwrite
             let identity_path = home_dir().join(IDENTITY_PATH);
             if identity_path.exists()
@@ -4750,12 +4767,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            println!("Generating post-quantum keypair (this may take a moment)...");
+            // Create MAK vault (TPM PIN or passphrase)
             let identity = generate_identity()?;
             println!("Identity created successfully!");
             println!("  Fingerprint: {}", identity.fingerprint);
             println!("  Null ID:     {}", identity.null_id);
-            println!("\nShare your Null ID with contacts to receive messages.");
+            println!();
+
+            // Create MAK vault (TPM PIN or passphrase) - protect the ML-DSA seed
+            if let Some(ref pin) = pin {
+                let mak = add_crypto::MasterAppKey::generate()?;
+                let vault = add_crypto::VaultFile::seal_to_tpm(&mak, pin.as_bytes())?;
+                add_crypto::cache_mak(mak);
+                vault.write_to(&home_dir().join(VAULT_PATH))?;
+                println!("Vault created at ~/.add/vault.json");
+            } else if let Some(ref pw) = password {
+                let mak = add_crypto::MasterAppKey::generate()?;
+                let vault = add_crypto::seal_with_passphrase(&mak, pw.as_bytes())?;
+                add_crypto::cache_mak(mak);
+                vault.write_to(&home_dir().join(VAULT_PATH))?;
+                println!("Vault created at ~/.add/vault.json");
+            } else {
+                // No auth provided — generate ephemeral MAK, no vault file
+                println!("WARNING: No --pin or --password provided. MAK stored in memory only.");
+                println!("         This identity is NOT protected at rest. Re-init with --pin/--password to secure it.");
+            }
+
+            println!("Share your Null ID with contacts to receive messages.");
 
             // NOTE: the Reflector Bot (NN-UFtv-8fHu) is a well-known PUBLIC
             // SERVICE, not a contact. It is reachable without being in the
@@ -4773,6 +4811,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let identity = Identity::load()?;
             println!("Null ID:     {}", identity.null_id);
             println!("Fingerprint: {}", identity.fingerprint);
+        }
+        Commands::Unlock { pin, password } => {
+            let vault_path = home_dir().join(VAULT_PATH);
+            if !vault_path.exists() {
+                println!("No vault found at ~/.add/vault.json");
+                println!("Run 'add init --pin <PIN> or --password <pw>' to create one.");
+                return Ok(());
+            }
+            let vault: add_crypto::VaultFile =
+                add_crypto::VaultFile::read_from(&vault_path)?;
+            let mak = if let Some(ref pin) = pin {
+                vault.unseal_from_tpm(pin.as_bytes())?
+            } else if let Some(ref pw) = password {
+                add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())?
+            } else {
+                return Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into());
+            };
+            // Cache MAK in secure memory (zeroized on process exit)
+            add_crypto::cache_mak(mak);
+            println!("Vault unlocked successfully.");
         }
         Commands::Send {
             to,

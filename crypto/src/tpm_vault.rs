@@ -34,12 +34,12 @@ use rand::RngCore;
 pub const MAK_LEN: usize = 32;
 
 /// The Master App Key. Zeroized on drop; never serialised in plaintext.
-#[derive(ZeroizeOnDrop)]
+#[derive(ZeroizeOnDrop, Clone)]
 pub struct MasterAppKey {
     material: ZeroizingMak,
 }
 
-#[derive(ZeroizeOnDrop)]
+#[derive(ZeroizeOnDrop, Clone)]
 struct ZeroizingMak(Box<[u8; MAK_LEN]>);
 
 impl MasterAppKey {
@@ -238,6 +238,21 @@ pub fn encrypt_with_mak(mak: &MasterAppKey, plaintext: &[u8]) -> Result<Vec<u8>,
 /// Decrypt bytes previously produced by `encrypt_with_mak`.
 pub fn decrypt_with_mak(mak: &MasterAppKey, wrapped: &[u8]) -> Result<Vec<u8>, CryptoError> {
     aes_unwrap(mak.as_bytes(), wrapped)
+}
+
+/// Cache the MAK in a thread-local for the duration of the process.
+/// This is a simple in-RAM cache; the MAK is zeroized when dropped.
+pub fn cache_mak(mak: MasterAppKey) {
+    MAK_CACHE.with(|c| c.borrow_mut().replace(mak));
+}
+
+/// Retrieve the cached MAK (if any). Returns None if not unlocked.
+pub fn get_cached_mak() -> Option<MasterAppKey> {
+    MAK_CACHE.with(|c| c.borrow().as_ref().map(|m| m.clone()))
+}
+
+thread_local! {
+    static MAK_CACHE: std::cell::RefCell<Option<MasterAppKey>> = const { std::cell::RefCell::new(None) };
 }
 
 // ============================================================================
