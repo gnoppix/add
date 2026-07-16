@@ -13,6 +13,8 @@
 /** Message input bar with multi-line support, emoji picker, TTL picker, and action buttons */
 import { useState, useRef, useEffect } from 'react'
 import { useChatStore } from '../../store/chatStore'
+import { MAX_ATTACHMENT_BYTES } from '../../types'
+import { fileToBase64, encodeAttachment, formatBytes, MAX_ATTACHMENT_LABEL } from '../../lib/attachment'
 
 // Free Unicode emojis (no copyright issues) organized by category
 const EMOJI_CATEGORIES: Record<string, string[]> = {
@@ -146,7 +148,49 @@ function MessageInput() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const ttlPickerRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [attachError, setAttachError] = useState<string | null>(null)
+  const [attachBusy, setAttachBusy] = useState(false)
   const { activeConversationId, sendMessage } = useChatStore()
+
+  // Open the native file picker when the paper-clip is clicked.
+  const handleAttachClick = () => {
+    if (attachBusy || !activeConversationId) return
+    setAttachError(null)
+    fileInputRef.current?.click()
+  }
+
+  // Read the chosen file, enforce the 2 MB cap, and send it as an attachment.
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    // Always reset so selecting the same file again re-triggers change.
+    if (e.target.value !== null) e.target.value = ''
+    if (!file || !activeConversationId) return
+
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      setAttachError(
+        `File too large (${formatBytes(file.size)}). Maximum is ${MAX_ATTACHMENT_LABEL}.`
+      )
+      return
+    }
+
+    setAttachBusy(true)
+    try {
+      const data = await fileToBase64(file)
+      const envelope = encodeAttachment({
+        name: file.name,
+        mime: file.type || 'application/octet-stream',
+        size: file.size,
+        data,
+      })
+      await sendMessage(envelope)
+      setAttachError(null)
+    } catch {
+      setAttachError('Could not read the selected file.')
+    } finally {
+      setAttachBusy(false)
+    }
+  }
 
   // TTL options: hours, days
   const TTL_OPTIONS = [
@@ -164,7 +208,10 @@ function MessageInput() {
     e.preventDefault()
     if (!message.trim() || !activeConversationId) return
 
-    await sendMessage(message.trim(), selectedTtl === 'none' ? undefined : selectedTtl)
+    await sendMessage(
+      message.trim(),
+      selectedTtl && selectedTtl !== 'none' ? (selectedTtl as string) : undefined
+    )
     setMessage('')
     resetTextareaHeight()
   }
@@ -229,10 +276,20 @@ function MessageInput() {
     <div className="border-t border-gray-200 bg-white p-3">
       <form onSubmit={handleSubmit} className="flex items-end gap-2 relative">
         {/* Attachment button */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={handleFileChange}
+          disabled={!activeConversationId || attachBusy}
+        />
         <button
           type="button"
-          className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors hover:bg-gray-100"
+          onClick={handleAttachClick}
+          disabled={!activeConversationId || attachBusy}
+          title={attachBusy ? 'Sending attachment…' : `Attach file (max ${MAX_ATTACHMENT_LABEL})`}
           aria-label="Attach file"
+          className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-40"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -243,6 +300,12 @@ function MessageInput() {
             />
           </svg>
         </button>
+
+        {attachError && (
+          <div className="absolute bottom-full left-0 mb-2 w-full max-w-sm rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 shadow-lg z-50">
+            {attachError}
+          </div>
+        )}
 
         {/* Text input */}
         <textarea

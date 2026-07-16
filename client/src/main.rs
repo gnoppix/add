@@ -20,6 +20,7 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::io::Read;
 use std::sync::Arc;
 
 use base64::Engine;
@@ -4447,7 +4448,9 @@ enum Commands {
     Send {
         /// Recipient Null ID
         to: String,
-        /// Message text
+        /// Message text. Use "-" to read the message body from stdin
+        /// (required for large payloads such as file attachments, which would
+        /// otherwise exceed the OS command-line argument length limit).
         message: String,
         /// Use PIR for privacy-enhanced DHT lookup (hides query from DHT server)
         #[arg(long)]
@@ -4777,6 +4780,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pir,
             ttl,
         } => {
+            // `-` means read the message body from stdin. This is required for
+            // large payloads (e.g. file attachments) because the OS imposes a
+            // hard cap on command-line argument length (Linux/macOS ~128-256KB,
+            // Windows ~32KB) that a base64 attachment would exceed.
+            let message = if message == "-" {
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)?;
+                buf
+            } else {
+                message
+            };
             let store = MessageStore::open().await?;
             let identity = Identity::load()?;
             let aliases = load_aliases();

@@ -13,10 +13,32 @@
 /** Individual message bubble component */
 import type { Message } from '../../types'
 import { useState } from 'react'
+import { formatBytes } from '../../lib/attachment'
 
 interface MessageBubbleProps {
   message: Message
   isOutgoing: boolean
+}
+
+// Build a downloadable object URL from a base64 attachment and trigger a save.
+function downloadAttachment(name: string, mime: string, data: string) {
+  try {
+    const clean = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data
+    const bin = atob(clean)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    const blob = new Blob([bytes], { type: mime || 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch {
+    /* decode/launch failure — non-fatal */
+  }
 }
 
 function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
@@ -77,6 +99,35 @@ function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
           }`}
         >
           <p className="text-sm">{message.content}</p>
+          {message.attachment && (
+            <button
+              type="button"
+              onClick={() =>
+                downloadAttachment(
+                  message.attachment!.name,
+                  message.attachment!.mime,
+                  message.attachment!.data
+                )
+              }
+              className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+                isOutgoing ? 'bg-white/15 hover:bg-white/25' : 'bg-black/5 hover:bg-black/10'
+              }`}
+              title={`Download ${message.attachment.name}`}
+            >
+              <svg className="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 10v6m0 0l-3-3m3 3l3-3M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"
+                />
+              </svg>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{message.attachment.name}</span>
+                <span className="block text-xs opacity-70">{formatBytes(message.attachment.size)}</span>
+              </span>
+            </button>
+          )}
           {showTimestamp && (
             <span
               className={`absolute top-full mt-1 text-xs ${

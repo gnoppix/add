@@ -23,7 +23,22 @@ export interface Message {
   status: MessageStatus
   senderId: string
   ttl?: string // Auto-destruct timer (e.g., '2h', '12h', '24h', '48h', '5d', '7d', '14d')
+  attachment?: {
+    name: string
+    mime: string
+    size: number
+    data: string // base64 (no padding prefix) of the file contents
+  }
 }
+
+// Max file attachment size: 2 MB. The Add CLI `send` channel is text-only, so
+// attachments are base64-encoded and carried inside the encrypted message
+// envelope; 2 MB keeps the payload well within relay/mailbox limits.
+export const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024
+
+// Matches a serialized attachment envelope embedded in a message body.
+// The data group allows empty (a 0-byte file base64-encodes to '').
+export const ATTACHMENT_RE = /^\u0001ADDATT v1\n([^\n]+)\n(\d+)\n([A-Za-z0-9+/=]*)\n\u0001ENDADDATT$/
 
 export interface Conversation {
   id: string

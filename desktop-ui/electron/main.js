@@ -74,32 +74,40 @@ let cliQueue = Promise.resolve()
 // Track the listen process
 let listenProcess = null
 
-function runCliCommand(args) {
+function runCliCommand(args, input) {
   return new Promise((resolve, reject) => {
     const child = spawn(ADD_CLI, args, {
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
-    
+
     let stdout = ''
     let stderr = ''
-    
+
     child.stdout.on('data', (data) => { stdout += data.toString() })
     child.stderr.on('data', (data) => { stderr += data.toString() })
-    
+
+    // When we have a body to send, write it to stdin and close the stream so
+    // the CLI (which reads `-` from stdin) receives the full payload without
+    // hitting the OS command-line argument length limit.
+    if (input != null) {
+      child.stdin.write(input)
+      child.stdin.end()
+    }
+
     child.on('close', (code) => {
       if (code === 0) resolve(stdout.trim())
       else reject(new Error(stderr.trim() || `Exit code ${code}`))
     })
-    
+
     child.on('error', (err) => reject(err))
   })
 }
 
 // Queue wrapper to serialize CLI calls
-function queuedCommand(args) {
+function queuedCommand(args, input) {
   return new Promise((resolve, reject) => {
-    cliQueue = cliQueue.then(() => runCliCommand(args)).then(resolve, reject)
+    cliQueue = cliQueue.then(() => runCliCommand(args, input)).then(resolve, reject)
   })
 }
 
@@ -353,9 +361,13 @@ ipcMain.handle('add-aliases', async () => {
 })
 
 ipcMain.handle('add-send', async (_, nullId, message, ttl) => {
-  const args = ['send', nullId, message]
+  // Pass the message body via stdin (using "-" as the argv placeholder) so
+  // large payloads (file attachments) are not constrained by the OS
+  // command-line argument length limit. Plain short messages also go through
+  // stdin for a single uniform path.
+  const args = ['send', nullId, '-']
   if (ttl) args.push('--ttl', ttl)
-  return queuedCommand(args)
+  return queuedCommand(args, message)
 })
 
 ipcMain.handle('add-read', async (_, json) => {
