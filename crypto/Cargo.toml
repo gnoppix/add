@@ -25,3 +25,14 @@ serde_bytes = "0.11"
 argon2 = { version = "0.5", features = ["std"] }
 
 add-protocol = { path = "../protocol" }
+
+# TPM 2.0 hardware-binding (Linux/Windows with a chip). Gated so macOS /
+# no-TPM builds do not pull the TSS2 stack. bindgen needs libclang; if the
+# build host hides it, set LIBCLANG_PATH to the llvm lib dir.
+[features]
+default = []
+tpm = ["dep:tss-esapi"]
+
+[dependencies.tss-esapi]
+version = "7"
+optional = true

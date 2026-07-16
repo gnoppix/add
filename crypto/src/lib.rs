@@ -31,6 +31,8 @@ pub mod hardware_keys;
 pub mod pir;
 pub mod secure_mem;
 pub mod snapshot_defense;
+pub mod tpm_vault;
+pub use tpm_vault::{MasterAppKey, VaultFile, VaultKind};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
@@ -48,6 +50,18 @@ pub enum CryptoError {
     KeyPersistence(String),
     #[error("PIR error: {0}")]
     Pir(String),
+    #[error("hardware/TPM error: {0}")]
+    HardwareError(String),
+    #[error("I/O error: {0}")]
+    Io(String),
+    #[error("key derivation failed: {0}")]
+    DerivationFailed(String),
+}
+
+impl From<std::io::Error> for CryptoError {
+    fn from(e: std::io::Error) -> Self {
+        CryptoError::Io(e.to_string())
+    }
 }
 
 impl From<serde_json::Error> for CryptoError {

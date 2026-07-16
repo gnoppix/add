@@ -25,6 +25,9 @@ use sha2::Sha512;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+#[cfg(feature = "tpm")]
+use crate::tpm_vault::{VaultFile, VaultKind};
+
 use crate::{
     CryptoError, MlKem1024Keypair,
     secure_mem::{SecureKeyMaterial, lock_memory, unlock_memory},
@@ -110,6 +113,30 @@ impl RootSecret {
         Err(HardwareKeyError::HsmUnavailable(
             "HSM integration not yet implemented - use passphrase".to_string(),
         ))
+    }
+
+    /// Initialize the root secret from a TPM-sealed Master App Key vault.
+    ///
+    /// Loads `~/.add/hardware_vault.bin`, asks the TPM to unseal the MAK under
+    /// the 6-digit PIN (hardware-enforced), and uses the MAK as the root secret
+    /// material. Requires the `tpm` feature and a TPM 2.0 chip.
+    #[cfg(feature = "tpm")]
+    pub fn from_tpm(vault_path: &std::path::Path, pin: &[u8]) -> Result<Self, HardwareKeyError> {
+        let vault = VaultFile::read_from(vault_path)
+            .map_err(|e| HardwareKeyError::HsmUnavailable(format!("read vault: {e}")))?;
+        let VaultKind::Tpm { .. } = &vault.kind else {
+            return Err(HardwareKeyError::HsmUnavailable(
+                "vault is not TPM mode".to_string(),
+            ));
+        };
+        let mak = vault
+            .unseal_from_tpm(pin)
+            .map_err(|_| HardwareKeyError::InvalidCredential)?;
+        let material = SecureKeyMaterial::new(mak.as_bytes().to_vec(), true);
+        Ok(Self {
+            source: RootSecretSource::Hsm,
+            material,
+        })
     }
 
     /// Derive root secret from user passphrase using Argon2id
