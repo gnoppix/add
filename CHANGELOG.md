@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-07-17 — Desktop UI polish, presence control, deployment hardening (v0.3.23)
+
+### Desktop UI
+- **Settings gear icon**: replaced the ambiguous dot/sunburst icon with a proper
+  Heroicons cog (gear) at 22px, with a `Settings` hover tooltip.
+- **Profile avatar presence**: right-click changes the profile picture; left-click
+  toggles online/offline (starts/stops the listener); a status LED shows green
+  (online) / red (offline). Presence is driven from a shared `chatStore` so the
+  avatar and the Settings "Online Status" stay in sync.
+- **Status toggle debounce**: 3-second guard in `toggleListen` prevents rapid
+  left-clicks from thrashing the listener start/stop.
+- **Settings modal cleanup**: removed the Register / Register All / Check Register
+  buttons and the Load Contacts button (logic handled elsewhere).
+- **Dark mode readability**: fixed black-on-black text in modals (Settings, Add
+  Contact, Passphrase, Security) — `.bg-white` surfaces in dark mode now use
+  readable light text and visible borders via `index.css` overrides.
+- **Cross-platform links**: Support menu links open in the OS default browser.
+  Linux spawns the resolved browser binary with a fresh temp profile per click
+  (bypasses LibreWolf's profile lock); Windows/macOS use `shell.openExternal`.
+- **About dialog**: custom HTML window with clickable BSL Licence link (hidden URL).
+
+### Deployment
+- Renamed deployed binaries `nullnode-*` → `add-*` on all bootstrap/relay hosts.
+- All bootstrap/relay hosts (eu/us/asia) rebuilt to **0.3.21** binaries, now
+  advertise their public `wss://` URLs, and run as systemd units
+  (`add-bootstrap.service`, `add-relay.service`) with `Restart=always` so they
+  survive reboots and recover from crashes. Old nohup scripts removed.
+
 ## 2026-07-16 — Self-destruct after failed unlock attempts
 
 ### Security feature (crypto/src/tpm_vault.rs)

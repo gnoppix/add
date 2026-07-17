@@ -36,7 +36,6 @@ function SidebarHeader() {
   const [showPasswdModal, setShowPasswdModal] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [passwdMessage, setPasswdMessage] = useState('')
-  const [listenRunning, setListenRunning] = useState(false)
   const [contactForm, setContactForm] = useState<AddContactForm>({
     nullId: '',
     fingerprint: '',
@@ -54,6 +53,7 @@ function SidebarHeader() {
     isAuthenticated,
     loadContacts,
     addConversation,
+    listenRunning,
   } = useChatStore()
 
   useEffect(() => {
@@ -75,47 +75,12 @@ function SidebarHeader() {
     }
   }
 
-  const handleRegister = async () => {
-    const api = window.addAPI
-    if (api) {
-      try {
-        await api.register()
-        setShowSettingsModal(false)
-      } catch (err) {
-        console.error('Register failed:', err)
-      }
-    }
-  }
-
-  const handleRegisterAll = async () => {
-    const api = window.addAPI
-    if (api) {
-      try {
-        await api.registerAllBootstraps()
-        setShowSettingsModal(false)
-      } catch (err) {
-        console.error('Register All failed:', err)
-      }
-    }
-  }
-
-  const handleCheckRegister = async () => {
-    const api = window.addAPI
-    if (api) {
-      try {
-        await api.checkRegister()
-      } catch (err) {
-        console.error('Check Register failed:', err)
-      }
-    }
-  }
-
   const checkListenStatus = async () => {
     const api = window.addAPI
     if (api) {
       try {
         const status = await api.listenStatus()
-        setListenRunning(status.running)
+        useChatStore.setState({ listenRunning: status.running })
       } catch (err) {
         console.error('Check listen status failed:', err)
       }
@@ -130,7 +95,7 @@ function SidebarHeader() {
     }
     try {
       await api.startListen()
-      setListenRunning(true)
+      useChatStore.setState({ listenRunning: true })
       setErrorMessage('')
     } catch (err) {
       setErrorMessage(`Start listen failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -145,7 +110,7 @@ function SidebarHeader() {
     }
     try {
       await api.stopListen()
-      setListenRunning(false)
+      useChatStore.setState({ listenRunning: false })
       setErrorMessage('')
     } catch (err) {
       setErrorMessage(`Stop listen failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -237,10 +202,11 @@ function SidebarHeader() {
           onClick={() => setShowSettingsModal(true)}
           className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors hover:bg-gray-100"
           aria-label="Settings"
+          title="Settings"
         >
-          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.446-1.756 2.942-1.756 2.396 0l-.864 3.993a2 2 0 00.97 1.068l3.993.864c1.756.446 1.756 2.942 0 2.396l-3.993-.864a2 2 0 00-1.068-.97l-.864-3.993z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 2 0 11-6 0 3 2 0 016 0z" />
+          <svg className="h-[22px] w-[22px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.004.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
 
@@ -280,28 +246,6 @@ function SidebarHeader() {
                     Initialize Identity
                   </button>
                 )}
-                {isAuthenticated && (
-                  <>
-                    <button
-                      onClick={handleRegister}
-                      className="mt-1 ml-2 rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
-                    >
-                      Register
-                    </button>
-                    <button
-                      onClick={handleRegisterAll}
-                      className="mt-1 ml-2 rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
-                    >
-                      Register All
-                    </button>
-                    <button
-                      onClick={handleCheckRegister}
-                      className="mt-1 ml-2 rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
-                    >
-                      Check Register
-                    </button>
-                  </>
-                )}
               </div>
 
               <div className="border-b pb-3">
@@ -330,15 +274,7 @@ function SidebarHeader() {
                     </button>
                   </div>
                 </div>
-                <button
-                  onClick={() => {
-                    loadContacts()
-                    setShowSettingsModal(false)
-                  }}
-                  className="ml-2 rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
-                >
-                  Load Contacts
-                </button>
+
               </div>
 
               {/* Security: Change Passphrase / Self-destruct */}

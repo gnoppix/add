@@ -73,6 +73,34 @@
   color: var(--color-text-secondary);
 }
 
+/* Dark mode: modal surfaces (.bg-white is remapped to the dark sidebar) must
+   use readable light text + visible borders, otherwise content is black-on-black. */
+.dark .bg-white {
+  color: var(--color-text);
+}
+.dark .text-gray-700,
+.dark .text-gray-800,
+.dark .text-gray-900,
+.dark .text-black {
+  color: var(--color-text);
+}
+.dark .text-gray-500 {
+  color: var(--color-text-secondary);
+}
+.dark .border {
+  border-color: var(--color-border);
+}
+.dark .border-b {
+  border-color: var(--color-border);
+}
+/* Inputs/selects inside dark modals: light text on a dark field with a visible border. */
+.dark input,
+.dark select,
+.dark textarea {
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
 /* Chat bubble colors (Signal-inspired; mirror tailwind.config.js light/dark palette) */
 .bg-color-bubble-sent {
   background-color: #007AFF;

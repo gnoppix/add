@@ -55,6 +55,10 @@ contextBridge.exposeInMainWorld('addAPI', {
   // Self-destruct: wipe all identity data (messages, keys, vault)
   selfDestruct: (homeDir) => ipcRenderer.invoke('add-self-destruct', homeDir),
 
+  // For About window
+  openExternal: (url) => ipcRenderer.invoke('add-open-external', url),
+  getVersion: () => ipcRenderer.invoke('add-get-version'),
+
   // Subscribe to main-process push events (e.g. live P2P inbound messages
   // from the background listener). Returns an unsubscribe function.
   on: (channel, callback) => {

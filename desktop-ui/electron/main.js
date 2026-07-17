@@ -10,8 +10,8 @@
  *-------------------------------------------------------------------------------
  */
 
-const { app, BrowserWindow, ipcMain } = require('electron')
-const { spawn } = require('child_process')
+const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -431,8 +431,192 @@ ipcMain.handle('add-passwd', async (_, current, newPass) => {
   runCliCommand(['passwd', '--current', current, '--new', newPass])
 })
 
+// Handle IPC calls from About window
+ipcMain.handle('add-open-external', async (_, url) => {
+  openInDefaultBrowser(url)
+})
+
+ipcMain.handle('add-get-version', async () => {
+  return getAppVersion()
+})
+
+// Open `url` in the OS default browser.
+// - Linux: xdg-open forwards to an already-running browser, which trips
+//   LibreWolf's "already running" profile lock. We spawn the browser binary
+//   directly with a fresh temp profile per click (see openInLinuxBrowser).
+// - macOS / Windows: shell.openExternal is the correct native API and has no
+//   such single-instance lock problem, so use it directly.
+function openInDefaultBrowser(url) {
+  if (process.platform === 'linux') {
+    openInLinuxBrowser(url)
+    return
+  }
+  // darwin / win32 — native, reliable, no profile-lock issue
+  shell.openExternal(url)
+}
+
+// Linux: spawn the default browser binary directly (bypassing xdg-open's
+// single-instance forwarding) with a unique throwaway profile per click so we
+// never collide with the locked default profile of a stuck/running instance.
+function openInLinuxBrowser(url) {
+  try {
+    const browser = resolveDefaultBrowser()
+    if (!browser) {
+      shell.openExternal(url)
+      return
+    }
+    // Unique temp profile dir per click so we never touch the locked default
+    // profile of a stuck/running browser instance.
+    const tmpProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'add-browser-'))
+    let args
+    if (browser.family === 'chromium') {
+      args = ['--user-data-dir=' + tmpProfile, '--new-window', url]
+    } else {
+      // firefox / librewolf
+      args = ['-profile', tmpProfile, '--new-instance', url]
+    }
+    // Explicit cwd: if the app was launched from a dir that no longer exists,
+    // the spawned shell would print "getcwd() failed" and may fail to start.
+    const child = spawn(browser.cmd, args, {
+      detached: true,
+      stdio: 'ignore',
+      cwd: os.homedir(),
+    })
+    child.unref()
+  } catch {
+    // Last resort: let the OS figure it out
+    shell.openExternal(url)
+  }
+}
+
+function resolveDefaultBrowser() {
+  let cmd = ''
+  try {
+    cmd = execSync('xdg-settings get default-web-browser', { encoding: 'utf8' }).trim()
+  } catch {
+    return null
+  }
+  if (!cmd) return null
+  // xdg-settings returns e.g. "librewolf.desktop" — strip the .desktop suffix
+  cmd = cmd.replace(/\.desktop$/, '')
+  const families = {
+    firefox: ['librewolf', 'firefox', 'firefox-esr', 'tor-browser'],
+    chromium: ['chromium', 'google-chrome', 'chrome', 'brave', 'vivaldi', 'edge'],
+  }
+  for (const family of ['firefox', 'chromium']) {
+    if (families[family].some((k) => cmd.includes(k))) {
+      return { cmd, family }
+    }
+  }
+  // Unknown browser: assume firefox-style CLI
+  return { cmd, family: 'firefox' }
+}
+
+function createAppMenu() {
+  const version = getAppVersion()
+  const template = [
+    {
+      label: 'File',
+      submenu: [
+        { role: 'quit' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { type: 'separator' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' }
+      ]
+    },
+    {
+      label: 'Support',
+      submenu: [
+        {
+          label: 'Contact us',
+          click: () => openInDefaultBrowser('https://gnoppix.org/contact/')
+        },
+        {
+          label: 'Report a Problem',
+          click: () => openInDefaultBrowser('https://github.com/gnoppix/add/issues')
+        },
+        { type: 'separator' },
+        {
+          label: 'Other Privacy Services',
+          click: () => openInDefaultBrowser('https://gnoppix.org/solutions/index.html')
+        },
+        {
+          label: 'Visit our Forum',
+          click: () => openInDefaultBrowser('https://forum.gnoppix.org/c/general/4')
+        },
+        {
+          label: 'Source Code',
+          click: () => openInDefaultBrowser('https://github.com/gnoppix/add')
+        },
+        { type: 'separator' },
+        {
+          label: 'Become a Supporter',
+          click: () => openInDefaultBrowser('https://gnoppix.org/sponsor/index.html')
+        },
+        {
+          label: 'About',
+          click: () => {
+            const aboutWin = new BrowserWindow({
+              width: 400,
+              height: 420,
+              resizable: false,
+              minimizable: false,
+              maximizable: false,
+              fullscreenable: false,
+              title: 'About',
+              titleBarStyle: 'hiddenInset',
+              trafficLightPosition: { x: 20, y: 20 },
+              webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                preload: path.join(__dirname, 'preload.js')
+              }
+            })
+            aboutWin.loadFile(path.join(__dirname, 'about.html'))
+          }
+        }
+      ]
+    }
+  ]
+
+  const menu = Menu.buildFromTemplate(template)
+  Menu.setApplicationMenu(menu)
+}
+
 app.whenReady().then(() => {
   createWindow()
+  createAppMenu()
 
   // Auto-start background listen process
   startListenProcess()

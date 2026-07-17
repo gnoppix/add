@@ -53,7 +53,15 @@ interface ChatStore {
   checkContactsOnlineStatus: () => Promise<void>
   clearMessages: (conversationId: string) => void
   deleteConversation: (nullId: string) => void
-  
+
+  // Presence / listener control (shared so the avatar LED and sidebar agree)
+  listenRunning: boolean
+  checkListenStatus: () => Promise<void>
+  startListen: () => Promise<void>
+  stopListen: () => Promise<void>
+  toggleListen: () => Promise<void>
+  _lastToggleAt?: number
+
   initialize: () => Promise<void>
   loadContacts: () => Promise<void>
   sendMessage: (content: string, ttl?: string) => Promise<void>
@@ -79,6 +87,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   myId: null,
   myFingerprint: null,
   isAuthenticated: false,
+  listenRunning: false,
+  _lastToggleAt: 0,
 
   setActiveConversation: (id) => {
     set({ activeConversationId: id })
@@ -403,5 +413,53 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   deleteConversation: (nullId: string) =>
     set((state) => ({
       conversations: state.conversations.filter((c) => c.id !== nullId),
-    }))
+    })),
+
+  checkListenStatus: async () => {
+    const api = getEvaAPI()
+    if (!api) return
+    try {
+      const status = await api.listenStatus()
+      set({ listenRunning: status.running })
+    } catch (err) {
+      console.error('Check listen status failed:', err)
+    }
+  },
+
+  startListen: async () => {
+    const api = getEvaAPI()
+    if (!api) return
+    try {
+      await api.startListen()
+      set({ listenRunning: true })
+    } catch (err) {
+      console.error('Start listen failed:', err)
+    }
+  },
+
+  stopListen: async () => {
+    const api = getEvaAPI()
+    if (!api) return
+    try {
+      await api.stopListen()
+      set({ listenRunning: false })
+    } catch (err) {
+      console.error('Stop listen failed:', err)
+    }
+  },
+
+  toggleListen: async () => {
+    const state = get()
+    // Debounce: ignore clicks for 3s after the last toggle so rapid tapping
+    // doesn't thrash the listener start/stop.
+    const now = Date.now()
+    if (state._lastToggleAt && now - state._lastToggleAt < 3000) return
+    set({ _lastToggleAt: now })
+
+    if (state.listenRunning) {
+      await get().stopListen()
+    } else {
+      await get().startListen()
+    }
+  },
 }))

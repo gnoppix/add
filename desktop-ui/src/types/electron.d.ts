@@ -54,6 +54,10 @@ declare global {
       // Self-destruct: wipe all identity data (messages, keys, vault)
       selfDestruct: (homeDir: string) => Promise<{ success: boolean; message: string }>
 
+      // For About window
+      openExternal: (url: string) => Promise<void>
+      getVersion: () => Promise<string>
+
       // Subscribe to main-process push events (e.g. live P2P inbound messages).
       // Returns an unsubscribe function.
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void
