@@ -1,0 +1,27 @@
+{
+  "appId": "org.add.desktop",
+  "productName": "Add Desktop",
+  "directories": {
+    "output": "dist-electron"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "../target/release/add",
+      "to": "add",
+      "filter": ["**/*"]
+    }
+  ],
+  "extraMetadata": {
+    "main": "electron/main.js"
+  },
+  "linux": {
+    "target": "deb",
+    "executableName": "add-desktop"
+  },
+  "asar": true,
+  "compression": "maximum"
+}

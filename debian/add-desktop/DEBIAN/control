@@ -1,0 +1,17 @@
+Package: add-desktop
+Architecture: amd64
+Version: 0.3.18-1
+Maintainer: Andreas Mueller <amu@gnoppix.com>
+Description: Add Desktop - Electron GUI client for Add messenger
+ Electron-based desktop client with Signal-inspired interface for Add
+ post-quantum encrypted messaging.
+ .
+ Features:
+  - Split-pane interface (sidebar + chat)
+  - Real-time message delivery
+  - TTL auto-destruct timer (2h, 12h, 24h, 48h, 5d, 7d, 14d)
+  - Emoji picker integration
+  - Reflector Bot for latency testing
+Depends: libnss3, libatk1.0-0, libatk-bridge2.0-0, libcups2, libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxrandr2, libgbm1, libasound2, libpangocairo-1.0-0, libpango-1.0-0, libgtk-3-0
+Section: net
+Priority: optional

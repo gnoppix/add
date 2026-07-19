@@ -1,0 +1,14 @@
+[package]
+name = "add-crypto-utils"
+version.workspace = true
+edition.workspace = true
+description = "Add crypto utilities: GPG operations, secure deletion, STUN protocol"
+
+[dependencies]
+sequoia-openpgp.workspace = true
+rand.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+dirs.workspace = true
+add-protocol = { path = "../protocol" }

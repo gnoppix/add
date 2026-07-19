@@ -1,0 +1,17 @@
+Package: add-bot
+Architecture: amd64
+Version: 0.3.18-1
+Maintainer: Andreas Mueller <amu@gnoppix.com>
+Description: Add Reflector Bot - Automated echo bot for testing
+ Add Reflector Bot is a headless echo client that reflects messages
+ back to senders. Useful for latency testing and protocol verification.
+ .
+ Features:
+  - Echo messages with [Reflector Echo]: prefix
+  - TTL inheritance from incoming messages
+  - E2E read receipts (Double Check)
+  - Loop prevention to avoid infinite echo loops
+  - Zero-footprint in-memory storage
+Depends: libssl3
+Section: net
+Priority: optional

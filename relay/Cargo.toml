@@ -1,0 +1,46 @@
+[package]
+name = "add-relay"
+version.workspace = true
+edition.workspace = true
+description = "Add relay server (store-and-forward)"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+hmac.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio-tungstenite.workspace = true
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+sqlx.workspace = true
+futures.workspace = true
+clap.workspace = true
+base64.workspace = true
+dirs.workspace = true
+sequoia-openpgp.workspace = true
+aes-gcm.workspace = true
+hkdf.workspace = true
+ml-dsa = { version = "0.1", features = ["pkcs8"] }
+ml-kem = { version = "0.3" }
+add-protocol = { path = "../protocol" }
+add-dht-core = { path = "../dht-core" }
+add-crypto = { path = "../crypto" }
+add-crypto-pq = { path = "../crypto-pq" }
+
+[[bin]]
+name = "add-relay"
+path = "src/main.rs"
+
+# Debian package metadata
+[package.metadata.deb]
+name = "add-relay"
+section = "net"
+priority = "optional"
+maintainer = "Andreas Mueller <amu@gnoppix.com>"
+depends = "libssl3, libsqlite3-0"

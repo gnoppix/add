@@ -1,0 +1,433 @@
+/**
+ *-------------------------------------------------------------------------------
+ * Name: Gnoppix Linux - Services
+ * Architecture: all
+ * Date: 2002-2026 by Gnoppix Linux
+ * Author: Andreas Mueller
+ * Website: https://www.gnoppix.com
+ * Licence: Business Source License (BSL / BUSL)
+ * You can use the code for free if your company or organisation doesn't have more than 2 people.
+ *-------------------------------------------------------------------------------
+ */
+
+import { useState, useEffect } from 'react'
+import { useChatStore } from '../../store/chatStore'
+import ThemeToggle from './ThemeToggle'
+import ProfileAvatar from './ProfileAvatar'
+import { generateInitialsAvatar } from '../../lib/identicon'
+import SecuritySettings from '../settings/SecuritySettings'
+
+interface AddContactForm {
+  nullId: string
+  fingerprint: string
+  alias: string
+}
+
+interface PasswdForm {
+  current: string
+  new: string
+  confirm: string
+}
+
+function SidebarHeader() {
+  const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [showSecurityModal, setShowSecurityModal] = useState(false)
+  const [showAddContact, setShowAddContact] = useState(false)
+  const [showPasswdModal, setShowPasswdModal] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
+  const [passwdMessage, setPasswdMessage] = useState('')
+  const [contactForm, setContactForm] = useState<AddContactForm>({
+    nullId: '',
+    fingerprint: '',
+    alias: '',
+  })
+  const [passwdForm, setPasswdForm] = useState<PasswdForm>({
+    current: '',
+    new: '',
+    confirm: '',
+  })
+  const {
+    initialize,
+    myId,
+    myFingerprint,
+    isAuthenticated,
+    loadContacts,
+    addConversation,
+    listenRunning,
+  } = useChatStore()
+
+  useEffect(() => {
+    initialize()
+  }, [initialize])
+
+  const handleInit = async () => {
+    const api = window.addAPI
+    if (!api) {
+      setErrorMessage('IPC API not available - is the CLI configured? Set ADD_CLI_PATH')
+      return
+    }
+    try {
+      await api.init()
+      initialize()
+      setErrorMessage('')
+    } catch (err) {
+      setErrorMessage(`Init failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const checkListenStatus = async () => {
+    const api = window.addAPI
+    if (api) {
+      try {
+        const status = await api.listenStatus()
+        useChatStore.setState({ listenRunning: status.running })
+      } catch (err) {
+        console.error('Check listen status failed:', err)
+      }
+    }
+  }
+
+  const handleStartListen = async () => {
+    const api = window.addAPI
+    if (!api) {
+      setErrorMessage('IPC API not available - is the CLI configured? Set ADD_CLI_PATH')
+      return
+    }
+    try {
+      await api.startListen()
+      useChatStore.setState({ listenRunning: true })
+      setErrorMessage('')
+    } catch (err) {
+      setErrorMessage(`Start listen failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const handleStopListen = async () => {
+    const api = window.addAPI
+    if (!api) {
+      setErrorMessage('IPC API not available - is the CLI configured? Set ADD_CLI_PATH')
+      return
+    }
+    try {
+      await api.stopListen()
+      useChatStore.setState({ listenRunning: false })
+      setErrorMessage('')
+    } catch (err) {
+      setErrorMessage(`Stop listen failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  useEffect(() => {
+    checkListenStatus()
+  }, [])
+
+  const handleAddContact = async () => {
+    const api = window.addAPI
+    if (!api || !contactForm.nullId || !contactForm.fingerprint) return
+
+    try {
+      await api.addContact(contactForm.nullId, contactForm.fingerprint)
+      if (contactForm.alias) {
+        await api.alias(contactForm.alias, contactForm.nullId)
+      }
+      addConversation({
+        id: contactForm.nullId,
+        name: contactForm.alias || contactForm.nullId,
+        fingerprint: contactForm.fingerprint,
+        avatarUrl: generateInitialsAvatar(contactForm.nullId),
+        lastMessage: '',
+        lastMessageTimestamp: new Date(),
+        unreadCount: 0,
+        isOnline: false,
+        isGroup: false,
+      })
+      setContactForm({ nullId: '', fingerprint: '', alias: '' })
+      setShowAddContact(false)
+      setErrorMessage('')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('Add contact failed:', msg)
+      setErrorMessage(`Add contact failed: ${msg}`)
+    }
+  }
+
+  const handlePasswd = async () => {
+    const api = window.addAPI
+    if (!api) {
+      setPasswdMessage('IPC API not available')
+      return
+    }
+
+    if (!passwdForm.current || !passwdForm.new) {
+      setPasswdMessage('Both current and new passphrase required')
+      return
+    }
+
+    if (passwdForm.new !== passwdForm.confirm) {
+      setPasswdMessage('New passphrases do not match')
+      return
+    }
+
+    try {
+      await api.passwd(passwdForm.current, passwdForm.new)
+      setPasswdMessage('Passphrase changed successfully')
+      setPasswdForm({ current: '', new: '', confirm: '' })
+      setTimeout(() => setPasswdMessage(''), 3000)
+      setShowPasswdModal(false)
+    } catch (err) {
+      setPasswdMessage(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  return (
+    <header className="flex h-14 items-center justify-between border-b border-gray-200 px-3">
+      <ProfileAvatar />
+
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => {
+            setShowAddContact(true)
+            setErrorMessage('')
+          }}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors hover:bg-gray-100"
+          aria-label="New Message"
+          title="Add Contact"
+        >
+          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+
+        <button
+          onClick={() => setShowSettingsModal(true)}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors hover:bg-gray-100"
+          aria-label="Settings"
+          title="Settings"
+        >
+          <svg className="h-[22px] w-[22px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.004.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+
+        <ThemeToggle />
+      </div>
+
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-semibold">Settings</h2>
+
+            <div className="space-y-3 text-sm">
+              {errorMessage && (
+                <div className="rounded bg-red-100 p-2 text-xs text-red-700">
+                  {errorMessage}
+                </div>
+              )}
+
+              <div className="border-b pb-3">
+                <p className="font-medium">Identity</p>
+                <div className="text-xs font-mono text-gray-700 space-y-1 mt-1">
+                  {isAuthenticated ? (
+                    <>
+                      <p>Null ID: <span className="font-mono">{myId}</span></p>
+                      <p>Fingerprint: <span className="font-mono">{myFingerprint}</span></p>
+                    </>
+                  ) : (
+                    <p>Not initialized</p>
+                  )}
+                </div>
+                {!isAuthenticated && (
+                  <button
+                    onClick={handleInit}
+                    className="mt-1 rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600"
+                  >
+                    Initialize Identity
+                  </button>
+                )}
+              </div>
+
+              <div className="border-b pb-3">
+                <p className="font-medium">Your Online Status</p>
+                <div className="flex flex-col gap-1 mt-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-gray-600">Status</span>
+                    <span className={`px-1.5 py-0.5 rounded text-xs ${listenRunning ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                      {listenRunning ? 'Online' : 'Invisible'}
+                    </span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={handleStartListen}
+                      disabled={listenRunning}
+                      className="flex-1 rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Online
+                    </button>
+                    <button
+                      onClick={handleStopListen}
+                      disabled={!listenRunning}
+                      className="flex-1 rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Invisible
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Security: Change Passphrase / Self-destruct */}
+              {isAuthenticated && (
+                <div className="border-t pt-3">
+                  <p className="font-medium">Security</p>
+                  <button
+                    onClick={() => setShowPasswdModal(true)}
+                    className="mt-1 rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600"
+                  >
+                    Change GPG Key Passphrase
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowSettingsModal(false)
+                      setShowSecurityModal(true)
+                    }}
+                    className="ml-2 rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
+                  >
+                    Self-destruct Settings
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={() => setShowSettingsModal(false)}
+              className="mt-4 ml-auto block rounded bg-gray-100 px-3 py-1 text-sm hover:bg-gray-200"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Security Settings Modal */}
+      {showSecurityModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
+            <SecuritySettings onClose={() => setShowSecurityModal(false)} />
+          </div>
+        </div>
+      )}
+
+      {/* Add Contact Modal */}
+      {showAddContact && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-80 rounded-lg bg-white p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-semibold">Add Contact</h2>
+
+            {errorMessage && (
+              <div className="mb-3 rounded bg-red-100 p-2 text-xs text-red-700">
+                {errorMessage}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <input
+                type="text"
+                placeholder="Null ID (NN-XXXX-XXXX)"
+                value={contactForm.nullId}
+                onChange={(e) => setContactForm({ ...contactForm, nullId: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+              <input
+                type="text"
+                placeholder="Fingerprint"
+                value={contactForm.fingerprint}
+                onChange={(e) => setContactForm({ ...contactForm, fingerprint: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+              <input
+                type="text"
+                placeholder="Alias (optional)"
+                value={contactForm.alias}
+                onChange={(e) => setContactForm({ ...contactForm, alias: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setShowAddContact(false)}
+                className="rounded bg-gray-100 px-3 py-1 text-sm hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddContact}
+                className="rounded bg-primary-500 px-3 py-1 text-sm text-white hover:bg-primary-600"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Passphrase Modal */}
+      {showPasswdModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-80 rounded-lg bg-white p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-semibold">Change GPG Key Passphrase</h2>
+
+            {passwdMessage && (
+              <div className="mb-3 rounded bg-red-100 p-2 text-xs text-red-700">
+                {passwdMessage}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <input
+                type="password"
+                placeholder="Current passphrase"
+                value={passwdForm.current}
+                onChange={(e) => setPasswdForm({ ...passwdForm, current: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+              <input
+                type="password"
+                placeholder="New passphrase"
+                value={passwdForm.new}
+                onChange={(e) => setPasswdForm({ ...passwdForm, new: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+              <input
+                type="password"
+                placeholder="Confirm new passphrase"
+                value={passwdForm.confirm}
+                onChange={(e) => setPasswdForm({ ...passwdForm, confirm: e.target.value })}
+                className="w-full rounded border px-2 py-1 text-sm"
+              />
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setShowPasswdModal(false)}
+                className="rounded bg-gray-100 px-3 py-1 text-sm hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePasswd}
+                className="rounded bg-primary-500 px-3 py-1 text-sm text-white hover:bg-primary-600"
+              >
+                Change
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </header>
+  )
+}
+
+export default SidebarHeader

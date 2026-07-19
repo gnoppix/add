@@ -1,0 +1,53 @@
+{
+  "app-id": "org.add.desktop",
+  "runtime": "org.freedesktop.Platform",
+  "runtime-version": "23.08",
+  "sdk": "org.freedesktop.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.node18"
+  ],
+  "command": "add-desktop",
+  "finish-args": [
+    "--share=network",
+    "--share=ipc",
+    "--socket=wayland",
+    "--socket=x11",
+    "--device=dri",
+    "--socket=pulseaudio",
+    "--filesystem=home",
+    "--talk-name=org.freedesktop.Notifications",
+    "--talk-name=org.freedesktop.secrets"
+  ],
+  "modules": [
+    {
+      "name": "add-desktop",
+      "buildsystem": "simple",
+      "build-commands": [
+        "mkdir -p /app/bin",
+        "mkdir -p /app/share/applications",
+        "mkdir -p /app/share/icons/hicolor/512x512/apps",
+        "mkdir -p /app/dist",
+        "mkdir -p /app/electron",
+        "mkdir -p /app/src",
+        "mkdir -p /app/node_modules",
+        "cp -r /run/flatpak-builder/src/desktop-ui/src /app/ 2>/dev/null || cp -r /run/flatpak-builder/src/src /app/ || true",
+        "cp /run/flatpak-builder/src/desktop-ui/package.json /app/ 2>/dev/null || cp /run/flatpak-builder/src/package.json /app/ || true",
+        "cp /run/flatpak-builder/src/desktop-ui/package-lock.json /app/ 2>/dev/null || cp /run/flatpak-builder/src/package-lock.json /app/ || true",
+        "cp -r /run/flatpak-builder/src/desktop-ui/electron /app/ 2>/dev/null || cp -r /run/flatpak-builder/src/electron /app/ || true",
+        "cp /run/flatpak-builder/src/desktop-ui/dist /app/ 2>/dev/null || cp -r /run/flatpak-builder/src/dist /app/ || true",
+        "cp /run/flatpak-builder/src/desktop-ui/build/icon.svg /app/share/icons/hicolor/512x512/apps/org.add.desktop.svg 2>/dev/null || cp /run/flatpak-builder/src/build/icon.svg /app/share/icons/hicolor/512x512/apps/org.add.desktop.svg 2>/dev/null || true",
+        "export PATH=/usr/lib/sdk/node18/bin:$PATH && cd /app && npm ci",
+        "export PATH=/usr/lib/sdk/node18/bin:$PATH && cd /app && npm run build:react",
+        "cat > /app/bin/add-desktop << 'EOF'\n#!/bin/bash\nexport PATH=/usr/lib/sdk/node18/bin:$PATH\ncd /app\nELECTRON_RUN_AS_NODE=1 exec electron . \"$@\"\nEOF",
+        "chmod +x /app/bin/add-desktop",
+        "cat > /app/share/applications/org.add.desktop.desktop << 'EOF'\n[Desktop Entry]\nName=Gnoppix - Add Messenger\nComment=Cross-platform decentralized messaging application with E2E encryption\nExec=add-desktop\nIcon=org.add.desktop\nTerminal=false\nType=Application\nCategories=Network;InstantMessaging;\nStartupWMClass=Gnoppix - Add Messenger\nEOF"
+      ],
+      "sources": [
+        {
+          "type": "dir",
+          "path": "/home/amu/Gnoppix/messenger/Add/desktop-ui"
+        }
+      ]
+    }
+  ]
+}

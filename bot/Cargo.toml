@@ -1,0 +1,52 @@
+[package]
+name = "add-bot"
+version.workspace = true
+edition.workspace = true
+description = "Add Reflector (Echo) Bot - Standalone implementation"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+hkdf = "0.12"
+rand = "0.8"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+futures = "0.3"
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+rustls = { version = "0.23", features = ["ring"] }
+add-dht-core = { path = "../dht-core" }
+add-protocol = { path = "../protocol" }
+add-crypto = { path = "../crypto" }
+anyhow = "1"
+shellexpand = "3"
+base64 = "0.21"
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
+pqcrypto-dilithium = "0.5"
+ml-dsa = "0.1"
+pem = "3"
+add-crypto-pq = { path = "../crypto-pq" }
+
+[[bin]]
+name = "add-reflector"
+path = "src/main.rs"
+
+# Debian package metadata
+[package.metadata.deb]
+name = "add-bot"
+section = "net"
+priority = "optional"
+architecture = "amd64"
+maintainer = "Andreas Mueller <amu@gnoppix.com>"
+description = "Add Reflector Bot - Automated echo bot for testing"
+depends = "libssl3"

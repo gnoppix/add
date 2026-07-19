@@ -1,0 +1,54 @@
+[workspace]
+members = ["protocol", "crypto", "crypto-pq", "crypto-utils", "dht-core", "relay", "p2p", "client", "bootstrap", "bot"]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.24"
+edition = "2024"
+description = "Add P2P messenger (Rust)"
+license = "BUSL-1.1"
+authors = ["Andreas Mueller <https://www.gnoppix.com>"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+blake2 = "0.10"
+argon2 = "0.5"
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+tokio-tungstenite = "0.26"
+rustls = { version = "0.23", features = ["ring"] }
+hmac = "0.12"
+url = "2"
+dirs = "5"
+clap = { version = "4", features = ["derive"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
+ml-dsa = "0.1"
+pem = "3"
+ml-kem = "0.1"
+futures = "0.3"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+subtle = "2"
+age = { version = "0.11", features = ["armor"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+hickory-resolver = { version = "0.26", features = ["system-config", "tokio"] }
+digest = "0.10"
+crypto-common = "0.1"
+toml = "0.8"
+anyhow = "1"
+shellexpand = "3"
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,199 @@
+name: Add Desktop — Windows / macOS / Linux
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow the action to upload release artifacts.
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Windows (NSIS installer) — built natively on a Windows runner.
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Build add core (x86_64-pc-windows-msvc)
+        run: |
+          # Windows runs without TPM feature (tss-esapi requires native TPM libs)
+          cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features
+          New-Item -ItemType Directory -Force -Path target\\bundle
+          Copy-Item target\\x86_64-pc-windows-msvc\\release\\add.exe target\\bundle\\add.exe
+
+      - name: Install npm deps
+        working-directory: desktop-ui
+        run: npm ci
+
+      - name: Build Electron app (NSIS)
+        working-directory: desktop-ui
+        shell: bash
+        run: npm run build:react && npm run fix:index && ./node_modules/.bin/electron-builder --config electron-builder.js --win --publish=never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Diagnostics before upload
+        working-directory: desktop-ui
+        shell: bash
+        run: |
+          echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
+          echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: add-desktop-windows
+          path: desktop-ui/dist-electron/*.exe
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # macOS (universal DMG) — built natively on a macOS runner.
+  # ---------------------------------------------------------------------------
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, universal)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Build add core (universal via lipo)
+        run: |
+          # macOS runs without TPM feature (tss-esapi requires native TPM libs)
+          cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features
+          cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features
+          mkdir -p target/bundle
+          lipo -create \
+            target/x86_64-apple-darwin/release/add \
+            target/aarch64-apple-darwin/release/add \
+            -output target/bundle/add
+          chmod +x target/bundle/add
+
+      - name: Install npm deps
+        working-directory: desktop-ui
+        run: npm ci
+
+      - name: Build Electron app (DMG)
+        working-directory: desktop-ui
+        shell: bash
+        run: npm run build:react && npm run fix:index && ./node_modules/.bin/electron-builder --config electron-builder.js --mac --publish=never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Diagnostics before upload
+        working-directory: desktop-ui
+        shell: bash
+        run: |
+          echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
+          echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: add-desktop-macos
+          path: desktop-ui/dist-electron/*.dmg
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Linux (deb) — built natively on an Ubuntu runner.
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install TPM dev libs
+        run: sudo apt-get update && sudo apt-get install -y libtss2-dev libssl-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Build add core (x86_64-unknown-linux-gnu)
+        run: |
+          # Linux uses TPM feature (requires tss-esapi packages)
+          cargo build --package add-client --release --target x86_64-unknown-linux-gnu --features tpm
+          mkdir -p target/bundle
+          cp target/x86_64-unknown-linux-gnu/release/add target/bundle/add
+          chmod +x target/bundle/add
+
+      - name: Install npm deps
+        working-directory: desktop-ui
+        run: npm ci
+
+      - name: Build Electron app (deb)
+        working-directory: desktop-ui
+        shell: bash
+        run: npm run build:react && npm run fix:index && ./node_modules/.bin/electron-builder --config electron-builder.js --linux --publish=never
+
+      - name: Diagnostics before upload
+        working-directory: desktop-ui
+        shell: bash
+        run: |
+          echo "=== staged add binary ==="; ls -la ../target/bundle/ || echo "NO target/bundle"
+          echo "=== dist-electron contents ==="; ls -la dist-electron/ || echo "NO dist-electron"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: add-desktop-linux
+          path: desktop-ui/dist-electron/*.deb
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Release — attach all artifacts to a GitHub Release on tag push.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish Release
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: List artifacts
+        run: find artifacts -type f
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/add-desktop-windows/*.exe
+            artifacts/add-desktop-macos/*.dmg
+            artifacts/add-desktop-linux/*.deb

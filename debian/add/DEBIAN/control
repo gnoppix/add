@@ -1,0 +1,17 @@
+Package: add
+Architecture: amd64
+Version: 0.3.18-1
+Maintainer: Andreas Mueller <amu@gnoppix.com>
+Description: Add P2P Messenger Client - Post-quantum encrypted messaging
+ Add is a decentralized messaging system using ML-KEM-1024 post-quantum
+ encryption (US government standard). No phone number or email required.
+ .
+ Features:
+  - ML-KEM-1024 + Double Ratchet end-to-end encryption
+  - 3 bootstrap servers for redundancy (US/EU/Asia)
+  - Optional relay for offline message delivery
+  - Tor support for anonymity
+  - Reflector Bot integration for latency testing
+Depends: libssl3, libsqlite3-0
+Section: net
+Priority: optional

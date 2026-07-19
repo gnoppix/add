@@ -1,0 +1,20 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+target/
+*.deb
+
+# Docs (not needed in image)
+*.md
+LICENSE
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

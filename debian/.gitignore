@@ -1,0 +1,3 @@
+# Debian packaging: only DEBIAN/control is tracked.
+# Binaries are copied in at build time by scripts/build-deb.sh.
+*/usr/

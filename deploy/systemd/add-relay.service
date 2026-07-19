@@ -1,0 +1,41 @@
+[Unit]
+Description=Add Relay / Mailbox Server
+After=network-online.target systemd-tmpfiles-setup.service
+Wants=network-online.target
+# State dir (/root/.add) is mounted tmpfs by systemd-tmpfiles via add-tmpfs.conf.
+Requires=systemd-tmpfiles-setup.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/add
+ExecStart=/root/add/add-relay
+# Enforce ephemeral (tmpfs) state dir: the daemon panics at boot if /root/.add
+# is not tmpfs. Paired with deploy/systemd/add-tmpfs.conf.
+Environment=ADD_REQUIRE_TMPFS=1
+Restart=on-failure
+RestartSec=3
+
+# --- snapshot / forensics hardening ---
+# Never swap the process out; key material is mlock'd in RAM (needs CAP_IPC_LOCK).
+ProtectHome=tmpfs
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictNamespaces=true
+# Drop all caps except IPC_LOCK (required for mlock/mlockall to pin key pages).
+CapabilityBoundingSet=CAP_IPC_LOCK
+AmbientCapabilities=CAP_IPC_LOCK
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Keys are mlock'd; forbid new executable memory mappings as defense-in-depth.
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

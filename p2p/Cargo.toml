@@ -1,0 +1,28 @@
+[package]
+name = "add-p2p"
+version.workspace = true
+edition.workspace = true
+description = "Add P2P client node (handshake, NAT traversal, transport)"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+url.workspace = true
+futures.workspace = true
+
+add-protocol = { path = "../protocol" }
+add-crypto = { path = "../crypto" }
+
+[lib]
+name = "add_p2p"
+path = "src/lib.rs"
+
+[dev-dependencies]
+base64.workspace = true

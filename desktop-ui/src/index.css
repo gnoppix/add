@@ -1,0 +1,165 @@
+/**
+ *-------------------------------------------------------------------------------
+ * Name: Gnoppix Linux - Services
+ * Architecture: all
+ * Date: 2002-2026 by Gnoppix Linux
+ * Author: Andreas Mueller
+ * Website: https://www.gnoppix.com
+ * Licence: Business Source License (BSL / BUSL)
+ * You can use the code for free if your company or organisation doesn't have more than 2 people.
+ *-------------------------------------------------------------------------------
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-sans antialiased;
+  }
+}
+
+/* CSS variables for theme colors - defined OUTSIDE @layer to avoid Tailwind override */
+:root {
+  --color-background: #F2F2F7;
+  --color-sidebar: #FFFFFF;
+  --color-text: #000000;
+  --color-text-secondary: #6D6D70;
+  --color-border: #E5E5EA;
+  --color-hover: #F0F0F0;
+}
+
+.dark {
+  --color-background: #121212;
+  --color-sidebar: #1E1E1E;
+  --color-text: #FFFFFF;
+  --color-text-secondary: #AEAEB2;
+  --color-border: #333333;
+  --color-hover: #2A2A2A;
+}
+
+/* Main app background - MUST come after Tailwind to override JIT output */
+.bg-light-background {
+  background-color: var(--color-background) !important;
+}
+
+.bg-dark-background {
+  background-color: var(--color-background) !important;
+}
+
+.bg-white {
+  background-color: var(--color-sidebar) !important;
+}
+
+.dark\:bg-dark-sidebar {
+  background-color: var(--color-sidebar);
+}
+
+.border-gray-200 {
+  border-color: var(--color-border);
+}
+
+.dark\:border-gray-700 {
+  border-color: var(--color-border);
+}
+
+.text-gray-600 {
+  color: var(--color-text-secondary);
+}
+
+.dark\:text-gray-400 {
+  color: var(--color-text-secondary);
+}
+
+/* Dark mode: modal surfaces */
+.dark .rounded-lg.bg-white,
+.dark .absolute.bottom-full .bg-white {
+  background-color: var(--color-hover) !important;
+  color: var(--color-text) !important;
+}
+
+.dark .bg-gray-100 {
+  background-color: var(--color-hover) !important;
+  color: var(--color-text) !important;
+}
+
+.dark .hover\:bg-gray-200:hover {
+  background-color: var(--color-border) !important;
+}
+
+.dark .text-gray-700,
+.dark .text-gray-800,
+.dark .text-gray-900,
+.dark .text-black {
+  color: var(--color-text) !important;
+}
+
+.dark .text-gray-500 {
+  color: var(--color-text-secondary) !important;
+}
+
+.dark .border,
+.dark .border-b {
+  border-color: var(--color-border);
+}
+
+/* Inputs/selects inside dark modals */
+.dark input,
+.dark select,
+.dark textarea {
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+/* Chat bubble colors */
+.bg-color-bubble-sent {
+  background-color: #007AFF;
+}
+
+.dark .bg-color-bubble-sent {
+  background-color: #0A84FF;
+}
+
+.bg-color-bubble-received {
+  background-color: #E9E9EB;
+}
+
+.dark .bg-color-bubble-received {
+  background-color: #2C2C2E;
+}
+
+.text-color-text {
+  color: var(--color-text);
+}
+
+.text-color-text-secondary {
+  color: var(--color-text-secondary);
+}
+
+/* Custom scrollbar - light */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a0a0a0;
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-thumb {
+  background: #404040;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #505050;
+}
