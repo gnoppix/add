@@ -14,8 +14,9 @@
 import type { Message } from '../../types'
 import { useState } from 'react'
 import { formatBytes } from '../../lib/attachment'
-import { attachmentDataUrl } from '../../lib/attachment'
+import { attachmentDataUrl, isKnownSticker } from '../../lib/attachment'
 import { EmojiImg, stickerEmojis } from '../common/EmojiImg'
+import { StickerImg } from '../common/StickerImg'
 
 interface MessageBubbleProps {
   message: Message
@@ -93,6 +94,8 @@ function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
 
   const att = message.attachment
   const isImage = !!att && att.mime.startsWith('image/')
+  // Known stickers render inline without download UI (like Signal)
+  const isKnownStickerAttachment = att && isKnownSticker(att.name)
 
   return (
     <div
@@ -123,7 +126,15 @@ function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
             return <p className="text-sm">{message.content}</p>
           })()}
 
-          {isImage && (
+          {/* Known sticker attachments render inline (no download button) */}
+          {isKnownStickerAttachment && (
+            <div className="mt-1 max-w-[240px]">
+              <StickerImg filename={att.name} size={128} />
+            </div>
+          )}
+
+          {/* Other images: lightbox preview on click */}
+          {isImage && !isKnownStickerAttachment && (
             <button
               type="button"
               onClick={() => setLightbox(attachmentDataUrl(att!))}
@@ -139,7 +150,8 @@ function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
             </button>
           )}
 
-          {att && !isImage && (
+          {/* Non-image attachments: download button */}
+          {att && !isImage && !isKnownStickerAttachment && (
             <button
               type="button"
               onClick={() =>

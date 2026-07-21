@@ -12,7 +12,7 @@
 
 /**
  * Emoji renderer: Moetwemoji GIF assets for consistent colorful emoji in picker.
- * Returns null (renders nothing) if no GIF available for the emoji.
+ * Falls back to rendering the Unicode character if no GIF asset exists.
  */
 import React, { useRef, useEffect } from 'react'
 import emojiMap from '../../emoji/codepoint_map.json'
@@ -73,7 +73,17 @@ function gifUrl(filename: string): string {
 
 export const EmojiImg: React.FC<EmojiImgProps> = ({ emoji, size = 20, className = '' }) => {
   const url = emojiToUrl(emoji)
-  if (!url) return null
+  // No GIF asset: fall back to rendering the Unicode character
+  if (!url) {
+    return (
+      <span
+        style={{ fontSize: size, lineHeight: 1 }}
+        className={className}
+      >
+        {emoji}
+      </span>
+    )
+  }
 
   const imgRef = useRef<HTMLImageElement>(null)
 

@@ -120,11 +120,73 @@ export function attachmentDataUrl(a: AttachmentMeta): string {
   return `data:${mime};base64,${clean}`
 }
 
+/** Known sticker filenames (from bundled pack). */
+const KNOWN_STICKERS = new Set([
+  "AgAD0wEAArMeMEc.webp",
+  "AgAD1AIAAiSuMEc.webp",
+  "AgAD3wEAAgNOMUc.webp",
+  "AgAD4QEAAlsHMEc.webp",
+  "AgAD4QEAAvD4KUc.webp",
+  "AgAD5wIAAohuMUc.webp",
+  "AgAD6AEAArydMUc.webp",
+  "AgAD8gMAAlkNKEc.webp",
+  "AgAD9AEAAs0iKEc.webp",
+  "AgADAQIAAs-QMUc.webp",
+  "AgADCQIAAogeKUc.webp",
+  "AgADDwIAAlCNKEc.webp",
+  "AgADFQIAAofXMUc.webp",
+  "AgADIAIAAljNMUc.webp",
+  "AgADIAMAAgnYGUQ.webp",
+  "AgADJQMAAjUwKEc.webp",
+  "AgADJQMAArRdKUc.webp",
+  "AgADJgIAAhurMEc.webp",
+  "AgADKQIAAm-aKEc.webp",
+  "AgADKQIAAnM7MUc.webp",
+  "AgADKwIAAonnMUc.webp",
+  "AgADLwMAAoU-MUc.webp",
+  "AgADMAIAAlQ7KEc.webp",
+  "AgADMAQAAhyYKEc.webp",
+  "AgADNQIAAiZ8MEc.webp",
+  "AgADNwIAAh8GKEc.webp",
+  "AgADQAUAAoiEMEc.webp",
+  "AgADVAIAApvVMUc.webp",
+  "AgADVgMAAnNoMEc.webp",
+  "AgADXwIAAvZ9MUc.webp",
+  "AgADZAIAApt9MEc.webp",
+  "AgAD_wEAAg62MUc.webp",
+  "AgADaAMAAhABMEc.webp",
+  "AgADagIAApFlKEc.webp",
+  "AgADbQEAAgXqKUc.webp",
+  "AgADcQIAAvC5MEc.webp",
+  "AgADdgIAAh7pMUc.webp",
+  "AgADfAIAApqyMEc.webp",
+  "AgADgAIAAgxWKEc.webp",
+  "AgADggIAAtYxKUc.webp",
+  "AgADhAIAAlmOKEc.webp",
+  "AgADiQIAAqbhMEc.webp",
+  "AgADkgIAAhc3KUc.webp",
+  "AgADlAEAAp7xMEc.webp",
+  "AgADngIAAv9iMUc.webp",
+  "AgADqAEAAur2MEc.webp",
+  "AgADtAIAAv1TMUc.webp",
+  "AgADtQIAAitvMUc.webp",
+  "AgADvgEAAkdyKEc.webp",
+  "AgADyQcAAuN4BAAB.webp",
+  "AgADywIAAn6AIEQ.webp",
+])
+
+export function isKnownSticker(name: string): boolean {
+  return KNOWN_STICKERS.has(name)
+}
+
 /**
  * Parse a message body; returns the attachment (and the leading caption) if present.
  * Rejects oversized payloads (M2): the 2 MB cap is only enforced at SEND time in the
  * UI, so a hostile peer/relay could push an arbitrarily large base64 blob. We cap on
  * parse too, so nothing beyond MAX_ATTACHMENT_BYTES ever reaches state or storage.
+ *
+ * v3: Known sticker reference format: `<filename>\n\n0\n\n` sends only the filename,
+ * size 0. Receiver renders from bundled assets via StickerImg.
  */
 export function parseAttachment(
   body: string
@@ -136,6 +198,10 @@ export function parseAttachment(
   const size = parseInt(m[4], 10)
   const data = m[5]
   if (!name || !Number.isFinite(size)) return null
+  // v3 sticker reference: size=0 and empty data means "use bundled asset"
+  if (size === 0 && !data && isKnownSticker(name)) {
+    return { meta: { name, mime: 'image/webp', size: 0, data: '' }, caption: '' }
+  }
   if (size > MAX_ATTACHMENT_BYTES) return null
   return { meta: { name, mime, size, data }, caption: '' }
 }
@@ -154,4 +220,3 @@ export function formatBytes(bytes: number): string {
 }
 
 export const MAX_ATTACHMENT_LABEL = formatBytes(MAX_ATTACHMENT_BYTES)
-

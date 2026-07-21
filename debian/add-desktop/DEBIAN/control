@@ -12,6 +12,6 @@ Description: Add Desktop - Electron GUI client for Add messenger
   - TTL auto-destruct timer (2h, 12h, 24h, 48h, 5d, 7d, 14d)
   - Emoji picker integration
   - Reflector Bot for latency testing
-Depends: libnss3, libatk1.0-0, libatk-bridge2.0-0, libcups2, libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxrandr2, libgbm1, libasound2, libpangocairo-1.0-0, libpango-1.0-0, libgtk-3-0
+Depends: libnss3, libatk1.0-0, libatk-bridge2.0-0, libcups2, libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxrandr2, libgbm1, libasound2, libpangocairo-1.0-0, libpango-1.0-0, libgtk-3-0, libtss2-esys-3.0.2-0, libtss2-tctildr0t64
 Section: net
 Priority: optional

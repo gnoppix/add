@@ -233,8 +233,20 @@ operator cannot read IPs, Null IDs, or the contact graph.
 
 ## 6. Known gaps (today)
 
-- [ ] Bootstrap DHT stores IP↔ID in plaintext (see §2).
-- [ ] No at-rest encryption of local client store.
-- [ ] No PIR → query/contact resolution linkable by traffic analysis.
+- [x] ~~Bootstrap DHT stores IP↔ID in plaintext (see §2).~~ — retired 2026-07-14
+      (open DHT removed); the relay no longer stores recipient Null IDs in
+      plaintext either (blind routing tag, 2026-07-18) and applies a store mix
+      delay (2026-07-19).
+- [x] ~~No at-rest encryption of local client store.~~ — shipped (2026-07):
+      per-field AES-256-GCM + HMAC blind index; legacy plaintext DBs migrated on
+      open. See `CHANGELOG.md`.
+- [~] No PIR → query/contact resolution linkable by traffic analysis. **Partly
+      mitigated (2026-07-19):** cert lookups use decoy `blob-get` cover plus a
+      **relay-proxied** lookup (`dht-proxy-get`) so the bootstrap sees the
+      relay's IP, not the client's. The relay now reaches bootstraps over
+      `wss://` (TLS terminated by nginx at the edge; relay builds
+      `tokio-tungstenite` with a rustls backend), so the blind path works
+      **cross-region**, not just co-located. Full PIR/ORAM blindness (query
+      confidentiality at the bootstrap) remains the research end-state (Option B).
 - [ ] Bootstrap servers co-located under one operator (no diversity).
 - [ ] DNS SRV discovery unused (falls back to hardcoded list).

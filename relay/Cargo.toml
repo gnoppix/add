@@ -15,7 +15,11 @@ rand.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tokio-tungstenite.workspace = true
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+# Relay outbound wss (proxy_dht_get / federation) needs a rustls crypto
+# backend; tokio-tungstenite's rustls-tls-native-roots does NOT enable one
+# by default in rustls 0.23, so we pin `ring` and install it at startup.
+rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 sqlx.workspace = true

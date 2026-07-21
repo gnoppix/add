@@ -289,9 +289,20 @@ obscure IP metadata from relays.
 
 ### What data does the relay see?
 
-The relay sees: sender Null ID, receiver Null ID, connection timestamps, and
-message size. It does NOT see message content (encrypted before leaving the
-client). Route through Tor to obscure IP metadata.
+What the relay sees depends on deployment:
+
+- **With `ADD_RELAY_SHARED_SECRET` configured** (recommended): incoming messages
+  are stored **under a blind HMAC routing tag**, not the receiver's Null ID — the
+  relay holds no plaintext recipient identifier. Store and fetch times are
+  randomized with a 1–60 s mix delay.
+- **Without the shared secret** (legacy mode): the relay still sees the receiver
+  Null ID, but that path is being phased out.
+- **Sealed sender** is on: the sending client uploads with sender = `anonymous`
+  and embeds the real sender inside the KEM-encrypted blob, so the relay does not
+  learn the sender's Null ID either.
+- The relay sees connection timestamps and message size, and does **not** see
+  message content (encrypted before leaving the client). Route through Tor to
+  further obscure IP metadata.
 
 ### What happens when I receive a message while offline?
 
@@ -358,7 +369,16 @@ on the relay:
 ### Which protocols and transports does Add use?
 
 - **WebSocket (`ws://` / `wss://`)** — the transport for both direct P2P
-  connections and relay mailbox access.
+  connections and relay mailbox access. Direct P2P tries loopback/LAN
+  (`ws://`, plaintext *by design* — same machine / same LAN) first, then the
+  published public address (plaintext WebSocket — the receiving client is a bare
+  `TcpListener` with no certificate/TLS, so no TLS is negotiated). This is fine:
+  P2P confidentiality comes from the **application layer** (Double Ratchet /
+  ML-KEM-1024 + ML-DSA-87 envelope sealed before bytes hit the socket), so
+  message *content* is end-to-end encrypted regardless of transport. Relay and
+  bootstrap access is always `wss://`; nginx terminates that TLS at the edge, and
+  the relay also proxies DHT lookups to bootstraps over `wss://` so the
+  bootstrap never sees the client's IP.
 - **DHT blob store** — an opaque content-addressed store (operations `blob-put` /
   `blob-get`) accessed over WebSocket to bootstrap servers. Used for presence
   records and certificate bundles. The server stores only ciphertext.
@@ -601,6 +621,25 @@ Fix: On the recipient's machine, run:
 ```
 This explicitly registers the identity with the bootstrap DHT. After registration,
 you can send messages to them.
+
+### I get "cert not found: dht-error" when sending
+
+The recipient has **not published their public certificate** (containing their
+ML-KEM encapsulation key) to the DHT. Without it, the sender cannot encrypt a
+message for them.
+
+Fix: On the recipient's machine:
+```bash
+./add publish-cert
+```
+
+You'll be prompted for your GPG passphrase (or set `ADD_DB_PASSPHRASE` for
+headless operation). Once published, you can send messages to them.
+
+Both parties also need each other's Null IDs in their contact lists:
+```bash
+./add add-contact NN-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
 
 ### Why is there no group messaging yet?
 

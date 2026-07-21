@@ -10,6 +10,6 @@ Description: Add Bootstrap Server - DHT seed for peer discovery
   - DNS SRV service discovery
   - Key ownership verification
   - Rate limiting and anti-abuse
-Depends: libssl3
+Depends: libssl3, libtss2-esys-3.0.2-0, libtss2-tctildr0t64
 Section: net
 Priority: optional

@@ -12,6 +12,6 @@ Description: Add P2P Messenger Client - Post-quantum encrypted messaging
   - Optional relay for offline message delivery
   - Tor support for anonymity
   - Reflector Bot integration for latency testing
-Depends: libssl3, libsqlite3-0
+Depends: libssl3, libsqlite3-0, libtss2-esys-3.0.2-0, libtss2-tctildr0t64
 Section: net
 Priority: optional

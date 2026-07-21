@@ -1012,8 +1012,20 @@ fn verify_dht_put_signature(
         // way C3 binds bootstrap certs: the VK must derive to `publisher_fp`.
         // Without this an attacker who controls the envelope could assert an
         // arbitrary VK and sign with it, defeating the publisher_fp check.
+        //
+        // The post-quantum fingerprint (`pq_publisher_fp`, VK-derived) is used
+        // for the binding when present; otherwise we fall back to `publisher_fp`
+        // (older clients / the cert-publish path send the PQ fp there). The
+        // OpenPGP/GPG `publisher_fp` is intentionally NOT used for this check:
+        // it can never equal the VK-derived PQ fp, which previously caused
+        // every identity registration to fail with "signature verification
+        // failed".
         let derived_fp = add_crypto_pq::fingerprint_from_verifying_key(&vk);
-        if !constant_time_compare(&derived_fp, publisher_fp) {
+        let asserted_fp = env
+            .payload_str("pq_publisher_fp")
+            .unwrap_or(publisher_fp)
+            .to_string();
+        if !constant_time_compare(&derived_fp, &asserted_fp) {
             return false;
         }
         return verify_signature_with_verifying_key(sign_data, sig, &vk);
@@ -1102,6 +1114,124 @@ mod tests {
             env.payload_i64("nonce").unwrap()
         );
         assert!(verify_dht_put_signature(&sign_data_str, &env.sig, fp, &env));
+    }
+
+    /// Helper: a DHT-put envelope that also carries `publisher_verifying_key`
+    /// and `pq_publisher_fp` — i.e. the real client's registration contract.
+    /// This is what exercises the VK→fp binding branch in
+    /// `verify_dht_put_signature` (the path that previously failed with
+    /// "signature verification failed" because it compared the VK-derived PQ
+    /// fp against the GPG `publisher_fp`).
+    fn create_signed_put_env_with_vk(
+        key: &str,
+        value: &str,
+        salt: &str,
+        seq: i64,
+        signing_key: &MlDsa87SigningKey,
+        verifying_key: &MlDsa87VerifyingKey,
+        publisher_fp: &str,
+        pq_publisher_fp: &str,
+    ) -> (WireEnvelope, u64) {
+        use ml_dsa::KeyExport;
+        let vk_b64 = base64::engine::general_purpose::STANDARD.encode(verifying_key.to_bytes());
+        let pow_nonce = pow_solve(
+            &format!("{key}{value}{salt}{seq}"),
+            constants::MIN_POW_DIFFICULTY,
+            100_000,
+            publisher_fp.as_bytes(),
+        )
+        .unwrap()
+        .expect("PoW solution should be found within attempt limit");
+
+        let sign_data_str = format!("{key}|{value}|{salt}|{seq}|{pow_nonce}");
+        let sig = crate::sign_data(&sign_data_str, signing_key).unwrap();
+
+        let payload = serde_json::json!({
+            "key": key,
+            "value": value,
+            "salt": salt,
+            "seq": seq,
+            "nonce": pow_nonce,
+            "publisher_fp": publisher_fp,
+            "publisher_verifying_key": vk_b64,
+            "pq_publisher_fp": pq_publisher_fp,
+        });
+        let env = WireEnvelope {
+            msg_type: "dht-put".to_string(),
+            payload,
+            msg_id: add_protocol::envelope::uuid_hex(),
+            ts: now_unix(),
+            sig,
+        };
+        (env, pow_nonce)
+    }
+
+    #[test]
+    fn test_verify_dht_put_signature_vk_binding_with_pq_fp() {
+        // Reproduces the real registration contract: publisher_fp is the GPG
+        // fingerprint, pq_publisher_fp is the VK-derived PQ fingerprint.
+        // Before the fix the server compared the VK-derived fp against the GPG
+        // publisher_fp and always rejected registration. After the fix it
+        // prefers pq_publisher_fp, so this must pass.
+        let (signing_key, verifying_key) = add_crypto_pq::generate_keypair().unwrap();
+        let publisher_fp = "AABBCCDDEEFF00112233445566778899AABBCCDD"; // GPG-style 40-hex
+        let pq_publisher_fp = add_crypto_pq::fingerprint_from_verifying_key(&verifying_key);
+
+        // Server binds the VK to pq_publisher_fp via the cache.
+        cache_test_verifying_key(&verifying_key, &pq_publisher_fp);
+
+        let key = compute_null_id(publisher_fp);
+        let (env, _) = create_signed_put_env_with_vk(
+            &key,
+            "dGVzdA==",
+            "somesalt",
+            0,
+            &signing_key,
+            &verifying_key,
+            publisher_fp,
+            &pq_publisher_fp,
+        );
+
+        let sign_data_str = format!(
+            "{}|dGVzdA==|somesalt|0|{}",
+            key,
+            env.payload_i64("nonce").unwrap()
+        );
+        assert!(verify_dht_put_signature(&sign_data_str, &env.sig, publisher_fp, &env));
+    }
+
+    #[test]
+    fn test_verify_dht_put_signature_vk_binding_wrong_pq_fp_rejected() {
+        // The envelope's pq_publisher_fp must match the VK it carries. If an
+        // attacker swaps in a non-matching pq_publisher_fp the binding check
+        // must reject it (no identity substitution).
+        let (signing_key, verifying_key) = add_crypto_pq::generate_keypair().unwrap();
+        let publisher_fp = "AABBCCDDEEFF00112233445566778899AABBCCDD";
+        let pq_publisher_fp = add_crypto_pq::fingerprint_from_verifying_key(&verifying_key);
+
+        // A DIFFERENT pq fp that does NOT derive from the envelope's VK.
+        let (_sk2, vk2) = add_crypto_pq::generate_keypair().unwrap();
+        let wrong_pq_fp = add_crypto_pq::fingerprint_from_verifying_key(&vk2);
+        assert_ne!(pq_publisher_fp, wrong_pq_fp);
+
+        let key = compute_null_id(publisher_fp);
+        let (env, _) = create_signed_put_env_with_vk(
+            &key,
+            "dGVzdA==",
+            "somesalt",
+            0,
+            &signing_key,
+            &verifying_key,
+            publisher_fp,
+            &wrong_pq_fp, // mismatched: envelope VK derives to pq_publisher_fp, not this
+        );
+
+        let sign_data_str = format!(
+            "{}|dGVzdA==|somesalt|0|{}",
+            key,
+            env.payload_i64("nonce").unwrap()
+        );
+        assert!(!verify_dht_put_signature(&sign_data_str, &env.sig, publisher_fp, &env));
     }
 
     #[test]

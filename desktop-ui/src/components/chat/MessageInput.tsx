@@ -14,26 +14,19 @@
 import { useState, useRef, useEffect } from 'react'
 import { useChatStore } from '../../store/chatStore'
 import { MAX_ATTACHMENT_BYTES } from '../../types'
-import { fileToBase64, encodeAttachment, formatBytes, MAX_ATTACHMENT_LABEL, downscaleImageDataUrl } from '../../lib/attachment'
-import { EmojiImg, emojiToUrl } from '../common/EmojiImg'
+import { fileToBase64, encodeAttachment, formatBytes, MAX_ATTACHMENT_LABEL } from '../../lib/attachment'
 import { StickerImg } from '../common/StickerImg'
-// Only emoji that actually have a Moetwemoji GIF asset — every entry here is
-// guaranteed to render as an animated sticker (L2). Replaces the old hardcoded
-// EMOJI_CATEGORIES enum whose entries could silently fall back to Unicode.
-import rawEmojiCategories from '../../emoji/filtered_categories.json'
-const EMOJI_CATEGORIES = rawEmojiCategories as unknown as Record<string, string[]>
-// Generic sticker pack (non-codepoint files, e.g. Telegram-style webp).
+// Sticker pack assets
 import STICKER_PACK from '../../emoji/sticker_pack.json'
 const STICKERS = STICKER_PACK as string[]
 
-// Free Unicode emojis (no copyright issues) organized by category
 function MessageInput() {
   const [message, setMessage] = useState('')
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [showTtlPicker, setShowTtlPicker] = useState(false)
   const [selectedTtl, setSelectedTtl] = useState<string | null>(null)
-  const [activeEmojiCategory, setActiveEmojiCategory] = useState('Base Stickers')
-  const [showStickerTab, setShowStickerTab] = useState(false)
+  // Tabs: 'stickers' | 'addons'
+  const [activeTopTab, setActiveTopTab] = useState<'stickers' | 'addons'>('stickers')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const ttlPickerRef = useRef<HTMLDivElement>(null)
@@ -162,55 +155,16 @@ function MessageInput() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Insert emoji at cursor position (only used for mixed text+emoji input)
-  const insertEmoji = (emoji: string) => {
-    const textarea = textareaRef.current
-    if (!textarea) return
-
-    const start = textarea.selectionStart
-    const end = textarea.selectionEnd
-    const newMessage = message.slice(0, start) + emoji + message.slice(end)
-    setMessage(newMessage)
-    
-    // Move cursor after inserted emoji
-    setTimeout(() => {
-      textarea.focus()
-      textarea.setSelectionRange(start + emoji.length, start + emoji.length)
-    }, 0)
-  }
-
-  // Send an emoji as an animated sticker immediately (no ASCII in prompt)
-  const sendEmojiSticker = (emoji: string) => {
-    if (!activeConversationId) return
-    const url = emojiToUrl(emoji)
-    if (!url) {
-      // No GIF asset — fall back to inserting the character into the prompt
-      insertEmoji(emoji)
-      return
-    }
-    sendMessage(emoji)
-    setShowEmojiPicker(false)
-  }
-
-  // Send a generic pack sticker (e.g. a webp) as an inline image attachment.
-  // The bytes are read from the bundled asset via the preload (works in both
-  // dev and packaged modes) and shipped through the existing attachment
-  // envelope so the peer renders it too. Stickers are downscaled first so they
-  // stay under MAX_ATTACHMENT_BYTES (the 51 webp are ~3 MB each).
+  // Send a generic pack sticker (e.g. a webp) as a reference to the bundled asset.
+  // Since both sender and receiver have the same sticker pack, we send just the
+  // filename (understood by the receiver) to save bandwidth. Falls back to inline
+  // attachment if the receiver lacks the asset.
   const sendSticker = async (filename: string) => {
     if (!activeConversationId) return
-    const api = window.addAPI
-    const dataUrl = api?.readAsset?.(`emoji/gif/${filename}`)
-    if (!dataUrl) return
-    const scaled = await downscaleImageDataUrl(dataUrl)
-    const [meta, b64] = scaled.split(',')
-    const mime = meta.replace('data:', '').replace(';base64', '') || 'image/webp'
-    const envelope = encodeAttachment({
-      name: filename.replace(/\.[^.]+$/, '.webp'),
-      mime,
-      size: Math.ceil((b64.length * 3) / 4),
-      data: b64,
-    })
+    // Send sticker reference via envelope so receiver can look it up in bundled pack.
+    // Format: \u0001ADDATT v3\n<sticker-filename>\n<empty-mime>\n<empty-data>
+    // The receiver renders it from the bundled assets via StickerImg.
+    const envelope = `\u0001ADDATT v3\n${filename}\n\n0\n\n\u0001ENDADDATT`
     setShowEmojiPicker(false)
     sendMessage(envelope, selectedTtl && selectedTtl !== 'none' ? selectedTtl : undefined)
   }
@@ -223,8 +177,6 @@ function MessageInput() {
       el.style.height = Math.min(el.scrollHeight, 120) + 'px'
     }
   }, [message])
-
-  const emojis: string[] = EMOJI_CATEGORIES[activeEmojiCategory] || []
 
   return (
     <div className="border-t border-gray-200 bg-white p-3">
@@ -341,31 +293,29 @@ function MessageInput() {
             ref={emojiPickerRef}
             className="absolute bottom-full left-12 mb-2 w-80 max-h-60 overflow-y-auto rounded-lg border bg-white shadow-lg z-50"
           >
-            {/* Top-level tabs: emoji categories vs the sticker pack */}
+            {/* Top-level tabs: Stickers vs Addons */}
             <div className="flex border-b border-gray-200 overflow-x-auto px-2 py-1">
               <button
                 type="button"
-                onClick={() => setShowStickerTab(false)}
+                onClick={() => setActiveTopTab('stickers')}
                 className={`whitespace-nowrap px-2 py-1 text-xs rounded transition-colors ${
-                  !showStickerTab ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:bg-gray-100'
+                  activeTopTab === 'stickers' ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:bg-gray-100'
                 }`}
               >
-                Emoji
+                Stickers ({STICKERS.length})
               </button>
-              {STICKERS.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowStickerTab(true)}
-                  className={`whitespace-nowrap px-2 py-1 text-xs rounded transition-colors ${
-                    showStickerTab ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  Stickers ({STICKERS.length})
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setActiveTopTab('addons')}
+                className={`whitespace-nowrap px-2 py-1 text-xs rounded transition-colors ${
+                  activeTopTab === 'addons' ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                Addons
+              </button>
             </div>
 
-            {showStickerTab ? (
+            {activeTopTab === 'stickers' ? (
               /* Sticker pack grid */
               <div className="p-2 grid grid-cols-4 gap-1">
                 {STICKERS.map((filename) => (
@@ -381,40 +331,10 @@ function MessageInput() {
                 ))}
               </div>
             ) : (
-              <>
-                {/* Category tabs */}
-                <div className="flex border-b border-gray-200 overflow-x-auto px-2 py-1">
-                  {Object.keys(EMOJI_CATEGORIES).map((category) => (
-                    <button
-                      key={category}
-                      type="button"
-                      onClick={() => setActiveEmojiCategory(category)}
-                      className={`whitespace-nowrap px-2 py-1 text-xs rounded transition-colors ${
-                        activeEmojiCategory === category
-                          ? 'bg-primary-100 text-primary-700'
-                          : 'text-gray-600 hover:bg-gray-100'
-                      }`}
-                    >
-                      {category}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Emoji grid */}
-                <div className="p-2 grid grid-cols-8 gap-1">
-                  {emojis.map((emoji, index) => (
-                    <button
-                      key={`${activeEmojiCategory}-${index}`}
-                      type="button"
-                      onClick={() => sendEmojiSticker(emoji)}
-                      className="w-8 h-8 rounded hover:bg-gray-100 transition-colors flex items-center justify-center"
-                      aria-label={emoji}
-                    >
-                      <EmojiImg emoji={emoji} size={22} />
-                    </button>
-                  ))}
-                </div>
-              </>
+              /* Addons tab - placeholder for future extensions */
+              <div className="p-4 text-center text-gray-500 text-sm">
+                Addons coming soon
+              </div>
             )}
           </div>
         )}

@@ -12,6 +12,6 @@ Description: Add Reflector Bot - Automated echo bot for testing
   - E2E read receipts (Double Check)
   - Loop prevention to avoid infinite echo loops
   - Zero-footprint in-memory storage
-Depends: libssl3
+Depends: libssl3, libtss2-esys-3.0.2-0, libtss2-tctildr0t64
 Section: net
 Priority: optional

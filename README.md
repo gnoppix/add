@@ -84,6 +84,18 @@ Fingerprint: ABCD1234...
 
 Share your Null ID with friends so they can send you messages. Share your **fingerprint** with contacts so they can verify your identity.
 
+### 2.1 Publish your certificate
+
+Before anyone can send you messages via the relay network, publish your public certificate:
+
+```bash
+./target/release/add publish-cert
+```
+
+This uploads your ML-DSA-87 verifying key and ML-KEM encapsulation key to the DHT. You'll be prompted for your GPG passphrase (or set `ADD_DB_PASSPHRASE` for headless).
+
+---
+
 ### 3. Show your ID anytime
 
 ```bash

@@ -732,6 +732,9 @@ struct RelayState {
     /// ACS2.6 §V.1: Whether CBNP cover traffic is enabled.
     #[allow(dead_code)]
     cbnp_enabled: bool,
+    /// Bootstrap/DHT node URLs this relay proxies `dht-proxy-get` through.
+    /// When non-empty, clients can hide their source IP from the bootstrap.
+    bootstraps: Vec<String>,
 }
 
 impl RelayState {
@@ -744,6 +747,7 @@ impl RelayState {
         db_path: Option<String>,
         allow_relay: bool,
         cbnp_enabled: bool,
+        bootstraps: Vec<String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Load known peers from disk if available
         let known_peers = Self::load_known_peers_sync(&gpg_home);
@@ -790,13 +794,31 @@ impl RelayState {
             .execute(&pool)
             .await?;
 
+            // MIGRATION: older deployments created mailbox_entries without the
+            // `recipient_tag` column (added for blind routing, Tier 0+1). Add it
+            // in place BEFORE any index is built on it, so an existing
+            // mailbox.db keeps working instead of crash-looping on
+            // `no such column: recipient_tag` (the CREATE INDEX below would fail
+            // first otherwise).
+            let has_tag: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM pragma_table_info('mailbox_entries') WHERE name = 'recipient_tag'",
+            )
+            .fetch_one(&pool)
+            .await?;
+            if has_tag.0 == 0 {
+                sqlx::query("ALTER TABLE mailbox_entries ADD COLUMN recipient_tag TEXT")
+                    .execute(&pool)
+                    .await?;
+                tracing::info!("relay mailbox DB migrated: added recipient_tag column");
+            }
+
             sqlx::query(
                 "CREATE INDEX IF NOT EXISTS idx_mailbox_recipient ON mailbox_entries(recipient_nid)"
                 )
                 .execute(&pool)
                 .await?;
 
-                sqlx::query(
+            sqlx::query(
                 "CREATE INDEX IF NOT EXISTS idx_mailbox_tag ON mailbox_entries(recipient_tag)"
                 )
             .execute(&pool)
@@ -839,6 +861,7 @@ impl RelayState {
             known_peers: RwLock::new(known_peers),
             allow_relay,
             cbnp_enabled,
+            bootstraps,
         })
     }
 
@@ -1557,8 +1580,53 @@ async fn handle_message(
                 return Err("replay detected: nonce already seen".to_string());
             }
 
+            // METADATA HARDENING: apply the same mix delay used on the
+            // federation path to the direct client→relay store. Without this a
+            // relay operator can correlate "client stored at T" with a later
+            // "recipient fetched at ~T" even when the recipient blind tag is
+            // deployed. The delay is randomized per-message so stored_at
+            // buckets (60s) plus this jitter break direct timing correlation.
+            // Independent of `allow_relay` (direct stores always benefit).
+            {
+                let delay_secs = rand::Rng::gen_range(
+                    &mut rand::thread_rng(),
+                    MIX_MIN_DELAY_SECONDS..=MIX_MAX_DELAY_SECONDS,
+                );
+                if delay_secs > 0 {
+                    tracing::debug!(
+                        recipient = %req.recipient_nid,
+                        delay_sec = delay_secs,
+                        "mix: applying random delay before client store"
+                    );
+                    tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                }
+            }
+
             state.store_message(req).await?;
             send_ok(ws, None).await;
+            Ok(())
+        }
+        "dht-proxy-get" => {
+            // METADATA HARDENING (item 2, Option A): a client routes a DHT
+            // cert lookup THROUGH this relay. The relay forwards `blob-get`
+            // to a configured bootstrap over the relay's own connection, so
+            // the bootstrap sees the relay's IP, never the client's. The relay
+            // does not log the key and pipes the bootstrap's raw `dht-found`
+            // response straight back to the client (transparent proxy).
+            let key = env.payload.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if key.is_empty() {
+                return Err("dht-proxy-get missing key".to_string());
+            }
+            if state.bootstraps.is_empty() {
+                return Err("relay has no bootstrap configured for proxy".to_string());
+            }
+            let bootstraps = state.bootstraps.clone();
+            let raw = proxy_dht_get(&bootstraps, &key)
+                .await
+                .map_err(|e| e.to_string())?;
+            ws.send(Message::Text(raw.into()))
+                .await
+                .map_err(|e| format!("proxy reply send failed: {e}"))?;
             Ok(())
         }
         "relay-fetch" => {
@@ -2680,6 +2748,51 @@ async fn handle_message(
 
 /// Connect to a peer relay and maintain the connection.
 /// SECURITY FIX (HIGH-6): Implements persistent connection with message channel.
+/// Forward a `blob-get` to one of the configured bootstrap nodes and return the
+/// bootstrap's raw response text (typically a `dht-found` envelope). The relay's
+/// own connection is used, so the bootstrap never sees the originating client's
+/// IP — only the relay's. Used by the `dht-proxy-get` metadata-hardening path.
+async fn proxy_dht_get(
+    bootstraps: &[String],
+    key: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Pick a bootstrap at random so load and observation spread across seeds.
+    if bootstraps.is_empty() {
+        return Err("no bootstrap configured".into());
+    }
+    let idx = rand::Rng::gen_range(&mut rand::thread_rng(), 0..bootstraps.len());
+    let url = bootstraps[idx]
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
+    let (ws, _resp) = tokio_tungstenite::connect_async(&url).await?;
+    let (mut sink, mut stream) = ws.split();
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    let req = serde_json::json!({
+        "type": "blob-get",
+        "msg_id": uuid_hex(),
+        "ts": ts,
+        "sig": "",
+        "payload": { "key": key }
+    });
+    sink.send(Message::Text(
+        serde_json::to_string(&req)?.into(),
+    ))
+    .await
+    .map_err(|e| format!("proxy blob-get send failed: {e}"))?;
+    if let Some(msg) = stream.next().await {
+        match msg {
+            Ok(Message::Text(t)) => Ok(t.to_string()),
+            Ok(_) => Err("unexpected non-text proxy response".into()),
+            Err(e) => Err(format!("proxy read failed: {e}").into()),
+        }
+    } else {
+        Err("bootstrap closed connection without reply".into())
+    }
+}
+
 async fn connect_to_peer(
     url: String,
     state: Arc<RelayState>,
@@ -3316,6 +3429,13 @@ struct Args {
     /// Determines cover traffic rate and mixnet behavior.
     #[arg(long, default_value_t = NetworkState::Unrestricted)]
     network_state: NetworkState,
+
+    /// Bootstrap/DHT node URLs this relay proxies `dht-proxy-get` lookups to.
+    /// When set, clients can route cert lookups through this relay so the
+    /// bootstrap sees the relay's IP, not the client's (metadata hardening).
+    /// Can be specified multiple times.
+    #[arg(long, action = clap::ArgAction::Append)]
+    bootstrap: Vec<String>,
 }
 
 
@@ -3323,6 +3443,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install a rustls crypto provider for outbound wss (proxy_dht_get /
+    // federation). rustls 0.23 has no default backend, so this must run before
+    // any TLS connection is opened. `.ok()` because re-install is harmless.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("add=info".parse()?))
         .init();
@@ -3449,6 +3574,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(db_path),
             allow_relay,
             cbnp_enabled,
+            args.bootstrap.clone(),
         )
         .await?,
     );
@@ -3852,6 +3978,7 @@ mod tests {
             None,
             false,
             false,
+            Vec::new(),
         )
         .await
         .expect("new");
@@ -3897,6 +4024,7 @@ mod tests {
             None,
             false,
             false,
+            Vec::new(),
         )
         .await
         .expect("new");
@@ -3926,6 +4054,7 @@ mod tests {
             None,
             false,
             false,
+            Vec::new(),
         )
         .await
         .expect("new");

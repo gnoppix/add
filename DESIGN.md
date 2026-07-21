@@ -238,12 +238,47 @@ resistance needs **PIR** (private information retrieval — `handle_pir_query`
 is already scaffolded in `dht-core`) or cover traffic. Documented, not yet
 closed.
 
+**Mitigation shipped (2026-07-19):**
+- **Decoy cover.** A cert lookup now issues N decoy `blob-get`s for random
+  Null-ID-shaped keys around the real one, so a passive observer on the direct
+  path cannot trivially single out the target key.
+- **Relay-proxied blind lookup.** The client can route the lookup *through its
+  relay* (`dht-proxy-get`). The relay forwards `blob-get` to a configured
+  bootstrap over the relay's own connection and returns the bootstrap's
+  `dht-found` raw. The bootstrap then sees the **relay's** IP, not the client's —
+  the client→bootstrap source-IP↔Null-ID link is broken whenever a relay proxy
+  is used. See §4.6.
+
 ### 4.5 Product trade-off
 
 Closed discovery means **no open first contact with strangers** — you must
 import the peer's key out-of-band first (which Add already requires: import +
 fingerprint verify). This is a deliberate constraint, consistent with the
 "authenticated contacts only" model, and should be stated plainly to users.
+
+### 4.6 Blind lookups & relay-side mix delay (2026-07-19)
+
+**Client → relay → bootstrap proxy.** New protocol verbs:
+- client → relay: `dht-proxy-get { key }`
+- relay → bootstrap: `blob-get { key }`
+- bootstrap → relay: `dht-found { value }`
+- relay → client: `dht-found { value }` (raw, transparent pipe)
+
+The relay picks a random configured bootstrap (`--bootstrap <url>`, repeatable)
+and does **not** log the key. The client's `dht_fetch_cert_blind()` prefers this
+proxy and falls back to a direct bootstrap connection if no relay is configured
+or the proxy fails — backward-compatible, no new on-wire format.
+
+**Relay-store mix delay.** Every `relay-store` applies a randomized 1–60 s delay
+before persisting, decoupling the message's *store* time from its later *fetch*
+time. This blunts send↔deliver correlation on the relay's write/fetch timeline
+(the same delay already applied to federated `relay-forward`).
+
+**Residuals:** the bootstrap still sees the raw key on the wire (from the relay),
+so this is *blindness of source IP*, not *blindness of the query itself*
+(true PIR/ORAM blindness, Option B, remains the research end-state). Relays
+without `--bootstrap` keep the prior direct-lookup behavior via the client
+fallback.
 
 ---
 
@@ -254,7 +289,7 @@ fingerprint verify). This is a deliberate constraint, consistent with the
 | KEM (key agree)  | ML-KEM-1024 (203)       | `ml-kem` 0.3                          |
 | Signatures       | ML-DSA-87 (204)         | `sequoia-openpgp` / `pqcrypto-dilithium` |
 | Session          | Double Ratchet          | AES-256-GCM per frame, forward secret |
-| Transport        | `ws://` (direct P2P)    | app-layer encrypted; `wss://` on relay|
+| Transport        | `ws://` loopback/LAN (direct P2P, by design), public P2P plaintext WS (E2E-encrypted at app layer), `wss://` relay + bootstrap (TLS-terminated by nginx) | content always E2E-encrypted; P2P trust is app-layer, not transport |
 | PoW              | (retired) addr-record   | nonce-log PoW was on the deleted `addr:` write; presence blobs need no PoW |
 
 No system GnuPG binary; all crypto is in-process Rust.

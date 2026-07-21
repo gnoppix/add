@@ -1,6 +1,85 @@
 # Changelog
 
 
+## 2026-07-19 (pt. 2) — Relay deployment hardening: DB migration, wss bootstrap, P2P TLS
+
+- **Relay mailbox DB migration (crash-loop fix).** The blind-routing
+  `recipient_tag` column (added 2026-07-18) was previously created *after* the
+  `idx_mailbox_tag` index, so any relay with a pre-existing `mailbox.db` (no
+  column yet) crashed on startup with `no such column: recipient_tag` and
+  systemd's `Restart=always` turned it into a crash-loop. `open()` now runs
+  `ALTER TABLE mailbox_entries ADD COLUMN recipient_tag` *before* the index, and
+  only if the column is absent (`pragma_table_info` check). Existing relays
+  migrate in place on first start. Verified live on all three regions.
+
+- **Relay → bootstrap over TLS (full multi-region blindness).** The relay's
+  outbound WebSocket client previously had no TLS backend compiled in, so it
+  could only reach a *co-located* bootstrap over `ws://127.0.0.1:9001`. The
+  relay now builds `tokio-tungstenite` with `rustls-tls-native-roots` plus a
+  `ring` crypto provider installed at startup, and each relay's `--bootstrap`
+  now points at the **public** `wss://bootstrap-{eu,us,asia}.gnoppix.org/ws`
+  endpoints (all three regions). nginx terminates the TLS at the edge; the relay
+  only speaks plaintext on localhost. A client hitting any relay now gets a
+  *blind* DHT lookup even cross-region — the bootstrap sees the relay's egress
+  IP, never the client's. (Relay egress trusts the OS native root store; it is
+  encrypted but not cert-pinned — pinning on the relay side is a documented
+  residual.)
+
+- **P2P transport (clarified).** Direct P2P candidate order: loopback
+  `ws://127.0.0.1`, then LAN `ws://<ip>` (both plaintext *by design* — same
+  machine / same LAN trust zone), then the published public address. The public
+  P2P hop is **plaintext WebSocket** — the receiving client is a bare
+  `TcpListener` + `accept_async`, with no certificate and no TLS acceptor, so no
+  TLS is negotiated (the `wss://` in the published URL is not TLS-terminated
+  end-to-end). This is deliberate: P2P confidentiality and integrity come from
+  the **application layer** — the Double Ratchet / ML-KEM-1024 + ML-DSA-87
+  envelope is applied *before* bytes hit the socket, exactly as on the relay
+  path. So message *content* is end-to-end encrypted regardless of transport;
+  only transport-level metadata (who-connects-to-whom, timing, frame sizes) is
+  visible to an on-path observer. No path carries message *content* in
+  plaintext; the absence of P2P TLS is accepted because content is already
+  E2E-protected.
+
+## 2026-07-19 — Metadata hardening: relay-store mix delay + blind DHT lookups
+
+- **Relay-store mix delay (item 1).** `relay-store` now applies the same
+  randomized 1–60 s mix delay that `relay-forward` (federation) already used,
+  so a message's *store* time is decoupled from its later *fetch* time. An
+  observer watching the relay's write/fetch timeline can no longer sharpen the
+  send↔deliver correlation by exact timestamp. Applies on every store
+  unconditionally (independent of federation allow-listing).
+
+- **Blind DHT cert lookups (item 2).** Two complementary layers now hide the
+  *client→bootstrap* metadata link:
+  1. **Relay-proxied lookup (Option A).** Relay gained a repeatable
+     `--bootstrap <url>` arg and a new `dht-proxy-get` handler. The client
+     sends the key to its *relay*; the relay forwards `blob-get` to a randomly
+     chosen configured bootstrap over the relay's own connection and pipes the
+     bootstrap's raw `dht-found` response back. The bootstrap therefore sees the
+     **relay's** IP, never the client's. The relay does not log the key. Client
+     side: new `dht_proxy_fetch_cert()` + `dht_fetch_cert_blind()` (prefers the
+     relay proxy, transparently falls back to a direct lookup if no relay is
+     configured or the proxy fails). All three cert-lookup callers
+     (`fetch_peer_verifying_key`, `lookup_kyber_for_nid`, `FetchCert`) now route
+     through the blind path. No protocol break — the client reuses its existing
+     `dht-found` parser on the relay's reply.
+  2. **Decoy cover (defense-in-depth).** `dht_fetch_cert` already sprinkles N
+     decoy `blob-get`s for random Null-ID-shaped keys around the real lookup,
+     so a passive observer on the direct path can't trivially pick out which
+     one key is the real target.
+
+  **What this buys:** the client→bootstrap source-IP↔Null-ID association is
+  broken whenever a relay proxy is in play. The bootstrap still sees the raw
+  key on the wire (from the relay) — true PIR/ORAM blindness (Option B) remains
+  the documented research end-state. Relays without `--bootstrap` keep the old
+  direct behavior via the client fallback.
+
+- **Status of these changes:** coded + `cargo check`/`cargo test` green
+  (`add-relay` 15 passed, `add-client` 4 passed). **Not yet committed/pushed**
+  (standing hold). Activation requires each relay to be started with
+  `--bootstrap wss://bootstrap-<region>.gnoppix.org/ws`.
+
+
 ## 2026-07-19 — Operational hardening (items 10 + 11) + Tier-3 plan
 
 - **Item 11 — TLS certificate pinning (client).** Every relay and bootstrap

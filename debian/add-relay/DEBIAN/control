@@ -12,6 +12,6 @@ Description: Add Relay Server - Store-and-forward message relay
   - Federation with peer relays
   - CBNP cover traffic (optional)
   - Mix routing delays for metadata protection
-Depends: libssl3, libsqlite3-0
+Depends: libssl3, libsqlite3-0, libtss2-esys-3.0.2-0, libtss2-tctildr0t64
 Section: net
 Priority: optional

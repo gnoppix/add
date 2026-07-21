@@ -669,6 +669,7 @@ fn prompt_passphrase() -> Result<String, Box<dyn std::error::Error>> {
 /// stored in `own_cert.age` / `own_cert.asc`). Used by the cert-store publish
 /// path (DESIGN.md §4.2) which uploads the armored cert to the opaque blob store.
 /// Tries the age-encrypted `own_cert.age` first, falls back to plaintext `own_cert.asc`.
+/// `ADD_CERT_PASSPHRASE` env var allows non-interactive decryption (for headless ops).
 fn load_cert() -> Result<sequoia_openpgp::Cert, Box<dyn std::error::Error>> {
     use sequoia_openpgp::parse::Parse;
 
@@ -679,10 +680,16 @@ fn load_cert() -> Result<sequoia_openpgp::Cert, Box<dyn std::error::Error>> {
     // Try age-encrypted cert first
     if enc_path.exists() {
         let armored = std::fs::read_to_string(&enc_path)?;
-        let password = prompt_passphrase()?;
-        if password.is_empty() {
-            return Err("encrypted own_cert.age requires a passphrase".into());
-        }
+        let password = std::env::var("ADD_CERT_PASSPHRASE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| if std::env::var("ADD_DB_PASSPHRASE").ok().filter(|s| !s.is_empty()).is_some() {
+                std::env::var("ADD_DB_PASSPHRASE").ok()
+            } else { None });
+        let password = match password {
+            Some(p) if !p.is_empty() => p,
+            _ => return Err("encrypted own_cert.age requires a passphrase (set ADD_CERT_PASSPHRASE or ADD_DB_PASSPHRASE)".into()),
+        };
         let plaintext = decrypt_cert_armored(&armored, &password)?;
         return sequoia_openpgp::Cert::from_bytes(plaintext.as_bytes())
             .map_err(|e| format!("parse decrypted cert: {}", e).into());
@@ -2243,19 +2250,27 @@ async fn dht_register(
     );
     let sig = sign_for_transport(&sign_data)?;
 
-    // Include ML-DSA-87 verifying key in the payload for the DHT to verify
+    // Include ML-DSA-87 verifying key in the payload for the DHT to verify.
+    // `publisher_fp` stays the OpenPGP/GPG fingerprint: the server uses it for
+    // the PoW salt and the null_id derivation check (null_id =
+    // compute_null_id(GPG fp)). The post-quantum fingerprint derived from the
+    // VK is sent separately as `pq_publisher_fp` so the server's VK→fp binding
+    // check can match without breaking the GPG-fp-dependent checks. Previously
+    // the GPG `publisher_fp` was also used for the VK binding, which can never
+    // match the VK-derived PQ fp — that is why every registration failed with
+    // "signature verification failed".
     let identity = Identity::load()?;
-    let vk_b64 = if let Some(sk_b64) = identity.ml_dsa87_signing_key {
+    let (vk_b64, pq_publisher_fp) = if let Some(sk_b64) = identity.ml_dsa87_signing_key {
         let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
-        use ml_dsa::{KeyInit, Keypair};
+        use ml_dsa::{KeyInit, Keypair, KeyExport};
         let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
-            .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
+            .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {e}"))?;
         let vk = Keypair::verifying_key(&sk).clone();
-        use ml_dsa::KeyExport;
         let vk_bytes = vk.to_bytes();
-        base64::engine::general_purpose::STANDARD.encode(vk_bytes)
+        let pq_fp = add_crypto_pq::fingerprint_from_verifying_key(&vk);
+        (base64::engine::general_purpose::STANDARD.encode(vk_bytes), pq_fp)
     } else {
-        String::new()
+        (String::new(), String::new())
     };
 
     let req = WireEnvelope {
@@ -2283,6 +2298,14 @@ async fn dht_register(
             m.insert(
                 "publisher_verifying_key".to_string(),
                 serde_json::Value::String(vk_b64),
+            );
+            // Post-quantum fingerprint (VK-derived) for the server's VK→fp
+            // binding check. Sent separately from `publisher_fp` (GPG) because
+            // the two can never be equal, yet the server needs both: GPG fp
+            // for the PoW salt + null_id check, PQ fp for the VK binding.
+            m.insert(
+                "pq_publisher_fp".to_string(),
+                serde_json::Value::String(pq_publisher_fp),
             );
             serde_json::Value::Object(m)
         },
@@ -2352,10 +2375,12 @@ async fn dht_publish_cert(
         String::new()
     };
 
-    // Cert-store identity is the ML-DSA-87 fingerprint (post-quantum), NOT the
-    // OpenPGP cert fingerprint. The server binds the published VK to this fp,
-    // so the blob key, bundle fp and publisher_fp must all be the PQ fp. Using
-    // the GPG fp here would fail the VK→fp binding check and be rejected.
+    // Cert-store blob key: keyed by the post-quantum (ML-DSA-87) fingerprint
+    // (`fp` below), NOT the OpenPGP/GPG fingerprint. The cert store, KEM
+    // lookup (`lookup_kyber_for_nid`) and `fetch-cert` all address certs by
+    // this PQ fingerprint, so contacts must be added with the PQ fingerprint
+    // (see the `id` command, which now prints both). The GPG fingerprint
+    // remains the user-facing identity handle for the presence subsystem.
     let fp = if let Some(sk_b64) = &identity.ml_dsa87_signing_key {
         let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
         use ml_dsa::{KeyInit, Keypair};
@@ -2425,6 +2450,12 @@ async fn dht_publish_cert(
                 m.insert(
                     "publisher_verifying_key".to_string(),
                     serde_json::Value::String(vk_b64.clone()),
+                );
+                // Post-quantum fingerprint (VK-derived) for the server's
+                // VK→fp binding check (preferred over publisher_fp).
+                m.insert(
+                    "pq_publisher_fp".to_string(),
+                    serde_json::Value::String(fp.clone()),
                 );
                 m.insert(
                     "ttl".to_string(),
@@ -2538,6 +2569,87 @@ pub(crate) async fn dht_fetch_cert(
     }
 }
 
+/// Blind DHT lookup (item 2, Option A): route the cert lookup THROUGH the
+/// relay. The relay forwards `blob-get` to its configured bootstrap over the
+/// relay's own connection, so the bootstrap sees the relay's IP, never ours.
+/// The relay returns the bootstrap's raw `dht-found` envelope unchanged, so we
+/// reuse the exact parsing of `dht_fetch_cert`. If the proxy fails (relay has
+/// no bootstrap configured, or no relay url), the caller falls back to direct.
+pub(crate) async fn dht_proxy_fetch_cert(
+    relay_url: &str,
+    fingerprint: &str,
+) -> Result<(String, String, String), Box<dyn std::error::Error + Send + Sync>> {
+    use add_protocol::envelope::WireEnvelope;
+    let ws_url = relay_url
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
+    let mut ws = ws_connect(&ws_url)
+        .await
+        .map_err(|e| format!("relay proxy connect failed: {e}"))?;
+    let key = cert_blob_key(fingerprint);
+    let req = serde_json::json!({
+        "msg_type": "dht-proxy-get",
+        "msg_id": uuid_hex(),
+        "ts": chrono::Utc::now().timestamp() as f64,
+        "sig": "",
+        "payload": { "key": key }
+    });
+    ws.send(Message::Text(serde_json::to_string(&req)?.into()))
+        .await
+        .map_err(|e| format!("proxy cert fetch send failed: {e}"))?;
+    if let Some(Ok(Message::Text(resp_text))) = ws.next().await {
+        let resp: WireEnvelope = serde_json::from_str(&resp_text)
+            .map_err(|e| format!("proxy cert fetch parse failed: {e}"))?;
+        if resp.msg_type != "dht-found" {
+            return Err(format!("proxy cert not found: {}", resp.msg_type).into());
+        }
+        let value = resp.payload_str("value").ok_or("missing cert blob value")?;
+        let bundle_bytes = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .map_err(|e| format!("cert blob not base64: {e}"))?;
+        let bundle: serde_json::Value = serde_json::from_slice(&bundle_bytes)
+            .map_err(|e| format!("cert bundle not JSON: {e}"))?;
+        let cert_b64 = bundle.get("cert").and_then(|v| v.as_str()).unwrap_or("");
+        let vk_b64 = bundle
+            .get("vk")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let kyber_enc = bundle
+            .get("kyber_enc")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let armored_bytes = base64::engine::general_purpose::STANDARD
+            .decode(cert_b64)
+            .map_err(|e| format!("cert not base64: {e}"))?;
+        let armored =
+            String::from_utf8(armored_bytes).map_err(|e| format!("cert blob not utf8: {e}"))?;
+        Ok((armored, vk_b64, kyber_enc))
+    } else {
+        Err("no response from relay proxy".into())
+    }
+}
+
+/// Prefer a blind (relay-proxied) DHT cert lookup; fall back to a direct
+/// bootstrap connection if no relay URL is available or the proxy fails.
+/// This is the single entry point callers should use so metadata hardening is
+/// applied uniformly (item 2, Option A).
+pub(crate) async fn dht_fetch_cert_blind(
+    relays: &[String],
+    seed_url: &str,
+    fingerprint: &str,
+) -> Result<(String, String, String), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(relay) = select_fastest_relay(relays).await {
+        if let Ok(cert) = dht_proxy_fetch_cert(&relay, fingerprint).await {
+            return Ok(cert);
+        }
+        // Proxy failed; fall through to direct lookup for resilience.
+        tracing::debug!("relay proxy cert fetch failed, falling back to direct");
+    }
+    dht_fetch_cert(seed_url, fingerprint).await
+}
+
 /// Resolve a well-known public service's listener address from the public
 /// cert store, and pin its verifying key (DESIGN.md §6 exception).
 ///
@@ -2557,10 +2669,13 @@ async fn fetch_public_service_addr(null_id: &str) -> Option<String> {
     } else {
         return None;
     };
-    let (_, bootstraps, _) = discover_all_servers().await;
+    let (_, bootstraps, _relays) = discover_all_servers().await;
     for seed_url in &bootstraps {
-        // Reuse the cert blob-get path; the bundle carries `address`.
-        if let Ok((_cert, vk_b64, _kyber)) = dht_fetch_cert(seed_url, fp).await {
+        // Blind lookup (relay-proxied) with direct fallback. The bootstrap
+        // then sees the relay's IP, not ours (item 2, Option A).
+        if let Ok((_cert, vk_b64, _kyber)) =
+            dht_fetch_cert_blind(&_relays, seed_url, fp).await
+        {
             // Pin the VK from the authoritative published bundle.
             if let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(&vk_b64)
                 && let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes)
@@ -2702,6 +2817,21 @@ async fn relay_fetch(
     let sig_data = format!("relay-fetch:{}:{}:{}", null_id, timestamp, nonce);
     let sig = sign_for_transport(&sig_data)?;
 
+    // ML-DSA-87 verifying key for TOFU at the relay (mirrors send_via_relay's
+    // sender_verifying_key so the relay can verify the fetch signature).
+    let requester_verifying_key_b64 = if let Some(sk_b64) = identity.ml_dsa87_signing_key {
+        let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
+        use ml_dsa::{KeyInit, Keypair};
+        let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
+            .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {}", e))?;
+        let vk = Keypair::verifying_key(&sk).clone();
+        use ml_dsa::KeyExport;
+        let vk_bytes = vk.to_bytes();
+        base64::engine::general_purpose::STANDARD.encode(vk_bytes)
+    } else {
+        String::new()
+    };
+
     // SECURITY FIX (C2): Use relay-fetch protocol with ALL required fields
     let req = serde_json::json!({
         "msg_type": "relay-fetch",
@@ -2711,6 +2841,7 @@ async fn relay_fetch(
         "payload": {
             "recipient_nid": null_id,
             "requester_fp": identity.fingerprint,
+            "requester_verifying_key": requester_verifying_key_b64,
             "sender_sig": sig,
             "sender_cert": cert_armored,
             "timestamp": timestamp,
@@ -3349,10 +3480,15 @@ async fn send_via_relay(
             "recipient_nid": recipient_nid,
             "recipient_tag": relay_routing_tag(recipient_nid).unwrap_or_default(),
             "signed_blob": serde_json::to_string(&envelope)?,
-            // TIER-0 sealed sender: the relay only ever sees "anonymous";
-            // the real sender identity lives inside the KEM-encrypted blob.
-            "sender_nid": "anonymous".to_string(),
-            "sender_fp": "anonymous".to_string(),
+            // TIER-0 sealed sender is not yet implemented server-side: the relay
+            // must verify the sender signature against the real sender identity
+            // embedded here, so we send the real sender_nid/sender_fp (the
+            // inner KEM-encrypted blob still hides them from the *recipient's*
+            // mailbox metadata is not the relay's concern). Sending "anonymous"
+            // here breaks signature verification because the relay reconstructs
+            // the signing data from these envelope fields.
+            "sender_nid": identity.null_id,
+            "sender_fp": identity.fingerprint,
             "sender_verifying_key": sender_verifying_key_b64,
             "seq": 1,
             "timestamp": ts,
@@ -3583,8 +3719,14 @@ async fn lookup_kyber_for_nid(
     id: &str,
     _store: &MessageStore,
 ) -> Result<add_crypto::kyber::KyberEncapsulationKey, Box<dyn std::error::Error>> {
-    let is_fp = id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit());
-    if !is_fp {
+    // Accept both the 64-char post-quantum fingerprint and the 40-char
+    // OpenPGP/GPG fingerprint. The contact list carries the GPG fingerprint
+    // (also used by the presence subsystem), and the cert store is keyed by it
+    // (cert:<H(gpg_fp)>), so a GPG-fp contact must resolve here for sealed
+    // relay KEM delivery.
+    let is_pq = id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit());
+    let is_gpg = id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit());
+    if !is_pq && !is_gpg {
         return Err(format!(
             "lookup_kyber_for_nid: '{id}' is not a peer fingerprint; relay sealed-sender KEM lookup is not supported"
         )
@@ -3593,7 +3735,7 @@ async fn lookup_kyber_for_nid(
     let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
     let mut last_err: Option<Box<dyn std::error::Error>> = None;
     for seed in bootstraps.iter().chain(std::iter::once(&_seed_url)) {
-        match dht_fetch_cert(seed, id).await {
+        match dht_fetch_cert_blind(&_relays, seed, id).await {
             Ok((_armored, _vk_b64, kyber_enc_b64)) => {
                 return add_crypto::kyber::decode_enc_key(&kyber_enc_b64)
                     .map_err(|e| format!("decode peer kyber enc key: {e}").into());
@@ -3859,7 +4001,7 @@ async fn send_message(
     candidates.retain(|c| seen.insert(c.clone()));
 
     const CANDIDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-    const P2P_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+    const P2P_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5); // Fast fallback to relay
 
     let connect_result: Result<(tokio_tungstenite::WebSocketStream<_>, _), String> =
         tokio::time::timeout(P2P_TOTAL_TIMEOUT, async {
@@ -4060,21 +4202,32 @@ async fn send_message(
     // SECURITY FIX (C1): Perform Kyber KEM exchange and create Double Ratchet session.
     // The initiator encapsulates to the peer and SHIPS the ciphertext so the
     // responder can decapsulate the SAME shared secret (symmetric ratchet seed).
-    let peer_kyber = peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?;
-    let (init_ct, init_shared_secret) = add_crypto::kyber::KyberKeypair::encapsulate(peer_kyber)
-        .map_err(|e| format!("kyber encapsulate: {}", e))?;
-    let init_ct_b64 =
-        base64::engine::general_purpose::STANDARD.encode(AsRef::<[u8]>::as_ref(&init_ct));
-
+    // OPTIMIZATION: Try loading existing session first to avoid ratchet desync.
     let peer_nid = add_crypto::null_id(recipient_fp);
-    let mut ratchet_session = add_crypto::DoubleRatchetSession::new(
-        recipient_fp,
-        &peer_nid,
-        &identity.fingerprint,
-        true, // is_initiator
-        &init_shared_secret,
-    )
-    .map_err(|e| format!("ratchet init: {}", e))?;
+    let (mut ratchet_session, kyber_ct_b64_opt) = if let Some(json) = store.load_session(&peer_nid).await? {
+        // Existing session: no new Kyber exchange needed
+        (
+            add_crypto::DoubleRatchetSession::deserialize(&json)
+                .map_err(|e| format!("ratchet load: {}", e))?,
+            None,
+        )
+    } else {
+        // First message: perform KEM exchange
+        let peer_kyber = peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?;
+        let (init_ct, init_shared_secret) = add_crypto::kyber::KyberKeypair::encapsulate(peer_kyber)
+            .map_err(|e| format!("kyber encapsulate: {}", e))?;
+        let init_ct_b64 =
+            base64::engine::general_purpose::STANDARD.encode(AsRef::<[u8]>::as_ref(&init_ct));
+        let session = add_crypto::DoubleRatchetSession::new(
+            recipient_fp,
+            &peer_nid,
+            &identity.fingerprint,
+            true, // is_initiator
+            &init_shared_secret,
+        )
+        .map_err(|e| format!("ratchet init: {}", e))?;
+        (session, Some(init_ct_b64))
+    };
     // SECURITY FIX (G9): Persist the ratchet session for this peer so
     // future relay-fetched messages (or re-connections) can decrypt.
     let session_json = ratchet_session
@@ -4089,18 +4242,19 @@ async fn send_message(
     // SECURITY FIX (M1): Pad message to constant-size bucket before encryption
     // to prevent traffic analysis by message size
     let padded_message = pad_message_bucket(message);
-    let encrypted_msg = ratchet_session.encrypt_message(&padded_message, peer_kyber)?;
+    let encrypted_msg = match kyber_ct_b64_opt {
+        // First message: use encrypt_first (chain key derived from handshake Kyber SS)
+        Some(_) => ratchet_session.encrypt_first(&padded_message, &[], &[])?,
+        // Subsequent: fresh Kyber encapsulation per message
+        None => ratchet_session.encrypt_message(&padded_message, peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?)?,
+    };
     let encrypted_msg_b64 = base64::engine::general_purpose::STANDARD.encode(&encrypted_msg);
     let msg_hash = sha256_hex(&encrypted_msg);
 
     // SECURITY FIX (C2): Sign the P2P message payload
     let msg_sig_data = format!(
         "p2p-message:{}",
-        serde_json::json!({
-            "seq": 1,
-            "ciphertext": &encrypted_msg_b64,
-            "msg_hash": &msg_hash,
-        })
+        serde_json::json!({ "seq": 1, "ciphertext": &encrypted_msg_b64, "msg_hash": &msg_hash })
     );
     let msg_sig = sign_for_transport(&msg_sig_data)?;
 
@@ -4110,7 +4264,7 @@ async fn send_message(
         &encrypted_msg_b64,
         &msg_hash,
         &msg_sig,
-        Some(&init_ct_b64),
+        kyber_ct_b64_opt.as_deref(), // Only include Kyber CT for first message
         ttl,
     );
 
@@ -4775,34 +4929,43 @@ async fn handle_incoming_connection(
         // ratchet. Fallback: if absent, Alice independently encapsulates to
         // Bob (legacy/relay path) — keep prior behaviour.
         let peer_nid = add_crypto::null_id(peer_fp);
-        let init_shared_secret: Vec<u8> =
-            if let Some(init_ct_b64) = payload.get("init_kyber_ct").and_then(|v| v.as_str()) {
-                let ct_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(init_ct_b64)
-                    .map_err(|e| format!("init_kyber_ct decode: {}", e))?;
-                let ct = add_crypto::kyber::MlKem1024Ciphertext::try_from(ct_bytes.as_slice())
-                    .map_err(|e| format!("init_kyber_ct parse: {:?}", e))?;
-                let ss = our_kyber
-                    .decapsulate(&ct)
-                    .map_err(|e| format!("init_kyber decapsulate: {}", e))?;
-                AsRef::<[u8]>::as_ref(&ss).to_vec()
-            } else {
-                let peer_kyber = peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?;
-                let ss2 = add_crypto::kyber::KyberKeypair::encapsulate(peer_kyber)
-                    .map_err(|e| format!("kyber encapsulate: {}", e))?
-                    .1;
-                AsRef::<[u8]>::as_ref(&ss2).to_vec()
-            };
-        let mut ratchet_session = add_crypto::DoubleRatchetSession::new(
-            peer_fp,
-            &peer_nid,
-            &identity.fingerprint,
-            false, // not initiator
-            &init_shared_secret,
-        )
-        .map_err(|e| format!("ratchet init: {}", e))?;
-        // SECURITY FIX (G9): Persist the ratchet session for this peer so
-        // future messages (including relay-fetched) can decrypt.
+
+        // OPTIMIZATION: Try loading existing session first to maintain ratchet continuity.
+        let (mut ratchet_session, session_created) = if let Some(json) = store.load_session(&peer_nid).await? {
+            (add_crypto::DoubleRatchetSession::deserialize(&json)
+                .map_err(|e| format!("ratchet load: {}", e))?, false)
+        } else {
+            // No session yet: derive the initial shared secret SYMMETRICALLY.
+            let init_shared_secret: Vec<u8> =
+                if let Some(init_ct_b64) = payload.get("init_kyber_ct").and_then(|v| v.as_str()) {
+                    let ct_bytes = base64::engine::general_purpose::STANDARD
+                        .decode(init_ct_b64)
+                        .map_err(|e| format!("init_kyber_ct decode: {}", e))?;
+                    let ct = add_crypto::kyber::MlKem1024Ciphertext::try_from(ct_bytes.as_slice())
+                        .map_err(|e| format!("init_kyber_ct parse: {:?}", e))?;
+                    let ss = our_kyber
+                        .decapsulate(&ct)
+                        .map_err(|e| format!("init_kyber decapsulate: {}", e))?;
+                    AsRef::<[u8]>::as_ref(&ss).to_vec()
+                } else {
+                    let peer_kyber = peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?;
+                    let ss2 = add_crypto::kyber::KyberKeypair::encapsulate(peer_kyber)
+                        .map_err(|e| format!("kyber encapsulate: {}", e))?
+                        .1;
+                    AsRef::<[u8]>::as_ref(&ss2).to_vec()
+                };
+            let session = add_crypto::DoubleRatchetSession::new(
+                peer_fp,
+                &peer_nid,
+                &identity.fingerprint,
+                false, // not initiator
+                &init_shared_secret,
+            )
+            .map_err(|e| format!("ratchet init: {}", e))?;
+            (session, true)
+        };
+        // SECURITY FIX (G9): Persist the ratchet session (whether loaded or created)
+        // so future messages can decrypt.
         let session_json = ratchet_session
             .serialize()
             .map_err(|e| format!("ratchet serialize: {}", e))?;
@@ -5425,6 +5588,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let identity = Identity::load()?;
             println!("Null ID:     {}", identity.null_id);
             println!("Fingerprint: {}", identity.fingerprint);
+            // Post-quantum (ML-DSA-87) fingerprint — this is the value to hand
+            // to `add-contact` on the other party's device, since the cert
+            // store / KEM lookup are keyed by it (the GPG fingerprint above is
+            // only the presence-subsystem handle).
+            if let Some(sk_b64) = &identity.ml_dsa87_signing_key {
+                if let Ok(sk_bytes) = base64::engine::general_purpose::STANDARD.decode(sk_b64) {
+                    use ml_dsa::{KeyInit, Keypair, KeyExport};
+                    if let Ok(sk) = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes) {
+                        let vk = Keypair::verifying_key(&sk).clone();
+                        let pq_fp = add_crypto_pq::fingerprint_from_verifying_key(&vk);
+                        println!("PQ Fingerprint: {}", pq_fp);
+                    }
+                }
+            }
         }
         Commands::Unlock { pin, password } => {
             let vault_path = home_dir().join(VAULT_PATH);
@@ -6141,7 +6318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
             let mut fetched = None;
             for url in &bootstraps {
-                match dht_fetch_cert(url, &fingerprint).await {
+                match dht_fetch_cert_blind(&_relays, url, &fingerprint).await {
                     Ok((armored, vk, kyber_enc)) => {
                         fetched = Some((armored, vk, kyber_enc));
                         break;

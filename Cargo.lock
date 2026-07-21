@@ -253,6 +253,7 @@ dependencies = [
  "ml-dsa",
  "ml-kem",
  "rand 0.8.6",
+ "rustls",
  "rustls-pemfile",
  "sequoia-openpgp",
  "serde",
