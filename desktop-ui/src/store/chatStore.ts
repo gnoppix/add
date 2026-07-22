@@ -14,18 +14,19 @@ import { create } from 'zustand'
 import type { Conversation, Message, MessageStatus } from '../types/index'
 import { generateInitialsAvatar } from '../lib/identicon'
 import { parseAttachment } from '../lib/attachment'
-
-// Dedupe key for incoming relay messages. The relay mailbox is not reliably
-// purged (relay_purge depends on ML-DSA-87 keys not present in the GPG build),
-// so `add read --json` can return the same messages on every poll. We track
-// content seen this session so the UI never shows duplicates.
-const seenIncoming = new Set<string>()
-const incomingKey = (from: string, text: string) => `${from}\\u0000${text}`
+import { useSettingsStore } from './settingsStore'
 
 // Track sent message content to filter out relay echoes
+// (only used to detect our own messages echoed back via relay)
 const sentContent = new Set<string>()
 const markSent = (text: string) => { sentContent.add(text) }
 const wasSent = (text: string) => sentContent.has(text)
+
+// Dedupe key for incoming relay messages. The relay mailbox is not reliably
+// purged, so `add read --json` can return the same messages on every poll.
+// We track content seen this session so the UI never shows duplicates.
+const seenIncoming = new Set<string>()
+const incomingKey = (from: string, text: string) => `${from}\u0000${text}`
 
 // Persistence key: survives app restart so sent/received history isn't lost.
 const STORE_KEY = 'add-chat-state-v1'
@@ -62,6 +63,10 @@ interface ChatStore {
   toggleListen: () => Promise<void>
   _lastToggleAt?: number
 
+  // Passphrase management (stored in memory, never persisted to disk)
+  setPassphrase: (passphrase: string) => void
+  clearPassphrase: () => void
+
   initialize: () => Promise<void>
   loadContacts: () => Promise<void>
   sendMessage: (content: string, ttl?: string) => Promise<void>
@@ -72,7 +77,8 @@ interface ChatStore {
 }
 
 // Electron API wrapper
-export function getEvaAPI(): typeof window.addAPI | null {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getEvaAPI(): any | null {
   if (typeof window !== 'undefined' && window.addAPI) {
     return window.addAPI
   }
@@ -177,9 +183,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })),
 
   addIncomingMessage: (conversationId: string, content: string) => {
-      // Skip if this is our own message (relay echo)
-      if (wasSent(content)) return
-
       // An incoming message may carry a file-attachment envelope.
       const parsed = parseAttachment(content)
       const attachment = parsed?.meta
@@ -348,6 +351,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const identity = await api.getMyId()
       set({ myId: identity.id, myFingerprint: identity.fingerprint, isAuthenticated: !!identity.id })
       get().hydrate()
+      
+      // Auto-start listener if enabled in settings
+      const { autoStartListener } = useSettingsStore.getState().ui
+      if (autoStartListener) {
+        try {
+          await api.startListen()
+          set({ listenRunning: true })
+          console.log('[chatStore] Auto-started P2P listener on unlock')
+        } catch (err) {
+          console.error('[chatStore] Failed to auto-start listener:', err)
+        }
+      }
     } catch (err) {
       set({ isAuthenticated: false })
     }
@@ -473,5 +488,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } else {
       await get().startListen()
     }
+  },
+
+  // Passphrase is stored in memory via main process (never persisted to disk)
+  setPassphrase: (passphrase: string) => {
+    const api = getEvaAPI()
+    if (api) { void api.setPassphrase(passphrase) }
+  },
+  storeSetPassphrase: (passphrase: string) => {
+    const api = getEvaAPI()
+    if (api) { void api.setPassphrase(passphrase) }
+  },
+  submitPassphrase: (passphrase: string) => {
+    const api = getEvaAPI()
+    if (api) { void api.submitPassphrase(passphrase) }
+  },
+  clearPassphrase: () => {
+    const api = getEvaAPI()
+    if (api) { void api.clearPassphrase() }
   },
 }))

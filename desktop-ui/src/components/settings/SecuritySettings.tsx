@@ -11,7 +11,7 @@ interface SecuritySettingsProps {
 }
 
 export default function SecuritySettings({ onClose }: SecuritySettingsProps) {
-  const { security, setSelfDestructEnabled, setSelfDestructThreshold } = useSettingsStore()
+  const { security, ui, setSelfDestructEnabled, setSelfDestructThreshold, setAutoStartListener } = useSettingsStore()
 
   return (
     <div className="p-4">
@@ -47,10 +47,31 @@ export default function SecuritySettings({ onClose }: SecuritySettingsProps) {
             <option value={20}>20 attempts</option>
           </select>
           <p className="mt-1 text-xs text-gray-500">
-            After this many wrong PIN/password entries, all identity data will be wiped.
+            After this many wrong PIN/password entries, all identity data will be
+            wiped.
           </p>
         </div>
       )}
+
+      <div className="mb-4 border-t pt-4">
+        <h3 className="mb-3 text-base font-medium">UI Settings</h3>
+        <div className="mb-4">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={ui.autoStartListener}
+              onChange={(e) => setAutoStartListener(e.target.checked)}
+              className="h-4 w-4"
+            />
+            Auto-start P2P listener on unlock
+          </label>
+          <p className="mt-1 text-xs text-gray-500">
+            When enabled, the app will automatically register your address on all
+            bootstrap servers after unlocking, so contacts can reach you immediately
+            without manually going "Online".
+          </p>
+        </div>
+      </div>
 
       {onClose && (
         <button

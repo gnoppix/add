@@ -46,8 +46,7 @@ hickory-resolver = { workspace = true, features = ["system-config", "tokio"] }
 libc = "0.2"
 
 [features]
-default = ["tpm"]
-tpm = ["add-crypto/tpm"]  # Enable TPM on Linux (tss-esapi native deps)
+default = []
 
 [[bin]]
 name = "add"

@@ -27,7 +27,7 @@ function SafetyNumberModal({ nullId, fingerprint, onClose }: SafetyNumberModalPr
         <h2 className="mb-4 text-lg font-semibold">Safety Number</h2>
         <div className="space-y-3 text-sm">
           <p>
-            <span className="font-medium">Friend's ID:</span> {nullId}
+            <span className="font-medium">Friend&apos;s ID:</span> {nullId}
           </p>
           <p>
             <span className="font-medium">Fingerprint:</span>{' '}

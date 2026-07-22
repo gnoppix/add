@@ -1,6 +1,38 @@
 # Changelog
 
 
+## 2026-07-22 — Desktop UI passphrase dialog + all-region nginx TLS + bootstrap/relay hardening
+
+- **Desktop UI: single in-app passphrase dialog.** Removed duplicate startup
+  modal; the main process now shows one HTML dialog at launch, stores the
+  passphrase in memory (`dbPassphrase`), and injects `ADD_DB_PASSPHRASE` into
+  every CLI child. Fixed `listenProcess` undefined bug that broke the "Online"
+  button (`listenProcess` now declared at module scope). Build `0.2.17` /
+  CLI `0.3.26`.
+
+- **All-region nginx TLS termination (single-port architecture).** All three
+  regions (US/me, EU/is, Asia/jp) now run nginx stream + `ssl_preread` SNI
+  routing on port 443:
+  - `bootstrap-<region>.gnoppix.org` → 127.0.0.1:9001 (bootstrap TLS)
+  - `relay-<region>.gnoppix.org` → 127.0.0.1:8765 (relay TLS)
+  - default/other SNI → 127.0.0.1:8443 (web vhosts)
+  IPv6 `listen [::]` directives removed where IPv6 is unavailable (Asia).
+  Web vhosts moved from 443 → 8443. Bootstrap & relay binaries run with
+  `--tls-cert/--tls-key` (Let's Encrypt certs) behind nginx SNI routing.
+
+- **Bootstrap & relay systemd hardening.** All services now include TLS cert/key
+  args in ExecStart. EU bootstrap service enabled (was disabled). Relay TLS
+  certs added to EU/US service files. Asia services stable with TLS certs.
+
+- **Bootstrap cert sync.** All three bootstrap DHTs now contain each other's
+  certs (manual sync since bootstrap nodes don't auto-federate). Verified
+  `fetch-cert` works with both GPG and PQ fingerprints across all regions.
+
+- **E2E messaging verified across all 3 regions.** Local ↔ US, US → Local,
+  cross-region relay delivery via sealed sender. All 3 relay regions reachable
+  via TLS SNI on 443 (`bootstrap-*/relay-*.gnoppix.org:443`).
+
+
 ## 2026-07-19 (pt. 2) — Relay deployment hardening: DB migration, wss bootstrap, P2P TLS
 
 - **Relay mailbox DB migration (crash-loop fix).** The blind-routing

@@ -47,6 +47,9 @@ declare global {
       stopListen: () => Promise<unknown>
       restartListen: () => Promise<unknown>
       listenStatus: () => Promise<{ running: boolean; pid: number | null }>
+      // Passphrase management (stored in memory, never persisted to disk)
+      setPassphrase: (passphrase: string) => Promise<{ success: boolean }>
+      clearPassphrase: () => Promise<{ success: boolean }>
       // Security
       passwd: (current: string, newPass: string) => Promise<unknown>
       unlock: (opts?: { pin?: string; password?: string }) => Promise<unknown>

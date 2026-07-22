@@ -20,7 +20,7 @@ GPG fingerprint: 9DD0503EEC8ECD9A9747ECDAE88A7C95C4EF738B
 PQ fingerprint: 1BD93975ED7ADC03B52C363E784BC338F8450C9BBABDC86B5A601FD3C376F39D
 ```
 
-**Note:** The PQ fingerprint is used for KEM operations and relay messaging. The GPG fingerprint is for the contact list and presence.
+**Note:** The PQ fingerprint (64-char hex) is used for KEM operations and relay messaging. The GPG fingerprint is for the contact list and presence.
 
 ---
 
@@ -68,17 +68,22 @@ Share these with your contact through a verified channel (QR code, voice call, e
 
 ## 4. Add a Contact
 
-Adds your friend's Null ID to your contact list. Use the **PQ fingerprint** (64-char hex) for KEM operations.
+Adds your friend's Null ID to your contact list. You can use either their Null ID **or** their GPG fingerprint (auto-resolves to PQ fingerprint via bootstrap cert lookup).
 
 ```bash
+# Using Null ID (recommended)
 add add-contact NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487
-```
 
-(Replace with your friend's actual Null ID)
+# Using GPG fingerprint (auto-fetches cert from bootstrap)
+add add-contact NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487 D5867C35F72A71D2490D66962CC132E8266A4B5C
+```
 
 **Expected output:**
 ```
 ✓ Contact added
+# or with GPG fingerprint:
+Resolved GPG FP D5867C35F72A71D2490D66962CC132E8266A4B5C -> PQ FP 678842A5171F3BC19C4BC3FA190063563C6A1995FE03A6BB68A742DB99B188B6
+Added contact: NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487 -> 678842A5171F3BC19C4BC3FA190063563C6A1995FE03A6BB68A742DB99B188B6 (PQ)
 ```
 
 ---
@@ -93,6 +98,7 @@ add send NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487 "Hello from Add!"
 
 **Output progression:**
 ```
+Using discovered bootstrap server: wss://bootstrap-us.gnoppix.org/ws
 Using 3 relay servers:
   [1] wss://relay-eu.gnoppix.org/ws
   [2] wss://relay-asia.gnoppix.org/ws
@@ -107,14 +113,13 @@ Message delivered via relay (sealed sender) to NN-d79c-...
 
 ## 5.x Send Message from CLI (Non-Interactive)
 
-For sending in scripts, cron jobs, or other non-interactive contexts where you need to provide all required secrets upfront.
+For sending in scripts, cron jobs, or other non-interactive contexts.
 
 ### Required Secrets
 
 | Secret | Purpose | Where it's used |
 |--------|---------|-----------------|
 | `ADD_DB_PASSPHRASE` | Unlocks your GPG secret key for signing | All signing operations |
-| `ADD_RELAY_SHARED_SECRET` | Generates blind routing tag (optional) | Sealed-sender metadata hardening |
 
 ### One-Shot Send Command
 
@@ -158,7 +163,7 @@ Run `add publish-cert` on the recipient's machine first.
 
 ---
 
-## 7. Read Messages
+## 6. Read Messages
 
 Polls all relays for new messages addressed to you.
 
@@ -180,7 +185,7 @@ Messages are automatically marked delivered and removed from the relay after dec
 
 ---
 
-## 8. Headless Operation (Optional)
+## 7. Headless Operation (Optional)
 
 For running `add` in a headless environment (scripts, systemd, etc.):
 
@@ -197,16 +202,47 @@ Both `publish-cert` and `read` honor this environment variable.
 
 ---
 
-## 9. Quick Reference
+## 8. Quick Reference
 
 | Command | Purpose | Required Input |
 |---------|---------|----------------|
 | `add init` | Create identity | GPG passphrase (set once) |
 | `add id` | Show identity info | None |
 | `add publish-cert` | Publish cert to DHT | GPG passphrase |
-| `add add-contact <null_id>` | Add contact | Contact's Null ID |
+| `add add-contact <null_id> [gpg_fp]` | Add contact | Contact's Null ID (optional: GPG FP) |
 | `add send <null_id> <text>` | Send message | Recipient Null ID + message text |
 | `add read` | Check messages | Passphrase (or `ADD_DB_PASSPHRASE`) |
+| `add contacts` | List contacts | None |
+| `add fetch-cert <gpg_fp>` | Fetch contact's cert | GPG fingerprint |
+
+---
+
+## 9. Network Architecture (v0.3.26+)
+
+### Bootstrap & Relay Servers (All Regions)
+
+All three regions run identical nginx TLS-termination architecture:
+
+| Region | Bootstrap | Relay |
+|--------|-----------|-------|
+| **US (me)** | `wss://bootstrap-us.gnoppix.org/ws` | `wss://relay-us.gnoppix.org/ws` |
+| **EU (is)** | `wss://bootstrap-eu.gnoppix.org/ws` | `wss://relay-eu.gnoppix.org/ws` |
+| **Asia (jp)** | `wss://bootstrap-asia.gnoppix.org/ws` | `wss://relay-asia.gnoppix.org/ws` |
+
+### Single-Port Architecture (Port 443)
+
+nginx stream module handles all TLS termination with SNI routing:
+```
+Port 443 (nginx stream)
+├── bootstrap-<region>.gnoppix.org → 127.0.0.1:9001 (add-bootstrap TLS)
+├── relay-<region>.gnoppix.org     → 127.0.0.1:8765 (add-relay TLS)
+└── default/other SNI              → 127.0.0.1:8443 (web vhosts)
+```
+
+- Bootstrap listens on **9001** (TLS)
+- Relay listens on **8765** (TLS)
+- Web vhosts on internal **8443**
+- All public traffic enters via **port 443** only
 
 ---
 
@@ -223,3 +259,7 @@ Both `publish-cert` and `read` honor this environment variable.
 ### Messages not decrypting
 - Both parties must have each other's Null IDs as contacts
 - A fresh `init` may have been run; exchange identities again
+
+### Relay fetch errors (TLS handshake EOF)
+- Check that relays have TLS certs configured (`--tls-cert`/`--tls-key`)
+- Verify nginx is running and SNI routing is correct

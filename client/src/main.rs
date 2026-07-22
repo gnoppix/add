@@ -2428,14 +2428,17 @@ async fn dht_publish_cert(
                 continue;
             }
         };
-        let req = WireEnvelope {
+        
+        // Publish under PQ fingerprint key (primary)
+        let key_pq = cert_blob_key(&fp);
+        let req_pq = WireEnvelope {
             msg_type: "blob-put".to_string(),
             msg_id: uuid_hex(),
             ts: chrono::Utc::now().timestamp() as f64,
             sig: sig.clone(),
             payload: {
                 let mut m = serde_json::Map::new();
-                m.insert("key".to_string(), serde_json::Value::String(key.clone()));
+                m.insert("key".to_string(), serde_json::Value::String(key_pq.clone()));
                 m.insert(
                     "value".to_string(),
                     serde_json::Value::String(value_b64.clone()),
@@ -2445,14 +2448,10 @@ async fn dht_publish_cert(
                     "publisher_fp".to_string(),
                     serde_json::Value::String(fp.clone()),
                 );
-                // Self-asserted verifying key — the server binds it to
-                // publisher_fp before accepting the cert blob (cert-store MITM defense).
                 m.insert(
                     "publisher_verifying_key".to_string(),
                     serde_json::Value::String(vk_b64.clone()),
                 );
-                // Post-quantum fingerprint (VK-derived) for the server's
-                // VK→fp binding check (preferred over publisher_fp).
                 m.insert(
                     "pq_publisher_fp".to_string(),
                     serde_json::Value::String(fp.clone()),
@@ -2475,8 +2474,8 @@ async fn dht_publish_cert(
                 serde_json::Value::Object(m)
             },
         };
-        let req_json = serde_json::to_string(&req)?;
-        if let Err(e) = ws.send(Message::Text(req_json.into())).await {
+        let req_pq_json = serde_json::to_string(&req_pq)?;
+        if let Err(e) = ws.send(Message::Text(req_pq_json.into())).await {
             last_error = Some(format!("cert publish send failed: {}", e));
             continue;
         }
@@ -2487,6 +2486,80 @@ async fn dht_publish_cert(
                 success_count += 1;
             } else {
                 last_error = Some(format!("cert publish rejected: {}", resp.msg_type));
+            }
+        }
+        
+        // Also publish under GPG fingerprint key for GPG-based lookups
+        let gpg_fp = {
+            use sequoia_openpgp::parse::Parse;
+            use sequoia_openpgp::serialize::Serialize;
+            let cert = load_cert().map_err(|e| e.to_string())?;
+            let mut buf = Vec::new();
+            cert.armored()
+                .serialize(&mut buf)
+                .map_err(|e| format!("serialize public cert: {}", e))?;
+            let armored = String::from_utf8(buf).map_err(|e| format!("armored cert invalid UTF-8: {}", e))?;
+            let cert_obj: sequoia_openpgp::Cert = armored.parse()?;
+            cert_obj.fingerprint().to_hex().to_uppercase()
+        };
+        let key_gpg = cert_blob_key(&gpg_fp);
+        
+        // The cert is still signed by our PQ key (VK derives to PQ fp), so use PQ fp for publisher_fp
+        let req_gpg = WireEnvelope {
+            msg_type: "blob-put".to_string(),
+            msg_id: uuid_hex(),
+            ts: chrono::Utc::now().timestamp() as f64,
+            sig: sig.clone(),
+            payload: {
+                let mut m = serde_json::Map::new();
+                m.insert("key".to_string(), serde_json::Value::String(key_gpg.clone()));
+                m.insert(
+                    "value".to_string(),
+                    serde_json::Value::String(value_b64.clone()),
+                );
+                m.insert("sig".to_string(), serde_json::Value::String(sig.clone()));
+                m.insert(
+                    "publisher_fp".to_string(),
+                    serde_json::Value::String(fp.clone()),  // Use PQ fp for VK binding
+                );
+                m.insert(
+                    "publisher_verifying_key".to_string(),
+                    serde_json::Value::String(vk_b64.clone()),
+                );
+                m.insert(
+                    "pq_publisher_fp".to_string(),
+                    serde_json::Value::String(fp.clone()),
+                );
+                m.insert(
+                    "ttl".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        add_protocol::constants::ADDR_TTL,
+                    )),
+                );
+                m.insert(
+                    "nonce".to_string(),
+                    serde_json::Value::Number((uuid_hex().len() as i64).into()),
+                );
+                m.insert("vk".to_string(), serde_json::Value::String(vk_b64.clone()));
+                m.insert(
+                    "kyber_enc".to_string(),
+                    serde_json::Value::String(kyber_enc_b64.clone()),
+                );
+                serde_json::Value::Object(m)
+            },
+        };
+        let req_gpg_json = serde_json::to_string(&req_gpg)?;
+        if let Err(e) = ws.send(Message::Text(req_gpg_json.into())).await {
+            last_error = Some(format!("cert publish send failed (gpg): {}", e));
+            continue;
+        }
+        if let Some(Ok(Message::Text(resp_text))) = ws.next().await
+            && let Ok(resp) = serde_json::from_str::<WireEnvelope>(&resp_text)
+        {
+            if resp.msg_type == "dht-found" {
+                success_count += 1;
+            } else {
+                last_error = Some(format!("cert publish rejected (gpg): {}", resp.msg_type));
             }
         }
     }
@@ -3721,9 +3794,8 @@ async fn lookup_kyber_for_nid(
 ) -> Result<add_crypto::kyber::KyberEncapsulationKey, Box<dyn std::error::Error>> {
     // Accept both the 64-char post-quantum fingerprint and the 40-char
     // OpenPGP/GPG fingerprint. The contact list carries the GPG fingerprint
-    // (also used by the presence subsystem), and the cert store is keyed by it
-    // (cert:<H(gpg_fp)>), so a GPG-fp contact must resolve here for sealed
-    // relay KEM delivery.
+    // (also used by the presence subsystem), and the cert store is keyed by
+    // PQ fingerprint (cert:<H(pq_fp)>), so we must resolve GPG FP to PQ FP.
     let is_pq = id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit());
     let is_gpg = id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit());
     if !is_pq && !is_gpg {
@@ -3732,10 +3804,34 @@ async fn lookup_kyber_for_nid(
         )
         .into());
     }
+
+    // If GPG fingerprint provided, resolve to PQ fingerprint first
+    let pq_fp = if is_gpg {
+        let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
+        let mut resolved = None;
+        for seed in &bootstraps {
+            if let Ok((_armored, _vk, _kyber)) = dht_fetch_cert_blind(&_relays, seed, id).await {
+                // Extract PQ FP from the cert's VK
+                let vk_bytes = base64::engine::general_purpose::STANDARD.decode(&_vk)
+                    .map_err(|e| format!("decode vk: {}", e))?;
+                let vk_parsed = add_crypto_pq::decode_verifying_key(&vk_bytes)
+                    .map_err(|_e| "parse vk: invalid length")?;
+                resolved = Some(add_crypto_pq::fingerprint_from_verifying_key(&vk_parsed));
+                break;
+            }
+        }
+        match resolved {
+            Some(pq) => pq,
+            None => return Err("could not resolve PQ fingerprint for GPG FP".into()),
+        }
+    } else {
+        id.to_string()
+    };
+
     let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
     let mut last_err: Option<Box<dyn std::error::Error>> = None;
     for seed in bootstraps.iter().chain(std::iter::once(&_seed_url)) {
-        match dht_fetch_cert_blind(&_relays, seed, id).await {
+        match dht_fetch_cert_blind(&_relays, seed, &pq_fp).await {
             Ok((_armored, _vk_b64, kyber_enc_b64)) => {
                 return add_crypto::kyber::decode_enc_key(&kyber_enc_b64)
                     .map_err(|e| format!("decode peer kyber enc key: {e}").into());
@@ -5774,32 +5870,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // G5: Also show locally stored messages (unless --no-stored)
             let stored = store.get_messages(20).await?;
             if !no_stored && !stored.is_empty() {
-                println!("\nStored messages (last 20):");
-                for (idx, msg) in stored.iter().enumerate() {
-                    // Messages are stored encrypted - display ciphertext preview
-                    let preview = if msg.ciphertext.len() > 40 {
-                        format!("{}...", &msg.ciphertext[..40])
-                    } else {
-                        msg.ciphertext.clone()
-                    };
-                    // Checkmark indicators based on status
-                    let checkmark = match msg.status {
-                        0 => "🔘",   // Sent
-                        1 => "☑️",   // Relayed
-                        2 => "✔️",   // Delivered
-                        3 => "✔️✔️", // Read
-                        _ => "?",
-                    };
-                    println!(
-                        "  [{}] {} {} -> {}: {}",
-                        idx + 1,
-                        checkmark,
-                        msg.from_nid,
-                        msg.to_nid,
-                        preview
-                    );
+                if json {
+                    for msg in &stored {
+                        let from = if msg.from_nid == identity.null_id {
+                            // Sent message - "from" is recipient
+                            msg.to_nid.clone()
+                        } else {
+                            // Received message
+                            msg.from_nid.clone()
+                        };
+                        let text = if msg.ciphertext.len() > 40 {
+                            format!("{}...", &msg.ciphertext[..40])
+                        } else {
+                            msg.ciphertext.clone()
+                        };
+                        let line = serde_json::json!({ "from": from, "text": text }).to_string();
+                        println!("{}", line);
+                    }
+                } else {
+                    println!("\nStored messages (last 20):");
+                    for (idx, msg) in stored.iter().enumerate() {
+                        // Messages are stored encrypted - display ciphertext preview
+                        let preview = if msg.ciphertext.len() > 40 {
+                            format!("{}...", &msg.ciphertext[..40])
+                        } else {
+                            msg.ciphertext.clone()
+                        };
+                        // Checkmark indicators based on status
+                        let checkmark = match msg.status {
+                            0 => "🔘",   // Sent
+                            1 => "☑️",   // Relayed
+                            2 => "✔️",   // Delivered
+                            3 => "✔️✔️", // Read
+                            _ => "?",
+                        };
+                        println!(
+                            "  [{}] {} {} -> {}: {}",
+                            idx + 1,
+                            checkmark,
+                            msg.from_nid,
+                            msg.to_nid,
+                            preview
+                        );
+                    }
+                    println!("  (use 'add delete <position>' to delete a message)");
                 }
-                println!("  (use 'add delete <position>' to delete a message)");
             }
         }
         Commands::Reflect {
@@ -6069,15 +6184,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fingerprint,
         } => {
             if fingerprint.len() < 32 || !fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Err("invalid fingerprint format — must be 32-40 hex chars".into());
+                return Err("invalid fingerprint format — must be 32-64 hex chars".into());
             }
+
+            // If GPG fingerprint (40 chars) provided, auto-resolve PQ fingerprint from DHT
+            let pq_fingerprint = if fingerprint.len() == 40 && fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
+                let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
+                let mut found_pq = None;
+                for url in &bootstraps {
+                    if let Ok((_armored, _vk, _kyber)) = dht_fetch_cert_blind(&_relays, url, &fingerprint).await {
+                        // Extract PQ FP from the cert's VK
+                        let vk_bytes = base64::engine::general_purpose::STANDARD.decode(&_vk)
+                            .map_err(|e| format!("decode vk: {}", e))?;
+                        let vk_parsed = add_crypto_pq::decode_verifying_key(&vk_bytes)
+                            .map_err(|_e| "parse vk: invalid length")?;
+                        found_pq = Some(add_crypto_pq::fingerprint_from_verifying_key(&vk_parsed));
+                        break;
+                    }
+                }
+                match found_pq {
+                    Some(pq_fp) => {
+                        println!("Resolved GPG FP {} -> PQ FP {}", fingerprint, pq_fp);
+                        pq_fp
+                    }
+                    None => {
+                        eprintln!("✗ Could not resolve PQ fingerprint for GPG fingerprint {}", fingerprint);
+                        std::process::exit(1);
+                    }
+                }
+            } else if fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
+                // Already a PQ fingerprint
+                fingerprint.to_uppercase()
+            } else {
+                return Err("fingerprint must be 40-char GPG or 64-char PQ hex".into());
+            };
+
             let mut contacts = load_contacts();
-            contacts.insert(null_id.clone(), fingerprint.to_uppercase());
+            contacts.insert(null_id.clone(), pq_fingerprint.clone());
             save_contacts(&contacts)?;
             println!(
-                "Added contact: {} -> {}",
+                "Added contact: {} -> {} (PQ)",
                 null_id,
-                fingerprint.to_uppercase()
+                pq_fingerprint
             );
         }
         Commands::Listen {
@@ -6320,28 +6468,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for url in &bootstraps {
                 match dht_fetch_cert_blind(&_relays, url, &fingerprint).await {
                     Ok((armored, vk, kyber_enc)) => {
-                        fetched = Some((armored, vk, kyber_enc));
+                        fetched = Some((armored, vk, kyber_enc, url.clone()));
                         break;
                     }
                     Err(e) => tracing::warn!("cert fetch from {} failed: {}", url, e),
                 }
             }
             match fetched {
-                Some((armored, vk, kyber_enc)) => {
-                    // Verify the fetched cert's fingerprint matches what Bob spoke.
+                Some((armored, vk, kyber_enc, _source_url)) => {
+                    // Verify the fetched cert's fingerprint matches what was requested.
+                    // Accept both 40-char GPG fingerprint and 64-char PQ fingerprint.
+                    let is_pq_fp = fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit());
+                    let is_gpg_fp = fingerprint.len() == 40 && fingerprint.chars().all(|c| c.is_ascii_hexdigit());
+
                     use sequoia_openpgp::parse::Parse;
                     let cert = sequoia_openpgp::Cert::from_bytes(armored.as_bytes())
                         .map_err(|e| format!("parse cert: {}", e))?;
-                    let got_fp = cert.fingerprint().to_hex().to_uppercase();
-                    if got_fp != fingerprint.to_uppercase() {
-                        eprintln!(
-                            "✗ FINGERPRINT MISMATCH: spoke '{}' but cert hashes to '{}'",
-                            fingerprint, got_fp
-                        );
-                        std::process::exit(1);
+                    let got_gpg_fp = cert.fingerprint().to_hex().to_uppercase();
+
+                    // Extract PQ FP from the bundle's VK
+                    let got_pq_fp = {
+                        let vk_bytes = base64::engine::general_purpose::STANDARD.decode(&vk)
+                            .map_err(|e| format!("decode vk: {}", e))?;
+                        let vk_parsed = add_crypto_pq::decode_verifying_key(&vk_bytes)
+                            .map_err(|_e| "parse vk: invalid length")?;
+                        add_crypto_pq::fingerprint_from_verifying_key(&vk_parsed)
+                    };
+
+                    if is_pq_fp {
+                        // Requested by PQ FP: verify against PQ FP from bundle
+                        if got_pq_fp.to_uppercase() != fingerprint.to_uppercase() {
+                            eprintln!(
+                                "✗ PQ FINGERPRINT MISMATCH: spoke '{}' but cert has '{}'",
+                                fingerprint, got_pq_fp
+                            );
+                            std::process::exit(1);
+                        }
+                    } else if is_gpg_fp {
+                        // Requested by GPG FP: verify against GPG FP from cert
+                        if got_gpg_fp != fingerprint.to_uppercase() {
+                            eprintln!(
+                                "✗ GPG FINGERPRINT MISMATCH: spoke '{}' but cert hashes to '{}'",
+                                fingerprint, got_gpg_fp
+                            );
+                            std::process::exit(1);
+                        }
+                    } else {
+                        return Err("fingerprint must be 40-char GPG or 64-char PQ hex".into());
                     }
+
                     println!("✓ Certificate verified (fingerprint matches).");
-                    println!("Fingerprint:   {}", got_fp);
+                    println!("Fingerprint:   {}", got_gpg_fp);
+                    println!("PQ Fingerprint: {}", got_pq_fp);
                     println!("ML-DSA vk:     {}", vk);
                     println!("ML-KEM enc:    {}", kyber_enc);
                     println!();

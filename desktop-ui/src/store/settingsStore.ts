@@ -17,10 +17,16 @@ interface SecuritySettings {
   selfDestructThreshold: number // 3-20 attempts
 }
 
+interface UISettings {
+  autoStartListener: boolean // Auto-start P2P listener on unlock
+}
+
 interface SettingsStore {
   security: SecuritySettings
+  ui: UISettings
   setSelfDestructEnabled: (enabled: boolean) => void
   setSelfDestructThreshold: (threshold: number) => void
+  setAutoStartListener: (enabled: boolean) => void
 }
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -30,6 +36,9 @@ export const useSettingsStore = create<SettingsStore>()(
         selfDestructEnabled: true, // Enabled by default
         selfDestructThreshold: 10,
       },
+      ui: {
+        autoStartListener: false, // Disabled by default - opt-in
+      },
       setSelfDestructEnabled: (enabled) =>
         set((state) => ({
           security: { ...state.security, selfDestructEnabled: enabled },
@@ -37,6 +46,10 @@ export const useSettingsStore = create<SettingsStore>()(
       setSelfDestructThreshold: (threshold) =>
         set((state) => ({
           security: { ...state.security, selfDestructThreshold: threshold },
+        })),
+      setAutoStartListener: (enabled) =>
+        set((state) => ({
+          ui: { ...state.ui, autoStartListener: enabled },
         })),
     }),
     {

@@ -69,16 +69,25 @@ function ensurePidDir() {
 }
 
 // CLI command queue to prevent PID lock conflicts
-let cliQueue = Promise.resolve()
+let cliQueue = Promise.resolve();
 
-// Track the listen process
-let listenProcess = null
+// In-memory store for DB passphrase (never persisted to disk)
+let dbPassphrase = null;
+let mainWindow = null;
+let listenProcess = null;
 
 function runCliCommand(args, input) {
   return new Promise((resolve, reject) => {
+    // Build env with passphrase if stored in memory (never persisted to disk)
+    const childEnv = { ...process.env }
+    if (dbPassphrase) {
+      childEnv.ADD_DB_PASSPHRASE = dbPassphrase
+    }
+
     const child = spawn(ADD_CLI, args, {
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: childEnv,
     })
 
     let stdout = ''
@@ -171,10 +180,20 @@ function startListenProcess() {
   }
   
   console.log('Starting background add listen process...')
+  console.log('[listen] dbPassphrase available:', !!dbPassphrase)
+  // Build env with passphrase if stored in memory
+  const listenEnv = { ...process.env }
+  if (dbPassphrase) {
+    listenEnv.ADD_DB_PASSPHRASE = dbPassphrase
+    console.log('[listen] ADD_DB_PASSPHRASE set in env')
+  } else {
+    console.warn('[listen] WARNING: dbPassphrase not set!')
+  }
   listenProcess = spawn(ADD_CLI, ['listen'], {
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
+    env: listenEnv,
   })
   
   // Buffer stdout (data arrives in chunks) and forward inbound P2P messages
@@ -443,6 +462,52 @@ ipcMain.handle('add-listen-status', async () => {
   return { running: !!listenProcess, pid: listenProcess?.pid || null }
 })
 
+ipcMain.handle('add-set-passphrase', async (_, passphrase) => {
+  dbPassphrase = passphrase
+  return { success: true }
+})
+
+ipcMain.handle('add-submit-passphrase', async (_, passphrase) => {
+  // Test the passphrase by running a read command with it
+  try {
+    const { spawn } = require('child_process')
+    const childEnv = { ...process.env, ADD_DB_PASSPHRASE: passphrase }
+    const child = spawn(ADD_CLI, ['read', '--json'], {
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: childEnv,
+    })
+    
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (data) => { stdout += data.toString() })
+    child.stderr.on('data', (data) => { stderr += data.toString() })
+    
+    return new Promise((resolve) => {
+      child.on('close', (code) => {
+        if (code === 0) {
+          // Passphrase verified - now store it and emit for dialog
+          dbPassphrase = passphrase
+          ipcMain.emit('passphrase-submitted', passphrase)
+          resolve({ success: true })
+        } else {
+          resolve({ success: false, error: stderr.trim() || 'Invalid passphrase' })
+        }
+      })
+      child.on('error', (err) => {
+        resolve({ success: false, error: err.message })
+      })
+    })
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('add-clear-passphrase', async () => {
+  dbPassphrase = null
+  return { success: true }
+})
+
 ipcMain.handle('add-unlock', async (_, opts) => {
   const args = ['unlock']
   if (opts.pin) args.push('--pin', opts.pin)
@@ -672,13 +737,124 @@ function createAppMenu() {
   Menu.setApplicationMenu(menu)
 }
 
-app.whenReady().then(() => {
+// Show passphrase entry dialog before creating main window
+function showPassphraseDialog() {
+  return new Promise((resolve) => {
+    const dialogWin = new BrowserWindow({
+      width: 400,
+      height: 220,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      title: 'Unlock Add Messenger',
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 20, y: 20 },
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.js')
+      }
+    })
+
+    dialogWin.setMenuBarVisibility(false)
+    
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 24px; background: var(--color-background, #fff); color: var(--color-text, #000); }
+          h2 { margin: 0 0 8px; font-size: 1.25rem; font-weight: 600; }
+          p { margin: 0 0 24px; font-size: 0.875rem; opacity: 0.7; }
+          input { width: 100%; padding: 12px; font-size: 1rem; border: 1px solid var(--color-border, #ddd); border-radius: 6px; box-sizing: border-box; margin-bottom: 16px; }
+          input:focus { outline: none; border-color: var(--color-primary, #3b82f6); box-shadow: 0 0 0 3px var(--color-primary-light, rgba(59,130,246,0.2)); }
+          button { width: 100%; padding: 12px; font-size: 1rem; font-weight: 500; background: var(--color-primary, #3b82f6); color: white; border: none; border-radius: 6px; cursor: pointer; }
+          button:hover { opacity: 0.9; }
+          button:disabled { opacity: 0.5; cursor: not-allowed; }
+          .error { color: var(--color-error, #ef4444); font-size: 0.875rem; margin-top: 8px; min-height: 20px; }
+        </style>
+      </head>
+      <body>
+        <h2>Unlock Add Messenger</h2>
+        <p>Enter your database passphrase to decrypt messages and keys.</p>
+        <input type="password" id="passphrase" placeholder="Passphrase" autocomplete="off" autofocus />
+        <button id="submit" disabled>Unlock</button>
+        <div id="error" class="error"></div>
+        <script>
+          const input = document.getElementById('passphrase')
+          const btn = document.getElementById('submit')
+          const error = document.getElementById('error')
+          
+          input.addEventListener('input', () => {
+            btn.disabled = input.value.length === 0
+          })
+          
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !btn.disabled) {
+              submit()
+            }
+          })
+          
+          function submit() {
+            btn.disabled = true
+            btn.textContent = 'Unlocking...'
+            window.addAPI.setPassphrase(input.value).then((result) => {
+              if (result.success) {
+                // Passphrase stored in main process, now submit it back
+                window.addAPI.submitPassphrase(input.value).then(() => {
+                  window.close()
+                })
+              } else {
+                error.textContent = result.error || 'Failed to set passphrase'
+                btn.disabled = false
+                btn.textContent = 'Unlock'
+              }
+            }).catch((err) => {
+              error.textContent = err.message || 'Error'
+              btn.disabled = false
+              btn.textContent = 'Unlock'
+            })
+          }
+          
+          btn.addEventListener('click', submit)
+          
+          // Focus input on load
+          input.focus()
+        </script>
+      </body>
+      </html>
+    `
+    
+    dialogWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+    
+    dialogWin.on('closed', () => {
+      // If dialog was closed without submitting, quit the app
+      if (!passphraseEntered) {
+        app.quit()
+      }
+    })
+    
+    let passphraseEntered = false
+    
+    // Listen for passphrase submission from dialog
+    ipcMain.once('passphrase-submitted', (_, passphrase) => {
+      passphraseEntered = true
+      dialogWin.close()
+      resolve(passphrase)
+    })
+  })
+}
+
+app.whenReady().then(async () => {
+  // Create window first, then show unlock dialog inside the app
   createWindow()
   createAppMenu()
 
-  // Auto-start background listen process
-  startListenProcess()
-
+  // Auto-start background listen process (will wait for unlock)
+  console.log('[main] App ready, waiting for unlock...')
+  
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()

@@ -754,6 +754,7 @@ impl DhtNodeRuntime {
         ws_tx: &mut (impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
         store: &DhtStore,
     ) {
+        tracing::info!("handle_blob_put: received blob-put for key={}", env.payload_str("key").unwrap_or(""));
         let key = match env.payload_str("key") {
             Some(k) if !k.is_empty() => k.to_string(),
             _ => {

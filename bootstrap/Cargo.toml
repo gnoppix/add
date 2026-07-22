@@ -20,6 +20,7 @@ base64.workspace = true
 dirs.workspace = true
 blake2.workspace = true
 
+rustls = { version = "0.23", features = ["ring"] }
 sequoia-openpgp.workspace = true
 add-protocol = { path = "../protocol" }
 add-dht-core = { path = "../dht-core" }

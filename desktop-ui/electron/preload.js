@@ -71,6 +71,11 @@ contextBridge.exposeInMainWorld('addAPI', {
   restartListen: () => ipcRenderer.invoke('add-restart-listen'),
   listenStatus: () => ipcRenderer.invoke('add-listen-status'),
 
+  // Passphrase management (stored in memory, never persisted to disk)
+  setPassphrase: (passphrase) => ipcRenderer.invoke('add-set-passphrase', passphrase),
+  clearPassphrase: () => ipcRenderer.invoke('add-clear-passphrase'),
+  submitPassphrase: (passphrase) => ipcRenderer.invoke('add-submit-passphrase', passphrase),
+
   // Security - Change GPG key passphrase
   passwd: (current, newPass) => ipcRenderer.invoke('add-passwd', current, newPass),
 
