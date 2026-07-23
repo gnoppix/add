@@ -5464,35 +5464,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".add/add_listen.pid");
 
-    // Check main PID file - only block if another process is running AND we're trying to run listen
-    // For non-listen commands, just overwrite the PID file (commands run sequentially)
-    if pid_path.exists() {
-        // Check if the PID is still alive
-        if let Ok(old_pid) = std::fs::read_to_string(&pid_path) {
-            let old_pid: i32 = old_pid.trim().parse().unwrap_or(0);
-            #[cfg(unix)]
-            let pid_alive = old_pid > 0 && unsafe { libc::kill(old_pid, 0) } == 0;
-            #[cfg(not(unix))]
-            let pid_alive = false; // No POSIX kill on Windows; treat stale PID as not running.
-            if pid_alive {
-                // Only block if we're trying to run listen and there's another process
-                if matches!(args.cmd, Commands::Listen { .. }) {
+    // Main PID file: only serialize non-listen commands (they run sequentially via queue)
+    // Listen command uses its own PID file (add_listen.pid) and bypasses main PID file
+    if !matches!(args.cmd, Commands::Listen { .. }) {
+        if pid_path.exists() {
+            // Check if the PID is still alive
+            if let Ok(old_pid) = std::fs::read_to_string(&pid_path) {
+                let old_pid: i32 = old_pid.trim().parse().unwrap_or(0);
+                #[cfg(unix)]
+                let pid_alive = old_pid > 0 && unsafe { libc::kill(old_pid, 0) } == 0;
+                #[cfg(not(unix))]
+                let pid_alive = false; // No POSIX kill on Windows; treat stale PID as not running.
+                if pid_alive {
                     return Err(format!(
                         "Another add instance is already running (PID {}). Kill it first.",
                         old_pid
                     )
                     .into());
                 }
-                // For non-listen commands, just continue (we'll overwrite the PID)
             }
+            // Stale PID file — overwrite it
+        } else if let Some(parent) = pid_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
-        // Stale PID file — overwrite it
-    } else if let Some(parent) = pid_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
     }
 
-    // Only check listen PID if we're running the listen command
-    // The listen PID file is written by the Electron app for background listen process
+    // Listen PID file: only for listen command (background process from Electron app)
     let current_pid = std::process::id() as i32;
     if matches!(args.cmd, Commands::Listen { .. }) {
         let is_already_listen = listen_pid_path.exists()
