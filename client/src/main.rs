@@ -5519,17 +5519,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = std::fs::remove_file(&listen_pid_path);
             }
         }
+        // Write listen PID file for listen command
+        std::fs::write(&listen_pid_path, format!("{}\n", current_pid))
+            .map_err(|e| format!("Cannot write listen PID file {}: {}", listen_pid_path.display(), e))?;
+    } else {
+        // Write main PID file for non-listen commands
+        std::fs::write(&pid_path, format!("{}\n", current_pid))
+            .map_err(|e| format!("Cannot write PID file {}: {}", pid_path.display(), e))?;
     }
-
-    std::fs::write(&pid_path, format!("{}\n", current_pid))
-        .map_err(|e| format!("Cannot write PID file {}: {}", pid_path.display(), e))?;
     struct PidDrop(std::path::PathBuf);
     impl Drop for PidDrop {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
     }
-    let _pid_cleanup = PidDrop(pid_path);
+    let _pid_cleanup = PidDrop(if matches!(args.cmd, Commands::Listen { .. }) {
+        listen_pid_path
+    } else {
+        pid_path
+    });
 
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("add=info".parse()?))

@@ -47,6 +47,7 @@ libc = "0.2"
 
 [features]
 default = []
+tpm = ["add-crypto/tpm"]
 
 [[bin]]
 name = "add"

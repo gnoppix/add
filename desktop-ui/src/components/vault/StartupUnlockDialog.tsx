@@ -43,11 +43,10 @@ export function StartupUnlockDialog({ onUnlock }: StartupUnlockDialogProps) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="w-full max-w-sm rounded-lg bg-white p-6 dark:bg-gray-800">
         <h2 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
-          Unlock Database
+          Login with your Password
         </h2>
         <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
-          Enter your database passphrase to decrypt the local message store.
-          This is stored in memory only and cleared on app exit.
+          Enter your passphrase ...
         </p>
         {error && (
           <p className="mb-4 text-sm text-red-500">{error}</p>
