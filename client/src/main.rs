@@ -5851,7 +5851,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let message_id = sha256_hex(msg.as_bytes());
                             let _ = store
                                 .store_message(
-                                    "relay",
+                                    from,  // Use actual sender's Null ID, not "relay"
                                     &identity.null_id,
                                     msg,
                                     2, // Delivered (✔️)

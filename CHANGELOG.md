@@ -1,5 +1,15 @@
 # Changelog
+# Changelog
 
+## 2026-07-23 — Stored message sender fix + bootstrap cert sync + UI message filtering fix
+
+- **Stored messages now include correct sender in JSON output.** Fixed `Commands::Read` in CLI to store relay-delivered messages with the actual sender's Null ID (`from`) instead of `"relay"`. The UI's `loadMessages()` now correctly attributes messages to the sender's conversation. Build CLI `0.3.27`.
+
+- **UI message filtering fixed.** Removed content-based echo detection in `chatStore.addIncomingMessage()` that incorrectly filtered legitimate incoming messages matching previously sent text. Relay echoes are now deduplicated via sender Null ID check (`myId`).
+
+- **Bootstrap cert sync completed.** EU bootstrap DHT now contains certs for local (PQ FP `D0ADEAA09A746993B692F986BDA2AE25CC8F111E32C1CD80D8870A654D789E66`) and US server (`255DA7002B31AA22254EF0FA0811CDA183BB8F77B762F62663AF8E600BC48C8E`). US bootstrap synced with local cert from EU. All 3 regions can now resolve certs cross-region.
+
+- **Fresh identities E2E test completed.** Purged all old identities from local DB, bootstrap DHTs, and relay mailboxes. Generated new PQ key pairs for local (`NN-0ab5-85b0-a23c-47f1-56a4-5fac-86a2-acea`) and US server (`NN-418e-cf71-4f9c-2dcb-1c81-8851-32a1-adc1`). Verified bidirectional relay delivery across all 3 regions.
 
 ## 2026-07-22 — Desktop UI passphrase dialog + all-region nginx TLS + bootstrap/relay hardening
 
