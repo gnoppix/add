@@ -5816,7 +5816,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let msg_hash = sha256_hex(decrypted.as_bytes());
                             if !seen_hashes.contains(&msg_hash) {
                                 seen_hashes.insert(msg_hash);
-                                decrypted_messages.push((entry_sender_nid, decrypted));
+                                // Mutual-consent gate: only accept messages from contacts
+                                let contacts = load_contacts();
+                                if contacts.contains_key(&entry_sender_nid) {
+                                    decrypted_messages.push((entry_sender_nid, decrypted));
+                                } else {
+                                    tracing::warn!("Rejected message from unknown sender {} (not in contacts)", entry_sender_nid);
+                                }
                             }
                         }
                         Err(_) => { /* undecryptable (e.g. stale pre-fix mailbox cruft) */ }
