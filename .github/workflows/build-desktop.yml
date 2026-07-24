@@ -14,10 +14,17 @@ permissions:
 
 # Network-hardening for cargo: intermittent registry/index timeouts were
 # causing flaky failures. Retry fetches and give the index more time.
+# CARGO_BUILD_JOBS caps parallelism so the heavy native builds (aws-lc-sys,
+# ring, sequoia-nettle, sqlx) don't OOM the runner and get silently killed
+# (which surfaces only as a bare nonzero exit with no captured error).
 env:
   CARGO_NET_RETRY: "10"
   CARGO_NET_TIMEOUT: "120"
   CARGO_HTTP_TIMEOUT: "120"
+  CARGO_BUILD_JOBS: "2"
+  CARGO_TERM_COLOR: "never"
+  MAKEFLAGS: "-j2"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
 
 jobs:
   # ---------------------------------------------------------------------------
