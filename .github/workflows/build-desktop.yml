@@ -12,6 +12,13 @@ on:
 permissions:
   contents: write
 
+# Network-hardening for cargo: intermittent registry/index timeouts were
+# causing flaky failures. Retry fetches and give the index more time.
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_NET_TIMEOUT: "120"
+  CARGO_HTTP_TIMEOUT: "120"
+
 jobs:
   # ---------------------------------------------------------------------------
   # Windows (NSIS installer) — built natively on a Windows runner.
@@ -39,8 +46,14 @@ jobs:
           cache: npm
           cache-dependency-path: desktop-ui/package-lock.json
 
+      - name: Install nettle/gmp build libs (sequoia-openpgp crypto-nettle)
+        run: vcpkg install nettle gmp --triplet x64-windows
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows
+
       - name: Build add core (x86_64-pc-windows-msvc)
         run: |
+          $env:OPENSSL_STATIC="1"
           # Windows runs without TPM feature (tss-esapi requires native TPM libs)
           cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features
           New-Item -ItemType Directory -Force -Path target\\bundle
@@ -99,6 +112,7 @@ jobs:
 
       - name: Build add core (universal via lipo)
         run: |
+          brew install nettle gmp
           # macOS runs without TPM feature (tss-esapi requires native TPM libs)
           cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features
           cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features
