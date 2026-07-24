@@ -46,7 +46,7 @@ function SafetyNumberModal({ nullId, fingerprint, onClose }: SafetyNumberModalPr
 }
 
 function ChatHeader() {
-  const { conversations, activeConversationId, clearMessages, deleteConversation } = useChatStore()
+  const { conversations, activeConversationId, clearMessages } = useChatStore()
   const [showMenu, setShowMenu] = useState(false)
   const [showSafetyNumbers, setShowSafetyNumbers] = useState(false)
   const [mutedContacts, setMutedContacts] = useState<Set<string>>(new Set())

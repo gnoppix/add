@@ -88,12 +88,15 @@ cargo build --release -p add-bootstrap -p add-relay
 
 ---
 
-## 2. Install nginx with Stream Module
+## 3. Install nginx with Stream Module
 
 ### Debian/Ubuntu
 ```bash
 apt update
-apt install nginx libnginx-mod-stream
+apt install -y nginx libnginx-mod-stream
+
+# Install nettle library (required by the Rust binary)
+sudo apt install -y libnettle8t64 || sudo apt install -y libnettle-dev
 ```
 
 ### Verify Stream Module

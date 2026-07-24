@@ -327,6 +327,7 @@ thread_local! {
 #[cfg(feature = "tpm")]
 mod tpm {
     use super::*;
+    use std::str::FromStr;
     use tss_esapi::{
         attributes::{ObjectAttributesBuilder, SessionAttributesBuilder},
         constants::session_type::SessionType,
@@ -358,9 +359,8 @@ mod tpm {
     /// Open an ESYS context against the system TPM (resource manager) with an
     /// HMAC auth session established (required for `create`/`load`/`unseal`).
     fn open_context() -> Result<Context, CryptoError> {
-        let tcti = TctiNameConf::Device(Default::default());
-        let mut ctx =
-            Context::new(tcti).map_err(|e| CryptoError::HardwareError(format!("ESYS init: {e:?}")))?;
+            let tcti = TctiNameConf::from_str("tabrmd:bus_name=com.intel.tss2.Tabrmd").map_err(|e| CryptoError::HardwareError(format!("TCTI config: {e:?}")))?;
+            let mut ctx = Context::new(tcti).map_err(|e| CryptoError::HardwareError(format!("ESYS init: {e:?}")))?;
 
         let session = ctx
             .start_auth_session(

@@ -20,6 +20,10 @@ import { StickerImg } from '../common/StickerImg'
 import STICKER_PACK from '../../emoji/sticker_pack.json'
 const STICKERS = STICKER_PACK as string[]
 
+const MAX_RECORDING_SECONDS = 30
+
+type RecIntervalReturn = ReturnType<typeof setInterval>;
+
 function MessageInput() {
   const [message, setMessage] = useState('')
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -35,7 +39,95 @@ function MessageInput() {
   const [attachBusy, setAttachBusy] = useState(false)
   // Staged attachment awaiting confirmation (preview before send).
   const [pending, setPending] = useState<{ name: string; mime: string; size: number; data: string } | null>(null)
+  
+  // Voice recording state
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingDuration, setRecordingDuration] = useState(0)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  let recordingInterval: RecIntervalReturn | undefined
+  
   const { activeConversationId, sendMessage } = useChatStore()
+
+  // Start voice note recording with free WebM/Opus format
+  const startRecording = async () => {
+    if (!activeConversationId) return
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+      
+      audioChunksRef.current = []
+      mediaRecorderRef.current = mediaRecorder
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+      
+      // Stop voice note after MAX_RECORDING_SECONDS
+      setTimeout(() => {
+        stopRecording()
+      }, MAX_RECORDING_SECONDS * 1000)
+      
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        
+        // Convert to base64 for sending as attachment (max 10MB limit)
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          const base64data = reader.result?.toString().split(',')[1] || ''
+          if (base64data && activeConversationId) {
+            // Verify size is within limits (~10MB for voice messages)
+            if (audioBlob.size > 10 * 1024 * 1024) {
+              console.warn('Voice message exceeds 10MB limit')
+              return
+            }
+            
+            const envelope = encodeAttachment({
+              name: 'voice-note.webm',
+              mime: 'audio/webm',
+              size: audioBlob.size,
+              data: base64data
+            })
+            sendMessage(envelope, selectedTtl && selectedTtl !== 'none' ? selectedTtl : undefined)
+          }
+        }
+        reader.readAsDataURL(audioBlob)
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop())
+        setIsRecording(false)
+        setRecordingDuration(0)
+        if (recordingInterval) {
+          clearInterval(recordingInterval)
+        }
+      }
+
+      mediaRecorder.start()
+      setIsRecording(true)
+      setRecordingDuration(0)
+      
+      // Start duration counter
+      recordingInterval = setInterval(() => {
+        setRecordingDuration(prev => prev + 1)
+      }, 1000) as unknown as RecIntervalReturn
+      
+    } catch (err) {
+      console.error('Error starting voice recording:', err)
+      setIsRecording(false)
+    }
+  }
+
+  // Stop voice note recording
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+      clearInterval(recordingInterval as unknown as number)
+    }
+  }
 
   // Open the native file picker when the paper-clip is clicked.
   const handleAttachClick = () => {
@@ -178,8 +270,40 @@ function MessageInput() {
     }
   }, [message])
 
+  // Handle voice recording stop on unmount or state changes to avoid memory leaks.
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && isRecording) {
+        mediaRecorderRef.current.stop()
+      }
+      clearInterval(recordingInterval as unknown as number)
+      
+      // Stop all tracks if available
+      // MediaDevices API access should be handled safely on component destroy
+    }
+  }, [isRecording])
+
   return (
     <div className="border-t border-gray-200 bg-white p-3">
+      {/* Voice recording indicator */}
+      {isRecording && (
+        <div className={`mb-2 flex items-center gap-3 rounded-lg p-2 ${
+          isRecording ? 'bg-red-50 border border-red-200' : ''
+        }`}>
+          <div className="h-3 w-3 animate-pulse rounded-full bg-red-600"/>
+          <span className="text-sm font-medium text-red-700">
+            Recording voice message: {recordingDuration}/{MAX_RECORDING_SECONDS}s
+          </span>
+          <button
+            type="button"
+            onClick={stopRecording}
+            className="ml-auto flex h-6 w-6 items-center justify-center rounded-full bg-red-200 text-xs font-medium text-red-800 hover:bg-red-300 transition-colors"
+          >
+            Stop
+          </button>
+        </div>
+      )}
+
       {/* Staged attachment preview (shown before send) */}
       {pending && (
         <div className="mb-2 flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-2">
@@ -287,6 +411,28 @@ function MessageInput() {
           </svg>
         </button>
 
+        {/* Voice note button */}
+        <button
+          type="button"
+          onClick={isRecording ? stopRecording : startRecording}
+          className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
+            isRecording 
+              ? 'bg-red-200 text-red-700 hover:bg-red-300' 
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+          aria-label={isRecording ? "Stop voice note" : "Start voice note"}
+        >
+           <svg className="h-5 w-5" fill={isRecording ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
+            {isRecording ? (
+              // Stop icon
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            ) : (
+              // Mic icon for recording
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7.5 14L18 14m2-8v6a3 3 0 01-3 3H15a3 3 0 01-3-3v-6a3 3 0 013-3h3z" />
+            )}
+          </svg>
+        </button>
+
         {/* Emoji Picker Dropdown */}
         {showEmojiPicker && (
           <div
@@ -367,21 +513,6 @@ function MessageInput() {
           </div>
         )}
 
-        {/* Voice note placeholder */}
-        <button
-          type="button"
-          className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors hover:bg-gray-100"
-          aria-label="Record voice note"
-        >
-          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m0 0a7 7 0 0114 0M12 4v4m0 0l-2-2m2 2l2-2"
-            />
-          </svg>
-        </button>
       </form>
     </div>
   )

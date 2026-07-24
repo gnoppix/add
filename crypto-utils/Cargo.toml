@@ -1,8 +1,8 @@
 [package]
 name = "add-crypto-utils"
 version.workspace = true
-edition.workspace = true
-description = "Add crypto utilities: GPG operations, secure deletion, STUN protocol"
+edition = "2024"
+description = "Add crypto utilities"
 
 [dependencies]
 sequoia-openpgp.workspace = true

@@ -57,9 +57,8 @@ Add has three binaries. Each is run by a different role:
 
 ### 1. Build everything
 
-
 ```bash
-sudo apt install cargo rustc
+sudo apt install -y cargo rustc libnettle8t64 || sudo apt install -y cargo rustc libnettle-dev
 cd add 
 make all
 ```

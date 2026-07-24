@@ -1129,21 +1129,22 @@ impl RelayState {
         // SECURITY FIX (C5): Read from SQLite if available (persistent storage),
         // otherwise fall back to in-memory cache.
         if let Some(ref pool) = self.db_pool {
-            let placeholders = std::iter::repeat("?").take(keys.len()).collect::<Vec<_>>().join(",");
-            let sql = format!(
+            let mut qb = sqlx::query_builder::QueryBuilder::new(
                 "SELECT signed_blob, sender_nid, sender_fp, seq, stored_at
                  FROM mailbox_entries
-                 WHERE (recipient_tag IN ({ph}) OR recipient_nid IN ({ph})) AND delivered = 0
-                 ORDER BY seq ASC",
-                ph = placeholders
+                 WHERE (recipient_tag IN (",
             );
-            let mut q = sqlx::query_as::<_, (String, String, String, i64, i64)>(&sql);
+            let mut separated = qb.separated(",");
             for k in &keys {
-                q = q.bind(k);
+                separated.push_bind(k);
             }
+            qb.push(") OR recipient_nid IN (");
+            let mut separated = qb.separated(",");
             for k in &keys {
-                q = q.bind(k);
+                separated.push_bind(k);
             }
+            qb.push(")) AND delivered = 0 ORDER BY seq ASC");
+            let mut q = qb.build_query_as::<(String, String, String, i64, i64)>();
             if let Ok(rows) = q.fetch_all(pool).await {
                 let entries: Vec<MailboxEntry> = rows
                     .into_iter()
@@ -1221,20 +1222,22 @@ impl RelayState {
 
         // SECURITY FIX (C5): Persist ack to SQLite (match tag or legacy nid)
         if let Some(ref pool) = self.db_pool {
-            let ph = std::iter::repeat("?").take(keys.len()).collect::<Vec<_>>().join(",");
-            let sql = format!(
-                "UPDATE mailbox_entries SET delivered = 1
-                 WHERE (recipient_tag IN ({ph}) OR recipient_nid IN ({ph})) AND seq = ? AND delivered = 0",
-                ph = ph
+            let mut qb = sqlx::query_builder::QueryBuilder::new(
+                "UPDATE mailbox_entries SET delivered = 1 WHERE (recipient_tag IN (",
             );
-            let mut q = sqlx::query(&sql);
+            let mut separated = qb.separated(",");
             for k in &keys {
-                q = q.bind(k);
+                separated.push_bind(k);
             }
+            qb.push(") OR recipient_nid IN (");
+            let mut separated = qb.separated(",");
             for k in &keys {
-                q = q.bind(k);
+                separated.push_bind(k);
             }
-            let _ = q.bind(seq).execute(pool).await;
+            qb.push(")) AND seq = ");
+            qb.push_bind(seq);
+            qb.push(" AND delivered = 0");
+            let _ = qb.build().execute(pool).await;
         }
     }
 
@@ -1254,19 +1257,20 @@ impl RelayState {
 
         // SQLite purge (match tag or legacy nid)
         if let Some(ref pool) = self.db_pool {
-            let ph = std::iter::repeat("?").take(keys.len()).collect::<Vec<_>>().join(",");
-            let sql = format!(
-                "DELETE FROM mailbox_entries WHERE recipient_tag IN ({ph}) OR recipient_nid IN ({ph})",
-                ph = ph
+            let mut qb = sqlx::query_builder::QueryBuilder::new(
+                "DELETE FROM mailbox_entries WHERE recipient_tag IN (",
             );
-            let mut q = sqlx::query(&sql);
+            let mut separated = qb.separated(",");
             for k in &keys {
-                q = q.bind(k);
+                separated.push_bind(k);
             }
+            qb.push(") OR recipient_nid IN (");
+            let mut separated = qb.separated(",");
             for k in &keys {
-                q = q.bind(k);
+                separated.push_bind(k);
             }
-            let _ = q.execute(pool).await;
+            qb.push(")");
+            let _ = qb.build().execute(pool).await;
         }
     }
 

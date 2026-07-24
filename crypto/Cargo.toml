@@ -1,8 +1,8 @@
 [package]
 name = "add-crypto"
 version.workspace = true
-edition.workspace = true
-description = "Add cryptographic primitives (AES-256-GCM encrypt/decrypt, double ratchet)"
+edition = "2024"
+description = "Add cryptographic primitives"
 
 [dependencies]
 sha2.workspace = true

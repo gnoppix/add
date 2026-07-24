@@ -1,0 +1,68 @@
+# nginx site: front Add bootstrap + relay on root@sg (region asia)
+# TLS is terminated here; the daemons bind 127.0.0.1 and speak plain ws.
+# Drop-in replaces the placeholder web roots for bootstrap-asia / relay-asia.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name bootstrap-asia.gnoppix.org;
+
+    ssl_certificate     /etc/letsencrypt/live/bootstrap-asia.gnoppix.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bootstrap-asia.gnoppix.org/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # DHT bootstrap websocket
+    location /ws {
+        proxy_pass http://127.0.0.1:9001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # health / status
+    location = /health {
+        proxy_pass http://127.0.0.1:9001;
+        proxy_http_version 1.1;
+    }
+
+    location / {
+        return 204;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name relay-asia.gnoppix.org;
+
+    ssl_certificate     /etc/letsencrypt/live/relay-asia.gnoppix.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/relay-asia.gnoppix.org/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Relay / mailbox websocket
+    location /ws {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        return 204;
+    }
+}

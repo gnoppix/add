@@ -1,8 +1,8 @@
 [package]
 name = "add-crypto-pq"
 version.workspace = true
-edition.workspace = true
-description = "Post-Quantum Cryptography for Add - ML-DSA-87 and ML-KEM-1024"
+edition = "2024"
+description = "Add post-quantum crypto (ML-KEM, ML-DSA, SPQR braid)"
 
 [dependencies]
 ml-dsa = { version = "0.1", features = ["rand_core", "alloc", "getrandom", "pkcs8"] }

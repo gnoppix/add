@@ -1,265 +1,204 @@
-# First Steps with Add Messenger
+# First Steps: TPM Setup for Add Messenger on Gnoppix
 
-Quick start guide for new users: create your identity, add a contact, and exchange test messages.
-
----
-
-## 1. Initialize Your Identity
-
-Creates your post-quantum identity (GPG + ML-DSA-87 + ML-KEM-1024 keypair).
+## 1. Install Required Packages
 
 ```bash
-add init
+sudo apt-get update
+sudo apt-get install -y libtss2-dev libssl-dev tpm2-abrmd libtss2-tcti-tabrmd0
 ```
 
-**What you'll see:**
-```
-Generating post-quantum keypair (ML-DSA-87, ML-KEM-1024)...
-Your Null ID: NN-433d-88c8-38d5-4f66-61f0-a074-c62a-776a
-GPG fingerprint: 9DD0503EEC8ECD9A9747ECDAE88A7C95C4EF738B
-PQ fingerprint: 1BD93975ED7ADC03B52C363E784BC338F8450C9BBABDC86B5A601FD3C376F39D
-```
-
-**Note:** The PQ fingerprint (64-char hex) is used for KEM operations and relay messaging. The GPG fingerprint is for the contact list and presence.
-
----
-
-## 2. Publish Your Certificate
-
-Uploads your public cert (with ML-DSA-87 verifying key + Kyber encapsulation key) to the DHT so others can send you encrypted messages.
+## 2. Start TPM Resource Manager (tpm2-abrmd)
 
 ```bash
-add publish-cert
+sudo systemctl enable --now tpm2-abrmd
+sudo systemctl status tpm2-abrmd
 ```
 
-**Interactive:** You'll be prompted for your GPG key passphrase (the one you set during `add init`).
-
-**Headless (systemd/cron):** Set the passphrase via environment variable:
-```bash
-ADD_DB_PASSPHRASE=yourpassphrase add publish-cert
+Verify it's running:
+```
+● tpm2-abrmd.service - TPM2 Access Broker and Resource Management Daemon
+   Active: active (running)
 ```
 
-**Expected output:**
-```
-✓ Certificate published to bootstrap servers.
-```
-
----
-
-## 3. Exchange Identity Information Out-of-Band
-
-To message someone securely, you must exchange your **Null ID** and verify the safety number.
-
-### Show Your Identity Info
-```bash
-add id
-```
-
-**Output:**
-```
-Null ID: NN-433d-88c8-38d5-4f66-61f0-a074-c62a-776a
-Safety number: 9DD0503EEC8ECD9A9747ECDAE88A7C95C4EF738B
-PQ fingerprint: 1BD93975ED7ADC03B52C363E784BC338F8450C9BBABDC86B5A601FD3C376F39D
-```
-
-Share these with your contact through a verified channel (QR code, voice call, etc.).
-
----
-
-## 4. Add a Contact
-
-Adds your friend's Null ID to your contact list. You can use either their Null ID **or** their GPG fingerprint (auto-resolves to PQ fingerprint via bootstrap cert lookup).
+## 3. Add User to `tss` Group
 
 ```bash
-# Using Null ID (recommended)
-add add-contact NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487
-
-# Using GPG fingerprint (auto-fetches cert from bootstrap)
-add add-contact NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487 D5867C35F72A71D2490D66962CC132E8266A4B5C
+sudo usermod -a -G tss $USER
 ```
 
-**Expected output:**
+**Log out and back in** (or run `newgrp tss` in current shell) for group change to take effect.
+
+Verify:
+```bash
+id $USER | grep tss
 ```
-✓ Contact added
-# or with GPG fingerprint:
-Resolved GPG FP D5867C35F72A71D2490D66962CC132E8266A4B5C -> PQ FP 678842A5171F3BC19C4BC3FA190063563C6A1995FE03A6BB68A742DB99B188B6
-Added contact: NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487 -> 678842A5171F3BC19C4BC3FA190063563C6A1995FE03A6BB68A742DB99B188B6 (PQ)
-```
 
----
-
-## 5. Send a Test Message
-
-Sends an encrypted message to your contact via the relay network (sealed sender).
+## 4. Verify TPM Access
 
 ```bash
-add send NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487 "Hello from Add!"
+# Should show tpm0 and tpmrm0
+ls -la /dev/tpm*
+
+# Test via tabrmd (requires tpm2-tools)
+tpm2_getcap --tcti=tabrmd properties-fixed
 ```
 
-**Output progression:**
-```
-Using discovered bootstrap server: wss://bootstrap-us.gnoppix.org/ws
-Using 3 relay servers:
-  [1] wss://relay-eu.gnoppix.org/ws
-  [2] wss://relay-asia.gnoppix.org/ws
-  [3] wss://relay-us.gnoppix.org/ws
-Selected fastest relay: wss://relay-eu.gnoppix.org/ws
-Looking up NN-d79c-... ...
-DHT lookup failed — using relay delivery...
-Message delivered via relay (sealed sender) to NN-d79c-...
+## 5. Fix Rust Code: Use tabrmd TCTI Instead of Direct Device
+
+Edit `/home/amu/Gnoppix/messenger/Add/crypto/src/tpm_vault.rs`, line ~361:
+
+**Before:**
+```rust
+let tcti = TctiNameConf::Device(Default::default());
 ```
 
----
+**After:**
+```rust
+use std::str::FromStr;
+let tcti = TctiNameConf::from_str("tabrmd:bus_name=com.intel.tss2.Tabrmd").unwrap();
+```
 
-## 5.x Send Message from CLI (Non-Interactive)
+Add `use std::str::FromStr;` at the top of the `tpm` module (line ~330).
 
-For sending in scripts, cron jobs, or other non-interactive contexts.
+Or use environment variable (alternative):
+```bash
+export TCTI="tabrmd:bus_name=com.intel.tss2.Tabrmd"
+```
 
-### Required Secrets
+## 6. Fix CLI Unlock: Support Both TPM and Passphrase Modes
 
-| Secret | Purpose | Where it's used |
-|--------|---------|-----------------|
-| `ADD_DB_PASSPHRASE` | Unlocks your GPG secret key for signing | All signing operations |
+Edit `/home/amu/Gnoppix/messenger/Add/client/src/main.rs`, around line 5752-5767:
 
-### One-Shot Send Command
+**Before:**
+```rust
+#[cfg(feature = "tpm")]
+if let Some(ref pin) = pin {
+    vault.unseal_from_tpm(pin.as_bytes()).map_err(|e| e.into())
+} else {
+    Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+}
+#[cfg(not(feature = "tpm"))]
+if let Some(ref pw) = password {
+    add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())
+        .map_err(|e| e.into())
+} else {
+    Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+}
+```
+
+**After:**
+```rust
+#[cfg(feature = "tpm")]
+{
+    if let Some(ref pin) = pin {
+        vault.unseal_from_tpm(pin.as_bytes()).map_err(|e| e.into())
+    } else if let Some(ref pw) = password {
+        add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())
+            .map_err(|e| e.into())
+    } else {
+        Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+    }
+}
+#[cfg(not(feature = "tpm"))]
+if let Some(ref pw) = password {
+    add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())
+        .map_err(|e| e.into())
+} else {
+    Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+}
+```
+
+## 7. Rebuild with TPM Feature
 
 ```bash
-# Ensure your contact has published their cert (required for KEM lookup)
-ADD_DB_PASSPHRASE=yourenteredpassphrase \
-add send NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487 "Test message from CLI"
+cd /home/amu/Gnoppix/messenger/Add
+cargo build --package add-client --release --features tpm
+mkdir -p target/bundle
+cp target/release/add target/bundle/add
+chmod +x target/bundle/add
 ```
 
-**Full non-interactive example (send to friend, read reply):**
-```bash
-# Send message
-export ADD_DB_PASSPHRASE=mysecretpass
-add send "NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487" "Hey, testing Add messenger!"
-
-# Later, poll for replies
-add read
-```
-
-### What You'll See When Sending
-
-```
-$ ADD_DB_PASSPHRASE=secret add send NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487 "Test message"
-2026-07-21T01:15:23.192307Z  INFO add: Using discovered bootstrap server: wss://bootstrap-us.gnoppix.org/ws
-2026-07-21T01:15:23.192317Z  INFO add: Using 3 relay servers:
-...
-Selected fastest relay: wss://relay-eu.gnoppix.org/ws
-Looking up NN-d79c-... ...
-DHT lookup failed — using relay delivery...
-2026-07-21T01:15:30.892109Z  INFO add: DBG send blob_has_kc=true sb_len=4115
-2026-07-21T01:15:30.892112Z  INFO add: relay-store sent, waiting for response... (relay=wss://relay-eu.gnoppix.org/ws)
-2026-07-21T01:16:22.445139Z  INFO add: DBG store resp: {"ok":true,"error":null,"data":null}
-Message delivered via relay (sealed sender) to NN-d79c-5c2f-46ff-b7c0-10e2-82a7-d98f-a487
-```
-
-If the recipient hasn't published their certificate, you'll see:
-```
-Error: "cert not found: dht-error"
-```
-Run `add publish-cert` on the recipient's machine first.
-
----
-
-## 6. Read Messages
-
-Polls all relays for new messages addressed to you.
+## 8. Rebuild Desktop App
 
 ```bash
-add read
+cd /home/amu/Gnoppix/messenger/Add/desktop-ui
+npm run build:react && npm run fix:index && ./node_modules/.bin/electron-builder --config electron-builder.js --linux --publish=never
 ```
 
-**Output:**
-```
-Checking 3 relay mailbox(s)...
-Messages (3):
-  [1] [NN-433d-88c8-38d5-4f66-61f0-a074-c62a-776a] [Hello US from local amu - PQ messenger test 2026-07-20]
-  [2] [NN-433d-88c8-38d5-4f66-61f0-a074-c62a-776a] [delivery-probe-2]
-  [3] [NN-433d-88c8-38d5-4f66-61f0-a074-c62a-776a] [TEST-1784595572]
-  Relay purge response: {"ok":true,"error":null,"data":null}
-```
-
-Messages are automatically marked delivered and removed from the relay after decryption.
-
----
-
-## 7. Headless Operation (Optional)
-
-For running `add` in a headless environment (scripts, systemd, etc.):
+## 9. Test Identity Creation
 
 ```bash
-export ADD_DB_PASSPHRASE=your_gpg_passphrase
+# Clean slate
+rm -rf ~/.add
 
-# Can now run commands without interactive prompts:
-add publish-cert
-add read
-add send NN-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx "automated message"
+# ============================================
+# TPM MODE (hardware-backed, requires TPM chip + tss group)
+# ============================================
+sg tss -c "dist-electron/linux-unpacked/resources/add init --pin 123456"
+
+# OR without sg if you logged out/in after adding to tss group:
+# dist-electron/linux-unpacked/resources/add init --pin 123456
+
+# ============================================
+# PASSPHRASE MODE (software, no TPM needed)
+# ============================================
+dist-electron/linux-unpacked/resources/add init --password "Ab1!Cd2#Ef3@Gh4$"
 ```
 
-Both `publish-cert` and `read` honor this environment variable.
+**Requirements:**
+- PIN: exactly 6 digits (e.g., `123456`)
+- Passphrase: 16+ chars with upper, lower, digit, special (e.g., `Ab1!Cd2#Ef3@Gh4$`)
 
----
-
-## 8. Quick Reference
-
-| Command | Purpose | Required Input |
-|---------|---------|----------------|
-| `add init` | Create identity | GPG passphrase (set once) |
-| `add id` | Show identity info | None |
-| `add publish-cert` | Publish cert to DHT | GPG passphrase |
-| `add add-contact <null_id> [gpg_fp]` | Add contact | Contact's Null ID (optional: GPG FP) |
-| `add send <null_id> <text>` | Send message | Recipient Null ID + message text |
-| `add read` | Check messages | Passphrase (or `ADD_DB_PASSPHRASE`) |
-| `add contacts` | List contacts | None |
-| `add fetch-cert <gpg_fp>` | Fetch contact's cert | GPG fingerprint |
-
----
-
-## 9. Network Architecture (v0.3.26+)
-
-### Bootstrap & Relay Servers (All Regions)
-
-All three regions run identical nginx TLS-termination architecture:
-
-| Region | Bootstrap | Relay |
-|--------|-----------|-------|
-| **US (me)** | `wss://bootstrap-us.gnoppix.org/ws` | `wss://relay-us.gnoppix.org/ws` |
-| **EU (is)** | `wss://bootstrap-eu.gnoppix.org/ws` | `wss://relay-eu.gnoppix.org/ws` |
-| **Asia (jp)** | `wss://bootstrap-asia.gnoppix.org/ws` | `wss://relay-asia.gnoppix.org/ws` |
-
-### Single-Port Architecture (Port 443)
-
-nginx stream module handles all TLS termination with SNI routing:
+Expected output:
 ```
-Port 443 (nginx stream)
-├── bootstrap-<region>.gnoppix.org → 127.0.0.1:9001 (add-bootstrap TLS)
-├── relay-<region>.gnoppix.org     → 127.0.0.1:8765 (add-relay TLS)
-└── default/other SNI              → 127.0.0.1:8443 (web vhosts)
+Identity created successfully!
+  Fingerprint: ...
+  Null ID:     NN-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx
+
+Vault created at ~/.add/vault.json
 ```
 
-- Bootstrap listens on **9001** (TLS)
-- Relay listens on **8765** (TLS)
-- Web vhosts on internal **8443**
-- All public traffic enters via **port 443** only
+Verify vault type:
+```bash
+cat ~/.add/vault.json
+# TPM mode:   "kind": { "t": "Tpm", "d": { "sealed_b64": "..." } }
+# Passphrase: "kind": { "t": "Passphrase", "d": { "wrapped_b64": "..." } }
+```
 
----
+## 10. Test Unlock
 
-## 10. Troubleshooting
+```bash
+# TPM mode (requires tss group)
+sg tss -c "dist-electron/linux-unpacked/resources/add unlock --pin 123456"
 
-### "cert not found" error when sending
-- Ensure both sender and recipient have run `publish-cert`
-- Verify the recipient's Null ID was added correctly (`add contacts`)
+# Passphrase mode
+dist-electron/linux-unpacked/resources/add unlock --password "Ab1!Cd2#Ef3@Gh4$"
+```
 
-### "Connection reset without closing handshake" 
-- Transient network issue; retry the command
-- Check your internet connectivity
+Expected: `Vault unlocked successfully.`
 
-### Messages not decrypting
-- Both parties must have each other's Null IDs as contacts
-- A fresh `init` may have been run; exchange identities again
+## 11. Run Desktop App
 
-### Relay fetch errors (TLS handshake EOF)
-- Check that relays have TLS certs configured (`--tls-cert`/`--tls-key`)
-- Verify nginx is running and SNI routing is correct
+```bash
+# Dev mode (won't have TPM - no preload)
+npm run dev:electron
+
+# Packaged app (has TPM via preload + bundled binary)
+./dist-electron/linux-unpacked/add-desktop
+```
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| `Permission denied /dev/tpm0` | User not in `tss` group or tpm2-abrmd not running |
+| `No standard TCTI could be loaded` | Install `libtss2-tcti-tabrmd0`, restart tpm2-abrmd |
+| `ESYS init: Tss2Error(...)` | Use `Tabrmd` TCTI instead of `Device` in Rust code |
+| "Add API not available" in browser | Dev mode lacks preload; use packaged app |
+| Vault shows `Passphrase` not `Tpm` | Binary built without `--features tpm` |
+
+## Notes
+
+- The desktop app **must** run as packaged (`dist-electron/linux-unpacked/add-desktop`) for TPM to work — dev mode (`npm run dev:electron`) loads from Vite without Electron's preload script, so `window.addAPI` is undefined.
+- TPM sealing requires the SRK (Storage Root Key) at persistent handle `0x81000001`. If not present, run `tpm2_createprimary` + `tpm2_evictcontrol` or use `systemd-tpm2-setup.service`.
+- Self-destruct after 10 failed PIN attempts is enforced by the TPM hardware (authValue = SHA-256("add-pin-v1" + PIN)).

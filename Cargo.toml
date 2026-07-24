@@ -3,7 +3,7 @@ members = ["protocol", "crypto", "crypto-pq", "crypto-utils", "dht-core", "relay
 resolver = "2"
 
 [workspace.package]
-version = "0.3.26"
+version = "0.3.28"
 edition = "2024"
 description = "Add P2P messenger (Rust)"
 license = "BUSL-1.1"
@@ -28,8 +28,8 @@ hmac = "0.12"
 url = "2"
 dirs = "5"
 clap = { version = "4", features = ["derive"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
-sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "tls-native-tls"] }
+sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-nettle", "allow-experimental-crypto", "allow-variable-time-crypto"] }
 ml-dsa = "0.1"
 pem = "3"
 ml-kem = "0.1"

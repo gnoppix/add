@@ -10,7 +10,7 @@ REMOTE_DIR="/root/add"
 # host -> space-separated binaries actually run on that host
 declare -A HOST_BINS=(
   [is]="add-bootstrap add-relay"
-  [jp]="add-bootstrap add-relay"
+  [sg]="add-bootstrap add-relay"
   [nl]="add-reflector"
   [me]="add-bootstrap add-relay"
 )

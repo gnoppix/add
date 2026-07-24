@@ -1,5 +1,11 @@
 # Changelog
-# Changelog
+
+## 2026-07-23 — UI Settings "UI Settings" label fix + complete i18n for 5 languages + Settings modal navigation
+
+- **UI Settings label fixed.** The settings menu button "Interface Setting" now correctly shows "UI Settings" (translation key `ui.sidebar.uiSettings`). Clicking it opens the UISettings modal labeled "UI Settings" (`ui.settings.uiSettings`). Close button returns to main Settings modal.
+- **Complete i18n for 5 languages.** All new strings translated for en, de, es, ja, fr: Security, UI Settings, Self-destruct Settings, Change Password, Auto-start P2P listener, failed attempts, attempts count, etc. All 5 languages (en, de, es, ja, fr) complete.
+- **Settings modal navigation improved.** Security Settings and UI Settings modals now have Close buttons that return to the main Settings modal instead of closing entirely.
+- **Settings restructure.** Security Settings now contains only Self-destruct options. UI Settings contains Auto-start P2P listener on application start. Self-destruct Settings button opens Security Settings modal.
 
 ## 2026-07-23 — Stored message sender fix + bootstrap cert sync + UI message filtering fix
 

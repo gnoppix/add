@@ -16,6 +16,8 @@ import ThemeToggle from './ThemeToggle'
 import ProfileAvatar from './ProfileAvatar'
 import { generateInitialsAvatar } from '../../lib/identicon'
 import SecuritySettings from '../settings/SecuritySettings'
+import UISettings from '../settings/UISettings'
+import { useTranslation } from 'react-i18next'
 
 interface AddContactForm {
   nullId: string
@@ -30,7 +32,9 @@ interface PasswdForm {
 }
 
 function SidebarHeader() {
+  const { addConversation } = useChatStore()
   const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [showUISettingsModal, setShowUISettingsModal] = useState(false)
   const [showSecurityModal, setShowSecurityModal] = useState(false)
   const [showAddContact, setShowAddContact] = useState(false)
   const [showPasswdModal, setShowPasswdModal] = useState(false)
@@ -51,11 +55,9 @@ function SidebarHeader() {
     myId,
     myFingerprint,
     isAuthenticated,
-    loadContacts,
-    addConversation,
     listenRunning,
   } = useChatStore()
-
+  const { t } = useTranslation()
   useEffect(() => {
     initialize()
   }, [initialize])
@@ -277,15 +279,15 @@ function SidebarHeader() {
 
               </div>
 
-              {/* Security: Change Passphrase / Self-destruct */}
+              {/* Security: Change Passphrase / Self-destruct / UI Settings */}
               {isAuthenticated && (
                 <div className="border-t pt-3">
-                  <p className="font-medium">Security</p>
+                  <p className="font-medium">{t('ui.sidebar.security')}</p>
                   <button
                     onClick={() => setShowPasswdModal(true)}
                     className="mt-1 rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600"
                   >
-                    Change GPG Key Passphrase
+                    {t('ui.sidebar.changePassphrase')}
                   </button>
                   <button
                     onClick={() => {
@@ -294,7 +296,23 @@ function SidebarHeader() {
                     }}
                     className="ml-2 rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
                   >
-                    Self-destruct Settings
+                    {t('ui.sidebar.selfDestructSettings')}
+                  </button>
+                </div>
+              )}
+
+              {/* UI Settings */}
+              {isAuthenticated && (
+                <div className="border-t pt-3">
+                  <p className="font-medium">{t('ui.sidebar.uiSettings')}</p>
+                  <button
+                    onClick={() => {
+                      setShowSettingsModal(false)
+                      setShowUISettingsModal(true)
+                    }}
+                    className="mt-1 rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
+                  >
+                    {t('ui.sidebar.uiSettings')}
                   </button>
                 </div>
               )}
@@ -314,7 +332,16 @@ function SidebarHeader() {
       {showSecurityModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
-            <SecuritySettings onClose={() => setShowSecurityModal(false)} />
+            <SecuritySettings onClose={() => { setShowSecurityModal(false); setShowSettingsModal(true); }} />
+          </div>
+        </div>
+      )}
+
+      {/* UI Settings Modal */}
+      {showUISettingsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
+            <UISettings onClose={() => { setShowUISettingsModal(false); setShowSettingsModal(true); }} />
           </div>
         </div>
       )}

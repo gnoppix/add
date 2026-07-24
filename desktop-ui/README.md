@@ -65,8 +65,16 @@ setSearchQuery(query)
 ## Getting Started
 
 ### Prerequisites
+
 - Node.js 18+ 
 - npm or yarn
+
+### Install Dependencies (Linux)
+
+```bash
+# On Debian/Ubuntu, install the required nettle library:
+sudo apt update && sudo apt install -y libnettle8t64 || sudo apt install -y libnettle-dev
+```
 
 ### Development
 

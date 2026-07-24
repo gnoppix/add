@@ -16,6 +16,14 @@ const path = require('path')
 const fs = require('fs')
 const os = require('os')
 
+// Single-instance: only ONE add-desktop may own the CLI singleton lock
+// (~/.add/add.pid) and the background listener at a time. A second launch
+// focuses the existing window instead of spawning another listener that
+// would collide with the pid lock and the listen pid file.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+}
+
 // Read version from package.json
 function getAppVersion() {
   try {
@@ -61,6 +69,47 @@ const PID_DIR = path.join(os.homedir(), '.add')
 const LISTEN_PID_FILE = path.join(PID_DIR, 'add_listen.pid')
 const APP_PID_FILE = path.join(PID_DIR, 'add.pid')
 
+// Reap stale CLI processes from a previous (crashed) app run. Without this,
+// an orphaned `add`/`add listen` keeps holding ~/.add/add.pid and every
+// one-shot command (id, read, send) fails with "Another add instance is
+// already running", which in turn made the UI flip to createIdentity.
+function reapStaleAddProcesses() {
+  for (const pidFile of [APP_PID_FILE, LISTEN_PID_FILE]) {
+    try {
+      if (!fs.existsSync(pidFile)) continue
+      const raw = fs.readFileSync(pidFile, 'utf8').trim()
+      const pid = parseInt(raw, 10)
+      if (!Number.isFinite(pid) || pid <= 0) {
+        fs.unlinkSync(pidFile)
+        continue
+      }
+      // Only reap if the PID is actually alive AND points at an `add` process.
+      // Skip our own live listener PID (written lazily further down).
+      let alive = false
+      try { process.kill(pid, 0); alive = true } catch { /* not running */ }
+      if (!alive) {
+        fs.unlinkSync(pidFile)
+        continue
+      }
+      // confirm it's an add process (avoid killing an unrelated PID that
+      // happens to occupy the now-stale number)
+      let isAdd = false
+      try {
+        const stat = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim()
+        isAdd = stat === 'add' || stat.startsWith('add')
+      } catch { /* can't read /proc — treat as non-add, leave it alone */ }
+      if (isAdd) {
+        try {
+          process.kill(pid, 'SIGTERM')
+          console.log(`[reap] Terminated stale add process PID ${pid} (${pidFile})`)
+        } catch { /* already gone */ }
+      }
+      // Remove the stale pid file regardless so we don't trip on it later.
+      try { fs.unlinkSync(pidFile) } catch { /* ignore */ }
+    } catch { /* ignore per-file errors */ }
+  }
+}
+
 // Ensure PID directory exists
 function ensurePidDir() {
   if (!fs.existsSync(PID_DIR)) {
@@ -84,8 +133,25 @@ function runCliCommand(args, input) {
       childEnv.ADD_DB_PASSPHRASE = dbPassphrase
     }
 
-    const child = spawn(ADD_CLI, args, {
-      shell: false,
+    // Check if we need TPM access (init with --pin, unlock with --pin)
+    const needsTpm = (args[0] === 'init' && args.includes('--pin')) ||
+                     (args[0] === 'unlock' && args.includes('--pin'))
+
+    // If TPM needed, spawn sg directly (no shell) so the space-containing
+    // ADD_CLI path stays intact. sg invokes `bash -c '<cliCmd>'`, which keeps
+    // the path as one word and passes the real args inside the -c string.
+    let cmd = ADD_CLI
+    let cmdArgs = args
+
+    if (needsTpm) {
+      const cliCmd = [ADD_CLI, ...args]
+        .map(a => a.includes(' ') ? `'${a}'` : a)
+        .join(' ')
+      cmd = 'sg'
+      cmdArgs = ['tss', '-c', cliCmd]
+    }
+
+    const child = spawn(cmd, cmdArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: childEnv,
     })
@@ -99,8 +165,14 @@ function runCliCommand(args, input) {
     // When we have a body to send, write it to stdin and close the stream so
     // the CLI (which reads `-` from stdin) receives the full payload without
     // hitting the OS command-line argument length limit.
-    if (input != null) {
+    // For TPM commands we can't easily pipe stdin through sg, so skip input.
+    if (input != null && !needsTpm) {
       child.stdin.write(input)
+      child.stdin.end()
+    } else {
+      // No input to send. Close stdin immediately so CLIs that read a GPG
+      // passphrase (or any prompt) from stdin get EOF and proceed instead of
+      // blocking forever — this is the "Create Identity hangs" bug.
       child.stdin.end()
     }
 
@@ -171,14 +243,23 @@ function killExistingListenProcess() {
 
 // Start the background listen process
 function startListenProcess() {
-  // First check and kill any existing listen process from PID file
-  killExistingListenProcess()
-  
-  if (listenProcess) {
-    console.log('Listen process already running')
-    return
+  // Idempotent: if a listener is already alive (handle + live PID), do nothing.
+  // This guards against the listener being killed-then-not-respawned when
+  // startListen is invoked twice in quick succession (React StrictMode double
+  // effect, or re-entrant unlock flow).
+  if (listenProcess && !listenProcess.killed) {
+    let alive = false
+    try { process.kill(listenProcess.pid, 0); alive = true } catch { /* dead handle */ }
+    if (alive) {
+      console.log('Listen process already running, leaving it alone')
+      return
+    }
   }
-  
+  // Kill any existing listen process (stale PID file from a crashed run, or a
+  // previous call). Clear our handle so we respawn fresh below.
+  killExistingListenProcess()
+  listenProcess = null
+
   console.log('Starting background add listen process...')
   console.log('[listen] dbPassphrase available:', !!dbPassphrase)
   // Build env with passphrase if stored in memory
@@ -848,13 +929,26 @@ function showPassphraseDialog() {
 }
 
 app.whenReady().then(async () => {
+  // Kill any orphaned `add`/`add listen` from a previous (crashed) run before
+  // we start issuing CLI commands, otherwise the singleton pid lock blocks us.
+  reapStaleAddProcesses()
+
   // Create window first, then show unlock dialog inside the app
   createWindow()
   createAppMenu()
 
   // Auto-start background listen process (will wait for unlock)
   console.log('[main] App ready, waiting for unlock...')
-  
+
+  // A second instance tried to launch: focus the existing window instead of
+  // spawning another listener (which would collide with the pid/lock files).
+  app.on('second-instance', (event, argv) => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()

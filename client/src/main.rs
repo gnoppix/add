@@ -34,6 +34,7 @@ use hickory_resolver::proto::rr::domain::IntoName;
 use serde::{Deserialize, Serialize};
 use sqlx::Pool;
 use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::AssertSqlSafe;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 use tracing_subscriber::EnvFilter;
@@ -374,7 +375,9 @@ impl DbEncryptionKey {
         }
         #[cfg(unix)]
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-        match passphrase {
+        // Treat empty passphrase as None (no encryption)
+        let pass = passphrase.filter(|s| !s.is_empty());
+        match pass {
             Some(pass) => {
                 let armored = encrypt_cert_armored(&hex::encode(self.key), pass)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
@@ -1027,8 +1030,14 @@ async fn ws_connect(
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Box<dyn std::error::Error>,
 > {
-    // Route every connection through TOFU cert pinning (relay + bootstrap).
-    ws_connect_pinned(url).await
+    eprintln!("DEBUG ws_connect: connecting to {}", url);
+    let result = ws_connect_pinned(url).await;
+    if let Err(ref e) = result {
+        eprintln!("DEBUG ws_connect: failed to connect to {}: {}", url, e);
+    } else {
+        eprintln!("DEBUG ws_connect: connected to {}", url);
+    }
+    result
 }
 
 // ------------------------------------------------------------------ //
@@ -1084,11 +1093,16 @@ impl PinnedCertVerifier {
 
     fn save_pins(pins: &HashMap<String, String>) {
         let p = Self::pin_path();
+        tracing::info!("TLS pin cache: saving pins to {:?}", p);
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(s) = serde_json::to_string_pretty(pins) {
-            let _ = std::fs::write(&p, s);
+            if let Err(e) = std::fs::write(&p, &s) {
+                tracing::error!("TLS pin cache write failed: {}", e);
+            } else {
+                tracing::info!("TLS pin cache written successfully");
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -1187,6 +1201,9 @@ async fn ws_connect_pinned(
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Box<dyn std::error::Error>,
 > {
+    // Ensure crypto provider is installed before any TLS operation
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    
     if !url.starts_with("wss://") {
         // Plaintext (local dev) — no TLS, no pinning.
         return tokio_tungstenite::connect_async(url)
@@ -1214,10 +1231,16 @@ async fn ws_connect_pinned(
         .authority()
         .ok_or("missing authority")?
         .to_string();
+    // Add default port for wss if not present
+    let authority_with_port = if authority.contains(':') {
+        authority
+    } else {
+        format!("{}:443", authority)
+    };
     let connector = tokio_tungstenite::Connector::Rustls(Arc::new(client_config));
     tokio_tungstenite::client_async_tls_with_config(
         request,
-        tokio::net::TcpStream::connect(authority).await?,
+        tokio::net::TcpStream::connect(authority_with_port).await?,
         None,
         Some(connector),
     )
@@ -1607,7 +1630,8 @@ impl MessageStore {
         col: &str,
     ) -> bool {
         use sqlx::Row;
-        let rows = sqlx::query(&format!("PRAGMA table_info({})", table))
+        let pragma = format!("PRAGMA table_info({})", table);
+        let rows = sqlx::query(AssertSqlSafe(pragma))
             .fetch_all(pool)
             .await
             .unwrap_or_default();
@@ -1903,7 +1927,8 @@ impl StoredMessage {
 // ------------------------------------------------------------------ //
 
 fn home_dir() -> PathBuf {
-    std::env::var("HOME")
+    std::env::var("ADD_HOME")
+        .or_else(|_| std::env::var("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
 }
@@ -3007,9 +3032,20 @@ async fn select_fastest_relay(relay_urls: &[String]) -> Option<String> {
             let ws_url = url
                 .replace("http://", "ws://")
                 .replace("https://", "wss://");
+            tracing::debug!("select_fastest_relay: trying to connect to {}", ws_url);
             match timeout(Duration::from_secs(5), ws_connect(&ws_url)).await {
-                Ok(Ok(_)) => Some(url),
-                _ => None,
+                Ok(Ok(_)) => {
+                    tracing::debug!("select_fastest_relay: connected to {}", url);
+                    Some(url)
+                }
+                Ok(Err(e)) => {
+                    tracing::debug!("select_fastest_relay: connection to {} failed: {}", url, e);
+                    None
+                }
+                Err(_) => {
+                    tracing::debug!("select_fastest_relay: timeout connecting to {}", url);
+                    None
+                }
             }
         }));
     }
@@ -3027,6 +3063,7 @@ async fn select_fastest_relay(relay_urls: &[String]) -> Option<String> {
         let ws_url = url
             .replace("http://", "ws://")
             .replace("https://", "wss://");
+        tracing::debug!("select_fastest_relay: sequential try {}", ws_url);
         if ws_connect(&ws_url).await.is_ok() {
             return Some(url.clone());
         }
@@ -5716,10 +5753,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let vault: add_crypto::VaultFile =
                     add_crypto::VaultFile::read_from(&vault_path)?;
                 #[cfg(feature = "tpm")]
-                if let Some(ref pin) = pin {
-                    vault.unseal_from_tpm(pin.as_bytes()).map_err(|e| e.into())
-                } else {
-                    Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+                {
+                    if let Some(ref pin) = pin {
+                        vault.unseal_from_tpm(pin.as_bytes()).map_err(|e| e.into())
+                    } else if let Some(ref pw) = password {
+                        add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())
+                            .map_err(|e| e.into())
+                    } else {
+                        Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+                    }
                 }
                 #[cfg(not(feature = "tpm"))]
                 if let Some(ref pw) = password {

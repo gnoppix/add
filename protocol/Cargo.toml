@@ -1,8 +1,8 @@
 [package]
 name = "add-protocol"
 version.workspace = true
-edition.workspace = true
-description = "Add protocol constants, wire envelope, and PoW"
+edition = "2024"
+description = "Add protocol definitions (Wire, Envelope, DHT ops)"
 
 [dependencies]
 serde.workspace = true

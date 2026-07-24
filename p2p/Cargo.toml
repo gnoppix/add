@@ -1,8 +1,8 @@
 [package]
 name = "add-p2p"
 version.workspace = true
-edition.workspace = true
-description = "Add P2P client node (handshake, NAT traversal, transport)"
+edition = "2024"
+description = "Add P2P client node"
 
 [dependencies]
 tokio.workspace = true

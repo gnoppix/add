@@ -1,49 +1,103 @@
 /** Main App layout with split-pane structure */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { generateInitialsAvatar } from './lib/identicon'
 import Sidebar from './components/sidebar/Sidebar'
 import ChatPane from './components/chat/ChatPane'
 import { useChatStore, getEvaAPI } from './store/chatStore'
 import { StartupUnlockDialog } from './components/vault/StartupUnlockDialog'
+import { CreateIdentityDialog } from './components/vault/CreateIdentityDialog'
+
+type AppState = 'checking' | 'createIdentity' | 'unlock' | 'ready'
 
 function App() {
-  const { initialize, loadMessages } = useChatStore()
-  const [isUnlocked, setIsUnlocked] = useState(false)
+  const { initialize, loadMessages, isAuthenticated } = useChatStore()
+  const [appState, setAppState] = useState<AppState>('checking')
+  // Skeleton UI state: shows main layout while checking identity in background
+  const [showSkeleton, setShowSkeleton] = useState(true)
 
-  // Initialize on mount (after unlock)
+  // Check identity on mount - return early to show skeleton immediately
   useEffect(() => {
-    if (isUnlocked) {
+    const checkIdentity = async () => {
+      const api = getEvaAPI()
+      if (!api) {
+        setAppState('createIdentity')
+        setShowSkeleton(false)
+        return
+      }
+      try {
+        const identity = await api.getMyId()
+        if (identity.id && identity.id.trim() !== '') {
+          // Identity exists - check if we need to unlock
+          if (isAuthenticated) {
+            setAppState('ready')
+          } else {
+            setAppState('unlock')
+          }
+        } else {
+          setAppState('createIdentity')
+        }
+      } catch {
+        setAppState('createIdentity')
+      }
+
+      // Allow skeleton to show briefly, then transition (simplified - no cleanup needed)
+      setTimeout(() => setShowSkeleton(false), 300)
+    }
+    checkIdentity()
+  }, [isAuthenticated])
+
+  // Initialize on ready
+  useEffect(() => {
+    if (appState === 'ready') {
       initialize()
     }
-  }, [initialize, isUnlocked])
+  }, [initialize, appState])
 
-  // Periodic relay poll: pull messages you've received (every 10 seconds)
-  useEffect(() => {
-    if (!isUnlocked) return
-    loadMessages()
-    const interval = setInterval(() => {
-      loadMessages()
-    }, 10000)
-    return () => clearInterval(interval)
-  }, [loadMessages, isUnlocked])
+  // Periodic relay poll with backoff for efficiency:
+  // start after a short delay, then poll every 10s. If consecutive polls fail, increase interval up to 30s max.
+  const backupMsRef = useRef<number>(10000)
+  const intervalIdRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Live P2P inbound messages from the background listener. The main process
-  // parses the listener stdout and pushes each message here; we attribute it
-  // to the sender conversation and insert it.
   useEffect(() => {
-    if (!isUnlocked) return
+    if (appState !== 'ready') return
+    
+    // Initial poll after short delay for UI render
+    const initialTimer = setTimeout(async () => {
+      await loadMessages()
+        .then(() => { backupMsRef.current = 10000 }) // reset backoff on success
+        .catch(() => {})
+      
+      // Start interval
+      intervalIdRef.current = setInterval(async () => {
+        await loadMessages()
+          .then(() => { backupMsRef.current = 10000 })
+          .catch(() => {
+            backupMsRef.current = Math.min(backupMsRef.current * 1.5, 30000) // exponential backoff up to 30s
+          })
+      }, backupMsRef.current)
+    }, 800) // slight initial delay for UI render
+    
+    return () => {
+      if (initialTimer) clearTimeout(initialTimer as unknown as number)
+      if (intervalIdRef.current) clearInterval(intervalIdRef.current as ReturnType<typeof setInterval>)
+    }
+  }, [loadMessages, appState])
+
+  // Live P2P inbound messages
+  useEffect(() => {
+    if (appState !== 'ready') return
     const api = getEvaAPI()
     if (!api?.on) return
     const off = api.on('add-incoming-message', (msg: { from: string; text: string }) => {
-      const { from, text } = msg
+      // Avoid our own messages echoing back via relay
       const state = useChatStore.getState()
       const myId = state.myId
-      if (myId && from === myId) return // never show self-echoes
-      if (!state.conversations.some((c) => c.id === from)) {
+      if (myId && msg.from === myId) return
+      if (!state.conversations.some((c) => c.id === msg.from)) {
         state.addConversation({
-          id: from,
-          name: from,
-          avatarUrl: generateInitialsAvatar(from),
+          id: msg.from,
+          name: msg.from,
+          avatarUrl: generateInitialsAvatar(msg.from),
           lastMessage: '',
           lastMessageTimestamp: new Date(),
           unreadCount: 0,
@@ -51,15 +105,51 @@ function App() {
           isGroup: false,
         })
       }
-      state.addIncomingMessage(from, text)
+      state.addIncomingMessage(msg.from, msg.text)
     })
     return off
-  }, [isUnlocked])
+  }, [appState])
 
-  if (!isUnlocked) {
+  if (showSkeleton && appState === 'checking') {
     return (
-      <StartupUnlockDialog onUnlock={() => setIsUnlocked(true)} />
+      <div className="flex h-screen w-full overflow-hidden" style={{ backgroundColor: 'var(--color-background)' }}>
+        {/* Skeleton Sidebar */}
+        <div className="w-64 bg-gray-100 dark:bg-gray-800 border-r border-gray-300 dark:border-gray-700">
+          <div className="p-4"><div className="h-8 w-2/3 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div></div>
+          <div className="px-2 space-y-1 py-2">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="h-14 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
+            ))}
+          </div>
+        </div>
+        {/* Skeleton ChatPane */}
+        <div className="flex-1 flex flex-col bg-white dark:bg-gray-900">
+          <div className="h-16 border-b border-gray-300 dark:border-gray-700 flex items-center px-4">
+            <div className="h-8 w-48 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
+          </div>
+          <div className="flex-1 p-4 space-y-2">
+            {[...Array(5)].map((_, i) => {
+              const isTall = i % 3 === 0;
+              const isLeft = i % 2 === 0;
+              return (
+                <div key={i} className={`${isTall ? 'h-16' : ''} bg-gray-200 dark:bg-gray-700 rounded animate-pulse ${isLeft ? 'ml-4' : 'mr-4'}`}></div>
+              );
+            })}
+          </div>
+          <div className="h-16 border-t border-gray-300 dark:border-gray-700 p-3">
+            <div className="h-10 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
+          </div>
+        </div>
+      </div>
     )
+  }
+
+  if (appState === 'createIdentity') {
+    return <CreateIdentityDialog onCreated={() => setAppState('ready')} />
+  }
+
+  if (appState === 'unlock') {
+    return <StartupUnlockDialog onUnlock={() => setAppState('ready')} />
   }
 
   return (

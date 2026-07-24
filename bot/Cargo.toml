@@ -1,8 +1,8 @@
 [package]
 name = "add-bot"
 version.workspace = true
-edition.workspace = true
-description = "Add Reflector (Echo) Bot - Standalone implementation"
+edition = "2024"
+description = "Add automated bot"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -19,7 +19,7 @@ thiserror = "2"
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+sqlx.workspace = true
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 futures = "0.3"
 uuid = { version = "1", features = ["v4"] }
@@ -32,7 +32,6 @@ anyhow = "1"
 shellexpand = "3"
 base64 = "0.21"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
-pqcrypto-dilithium = "0.5"
 ml-dsa = "0.1"
 pem = "3"
 add-crypto-pq = { path = "../crypto-pq" }
@@ -46,7 +45,6 @@ path = "src/main.rs"
 name = "add-bot"
 section = "net"
 priority = "optional"
-architecture = "amd64"
 maintainer = "Andreas Mueller <amu@gnoppix.com>"
-description = "Add Reflector Bot - Automated echo bot for testing"
+extended-description = "Add Reflector Bot - Automated echo bot for testing"
 depends = "libssl3"

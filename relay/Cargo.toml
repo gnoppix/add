@@ -1,7 +1,7 @@
 [package]
 name = "add-relay"
 version.workspace = true
-edition.workspace = true
+edition = "2024"
 description = "Add relay server (store-and-forward)"
 
 [dependencies]

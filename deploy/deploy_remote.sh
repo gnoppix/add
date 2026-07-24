@@ -1,6 +1,6 @@
 #!/bin/bash
 # Remote deploy helper: swap .new binaries into place, restart daemons.
-# Run on each server host (is/jp/me run relay+bootstrap; nl runs reflector).
+# Run on each server host (is/sg/me run relay+bootstrap; nl runs reflector).
 set -u
 cd /root/add
 TS=$(date +%s)

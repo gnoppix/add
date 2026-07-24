@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy M1-M6 patched binaries to the four hosts.
 # Conventions (per session memory):
-#   is=eu bootstrap, jp=asia bootstrap, me=us bootstrap+relay, nl=reflector(:44089)
+#   is=eu bootstrap, sg=asia bootstrap, me=us bootstrap+relay, nl=reflector(:44089)
 #   binaries in /root/add, run detached via setsid (no systemd)
 #   backup convention: <bin>.bak.<epoch>
 set -u
@@ -12,12 +12,12 @@ SRC=$ROOT/target/release
 # host:binaries  (me gets relay+bootstrap, others get relay+bootstrap too except nl gets reflector)
 declare -A HOST_BINS=(
   [is]="add add-relay add-bootstrap"
-  [jp]="add add-relay add-bootstrap"
+  [sg]="add add-relay add-bootstrap"
   [me]="add add-relay add-bootstrap"
   [nl]="add add-reflector"
 )
 
-for host in is jp me nl; do
+for host in is sg me nl; do
   bins=${HOST_BINS[$host]}
   echo "=== deploying to $host ==="
   # 1. scp each binary as <name>.new

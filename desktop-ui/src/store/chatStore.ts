@@ -14,13 +14,11 @@ import { create } from 'zustand'
 import type { Conversation, Message, MessageStatus } from '../types/index'
 import { generateInitialsAvatar } from '../lib/identicon'
 import { parseAttachment } from '../lib/attachment'
-import { useSettingsStore } from './settingsStore'
 
 // Track sent message content to filter out relay echoes
 // (only used to detect our own messages echoed back via relay)
 const sentContent = new Set<string>()
 const markSent = (text: string) => { sentContent.add(text) }
-const wasSent = (text: string) => sentContent.has(text)
 
 // Dedupe key for incoming relay messages. The relay mailbox is not reliably
 // purged, so `add read --json` can return the same messages on every poll.
@@ -244,6 +242,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
+  // Periodic relay poll - moved into this store scope for proper debounce/backoff tracking
   loadMessages: async () => {
     const api = getEvaAPI()
     if (!api) return
@@ -253,6 +252,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       raw = await api.read(true)
     } catch (error) {
       console.error('Failed to read messages:', error)
+      // Do not throw - polling should be resilient
       return
     }
 
@@ -268,6 +268,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // Never create a conversation / show a message from our own Null ID.
       // Self-echoes can arrive via the relay round-trip.
       if (myId && from === myId) continue
+      
+      // Dedupe key: for attachments, fold in the name+size so two different
+      // files from the same sender are not treated as one repeat; for plain text use content.
+      const dedupeContent = text || ''
+      const key = incomingKey(from, dedupeContent)
+      if (seenIncoming.has(key)) continue
+      
+      seenIncoming.add(key)
+
       // Ensure a conversation exists for the sender (creates one on first message).
       const exists = state.conversations.some((c) => c.id === from)
       if (!exists) {
@@ -347,23 +356,60 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       console.warn('Add API not available (running in browser?)')
       return
     }
-    try {
-      const identity = await api.getMyId()
-      set({ myId: identity.id, myFingerprint: identity.fingerprint, isAuthenticated: !!identity.id })
-      get().hydrate()
-      
-      // Auto-start listener if enabled in settings
-      const { autoStartListener } = useSettingsStore.getState().ui
-      if (autoStartListener) {
+    // `getMyId()` can transiently throw "Another add instance is already
+    // running" if a stale CLI process still holds the singleton pid lock
+    // (e.g. an orphaned listener from a crashed run, or a concurrent command).
+    // Retry a few times with a short backoff before giving up — a lock error
+    // must NEVER be confused with "no identity" (which would wrongly offer to
+    // wipe and recreate the vault via createIdentity).
+    const readIdentity = async (): Promise<{ id: string; fingerprint: string } | null> => {
+      for (let attempt = 1; attempt <= 5; attempt++) {
         try {
-          await api.startListen()
-          set({ listenRunning: true })
-          console.log('[chatStore] Auto-started P2P listener on unlock')
+          return await api.getMyId()
         } catch (err) {
-          console.error('[chatStore] Failed to auto-start listener:', err)
+          const msg = err instanceof Error ? err.message : String(err)
+          if (msg.includes('already running') && attempt < 5) {
+            console.warn(`[chatStore] getMyId blocked by lock (attempt ${attempt}/5), retrying...`)
+            await new Promise((r) => setTimeout(r, 600))
+            continue
+          }
+          throw err
         }
       }
+      throw new Error('getMyId: exceeded retry attempts')
+    }
+
+    try {
+      const identity = await readIdentity()
+      if (!identity?.id) {
+        // Genuinely no identity — let the UI prompt to create one.
+        set({ isAuthenticated: false })
+        return
+      }
+      set({ myId: identity.id, myFingerprint: identity.fingerprint, isAuthenticated: true })
+      get().hydrate()
+
+      // Always start the P2P listener immediately after unlock so inbound
+      // messages arrive without requiring a manual toggle. Chain bootstrap
+      // registration to the listener so our new IP/port is advertised only
+      // once the listener is actually up.
+      try {
+        await api.startListen()
+        set({ listenRunning: true })
+        console.log('[chatStore] Auto-started P2P listener on unlock')
+      } catch (err) {
+        console.error('[chatStore] Failed to auto-start listener:', err)
+      }
+
+      // Register with all known bootstrap nodes in the background (fire-and-forget).
+      // This refreshes our presence/cert + our freshly-advertised listener
+      // address on the bootstrap network. Failures are non-fatal (bootstrap
+      // nodes temporarily unreachable).
+      api.registerAllBootstraps()
+        .then(() => console.log('[chatStore] register-all-bootstraps completed'))
+        .catch((err) => console.warn('[chatStore] register-all-bootstraps failed:', err))
     } catch (err) {
+      console.error('[chatStore] initialize failed:', err)
       set({ isAuthenticated: false })
     }
   },

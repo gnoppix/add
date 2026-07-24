@@ -1,22 +1,19 @@
 /**
  *-------------------------------------------------------------------------------
- * Vault Unlock Dialog — TPM PIN or Passphrase entry with self-destruct
+ * Vault Unlock Dialog — Passphrase entry with self-destruct
  *-------------------------------------------------------------------------------
  */
 
-import { useState, useEffect } from 'react'
-import { useSettingsStore } from '../../store/settingsStore'
+import { useState } from 'react'
 
 interface VaultUnlockDialogProps {
   isOpen: boolean
   onClose: () => void
   onSuccess: () => void
-  hasTpm: boolean
   homeDir: string // User's home directory for self-destruct
 }
 
-function VaultUnlockDialog({ isOpen, onClose, onSuccess, hasTpm, homeDir }: VaultUnlockDialogProps) {
-  const [pin, setPin] = useState('')
+function VaultUnlockDialog({ isOpen, onClose, onSuccess, homeDir }: VaultUnlockDialogProps) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [failedAttempts, setFailedAttempts] = useState(0)
@@ -31,19 +28,15 @@ function VaultUnlockDialog({ isOpen, onClose, onSuccess, hasTpm, homeDir }: Vaul
 
     try {
       const api = window.addAPI
-      if (!api) throw new Error('API not available')
+      if (!api || !api.unlock) throw new Error('API not available')
 
-      if (hasTpm && pin.length !== 6) {
-        throw new Error('TPM PIN must be exactly 6 digits')
-      }
-      if (!hasTpm && password.length < 16) {
+      if (password.length < 16) {
         throw new Error('Passphrase must be at least 16 characters')
       }
 
-      await api.unlock({ pin: pin || undefined, password: password || undefined })
+      await api.unlock({ password })
       setFailedAttempts(0)
       onSuccess()
-      setPin('')
       setPassword('')
     } catch (err) {
       const newAttempts = failedAttempts + 1
@@ -71,7 +64,7 @@ function VaultUnlockDialog({ isOpen, onClose, onSuccess, hasTpm, homeDir }: Vaul
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="w-full max-w-sm rounded-lg bg-white p-6 dark:bg-gray-800">
         <h2 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
-          {hasTpm ? 'Enter TPM PIN' : 'Enter Passphrase'}
+          Enter Passphrase
         </h2>
         {showWarning && (
           <p className="mb-2 text-sm text-orange-500">
@@ -79,29 +72,15 @@ function VaultUnlockDialog({ isOpen, onClose, onSuccess, hasTpm, homeDir }: Vaul
           </p>
         )}
         <form onSubmit={handleSubmit}>
-          {hasTpm ? (
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={6}
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-              placeholder="6-digit PIN"
-              className="mb-4 w-full rounded border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
-              autoFocus
-              required
-            />
-          ) : (
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="16-character passphrase"
-              className="mb-4 w-full rounded border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
-              autoFocus
-              required
-            />
-          )}
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="16-character passphrase"
+            className="mb-4 w-full rounded border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+            autoFocus
+            required
+          />
           {error && (
             <p className="mb-3 text-sm text-red-500">{error}</p>
           )}

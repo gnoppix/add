@@ -1,8 +1,8 @@
 [package]
 name = "add-dht-core"
 version.workspace = true
-edition.workspace = true
-description = "Add DHT storage layer with SQLite persistence, Kademlia routing, and TOFU pinning"
+edition = "2024"
+description = "Add DHT core (libp2p/kademlia logic)"
 
 [dependencies]
 tokio.workspace = true
@@ -13,7 +13,7 @@ hex.workspace = true
 rand.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+sqlx.workspace = true
 add-protocol = { path = "../protocol" }
 tokio-tungstenite.workspace = true
 futures.workspace = true
