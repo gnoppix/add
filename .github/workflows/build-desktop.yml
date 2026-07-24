@@ -25,6 +25,9 @@ env:
   CARGO_TERM_COLOR: "never"
   MAKEFLAGS: "-j2"
   CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  # cc-rs (used by aws-lc-sys/ring/sequoia-nettle build scripts) ignores
+  # CARGO_BUILD_JOBS; it honors NUM_JOBS, so bound it too to avoid OOM.
+  NUM_JOBS: "2"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -62,8 +65,9 @@ jobs:
         run: |
           $env:OPENSSL_STATIC="1"
           # Windows runs without TPM feature (tss-esapi requires native TPM libs)
-          cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features
-          New-Item -ItemType Directory -Force -Path target\\bundle
+          cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features 2>&1 | Tee-Object -FilePath build.log
+          Get-Content build.log | Select-Object -Last 400 >> $env:GITHUB_STEP_SUMMARY
+          if (Select-String -Path build.log -Pattern '^error') { exit 1 }
           Copy-Item target\\x86_64-pc-windows-msvc\\release\\add.exe target\\bundle\\add.exe
 
       - name: Install npm deps
@@ -121,8 +125,11 @@ jobs:
         run: |
           brew install nettle gmp
           # macOS runs without TPM feature (tss-esapi requires native TPM libs)
-          cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features
-          cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features
+          set -uo pipefail
+          cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features 2>&1 | tee /tmp/build.log || true
+          cargo build --package add-client --release --target aarch64-apple-darwin --no-default-features 2>&1 | tee -a /tmp/build.log || true
+          tail -n 400 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
+          grep -qE '^error' /tmp/build.log && exit 1 || true
           mkdir -p target/bundle
           lipo -create \
             target/x86_64-apple-darwin/release/add \
@@ -185,7 +192,10 @@ jobs:
       - name: Build add core (x86_64-unknown-linux-gnu)
         run: |
           # Linux uses TPM feature (requires tss-esapi packages)
-          cargo build --package add-client --release --target x86_64-unknown-linux-gnu --features tpm
+          set -uo pipefail
+          cargo build --package add-client --release --target x86_64-unknown-linux-gnu --features tpm 2>&1 | tee /tmp/build.log || true
+          tail -n 400 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
+          grep -qE '^error' /tmp/build.log && exit 1 || true
           mkdir -p target/bundle
           cp target/x86_64-unknown-linux-gnu/release/add target/bundle/add
           chmod +x target/bundle/add
