@@ -146,6 +146,11 @@ jobs:
           brew install nettle@3 gmp pkg-config
           export NETTLE_INCLUDE_DIR="$(brew --prefix nettle@3)/include"
           export NETTLE_LIB_DIR="$(brew --prefix nettle@3)/lib"
+          # Skip pkg-config: the macOS job cross-compiles x86_64 from an Apple
+          # Silicon runner, and nettle-sys's pkg-config call rejects
+          # cross-compilation. NETTLE_INCLUDE_DIR/LIB_DIR above are used
+          # directly instead (no pkg-config needed).
+          export NETTLE_NO_PKG_CONFIG=1
           export PKG_CONFIG_PATH="$(brew --prefix nettle@3)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH"
           export LDFLAGS="-L$(brew --prefix nettle@3)/lib -L$(brew --prefix gmp)/lib"
           export CPPFLAGS="-I$(brew --prefix nettle@3)/include -I$(brew --prefix gmp)/include"
