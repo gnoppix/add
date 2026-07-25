@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-07-25 — Backup/Restore ID + AppImage in Releases + Auto Bootstrap Registration + Contact Persistence Fix + Windows DLL Fix
+## 2026-07-25 — Backup/Restore ID + AppImage in Releases + Auto Bootstrap Registration + Contact Persistence Fix + Windows DLL Fix + Security Fix
 
 - **Desktop: Backup/Restore Identity.** New "Backup ID" section in Settings modal. Creates timestamped zip of `~/.add` (keys, contacts, messages, vault) stored in `~/.add-backup/`; keeps max 4 backups (auto-cleanup). Restore overwrites current identity with confirmation dialog. Delete individual backups. All strings translated for en/de/es/ja/fr.
 - **Desktop: AppImage included in GitHub Releases.** Linux builds now publish both `.deb` and `.AppImage` (distro-agnostic) assets attached to the GitHub Release.
@@ -9,6 +9,7 @@
 - **Auto Bootstrap Registration:** On identity creation (`add-init`), the app now also calls `register-all-bootstraps` to register the new identity on all bootstrap servers (in addition to publishing the cert). Best-effort with fallback logging.
 - **Contact Persistence Fixed.** Contacts added during a session now survive app restarts. Fixed `hydrate()` in `chatStore.ts` to restore BOTH conversations AND messages from localStorage (previously only messages were restored, contacts were lost on restart).
 - **Windows DLL Fix.** Added required vcpkg DLLs (OpenSSL, nettle, gmp) to `extraResources` in electron-builder so Windows AppImage/NSIS builds include them. Fixed `STATUS_DLL_NOT_FOUND` (0xC0000135 / 3221225781) on `add init`.
+- **Security Fix (npm audit).** Upgraded `archiver` from 7.0.1 → 8.0.0, eliminating 7 high-severity vulnerabilities in the `brace-expansion`/`minimatch`/`glob` dependency chain (GHSA-mh99-v99m-4gvg). Production dependencies now clean.
 
 ## 2026-07-23 — UI Settings "UI Settings" label fix + complete i18n for 5 languages + Settings modal navigation
 
