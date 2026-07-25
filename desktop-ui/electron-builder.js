@@ -35,6 +35,9 @@ module.exports = {
   extraMetadata: {
     main: 'electron/main.js'
   },
+  // build/icon.svg is the project logo (512x512). electron-builder converts
+  // it to the platform-specific formats; AppImage requires an icon.
+  icon: 'build/icon.svg',
   linux: {
     // deb for Debian/Ubuntu; AppImage for everything else (distro-agnostic,
     // runs on any x86_64 Linux without a package manager).
