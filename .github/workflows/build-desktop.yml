@@ -150,7 +150,6 @@ jobs:
           # nettle-sys's pkg-config call rejects cross-compilation. Allow it
           # (PKG_CONFIG_PATH above points pkg-config at nettle@3).
           export PKG_CONFIG_ALLOW_CROSS=1
-          export PKG_CONFIG_ALLOW_CROSS_x86_64-apple-darwin=1
           export PKG_CONFIG_PATH="$(brew --prefix nettle@3)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH"
           export LDFLAGS="-L$(brew --prefix nettle@3)/lib -L$(brew --prefix gmp)/lib"
           export CPPFLAGS="-I$(brew --prefix nettle@3)/include -I$(brew --prefix gmp)/include"
