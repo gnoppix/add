@@ -62,13 +62,20 @@ jobs:
           cache-dependency-path: desktop-ui/package-lock.json
 
       - name: Install nettle/gmp build libs (sequoia-openpgp crypto-nettle)
-        run: vcpkg install nettle gmp --triplet x64-windows
+        run: vcpkg install nettle gmp pkgconf --triplet x64-windows
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows
 
       - name: Build add core (x86_64-pc-windows-msvc)
         run: |
           $env:OPENSSL_STATIC="1"
+          # add-client links sequoia-openpgp with crypto-nettle unconditionally,
+          # so nettle (C lib + headers) must be discoverable. Point nettle-sys
+          # at the vcpkg install prefix directly (skips pkg-config entirely).
+          $vcpkgRoot = "$env:VCPKG_INSTALLATION_ROOT"
+          $env:NETTLE_INCLUDE_DIR = "$vcpkgRoot\installed\x64-windows\include"
+          $env:NETTLE_LIB_DIR = "$vcpkgRoot\installed\x64-windows\lib"
+          $env:PKG_CONFIG_PATH = "$vcpkgRoot\installed\x64-windows\lib\pkgconfig"
           # Windows runs without TPM feature (tss-esapi requires native TPM libs)
           cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features 2>&1 | Tee-Object -FilePath build.log
           Get-Content build.log | Select-Object -Last 400 >> $env:GITHUB_STEP_SUMMARY
@@ -129,6 +136,12 @@ jobs:
       - name: Build add core (universal via lipo)
         run: |
           brew install nettle gmp
+          # add-client links sequoia-openpgp with crypto-nettle unconditionally,
+          # so nettle (C lib + headers) must be on the search path. Homebrew
+          # does not export PKG_CONFIG_PATH in CI, so set it explicitly.
+          export PKG_CONFIG_PATH="$(brew --prefix nettle)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export LDFLAGS="-L$(brew --prefix nettle)/lib -L$(brew --prefix gmp)/lib"
+          export CPPFLAGS="-I$(brew --prefix nettle)/include -I$(brew --prefix gmp)/include"
           # macOS runs without TPM feature (tss-esapi requires native TPM libs)
           set -uo pipefail
           cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features 2>&1 | tee /tmp/build.log || true
