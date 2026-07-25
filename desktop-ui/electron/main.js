@@ -431,6 +431,13 @@ ipcMain.handle('add-init', async (_, opts) => {
   } catch (e) {
     console.warn('[add-init] cert publish skipped (bootstrap unreachable?):', e.message)
   }
+  // Also register the new identity on all bootstrap servers
+  try {
+    await queuedCommand(['register-all-bootstraps'])
+    console.log('[add-init] registered on all bootstrap servers')
+  } catch (e) {
+    console.warn('[add-init] bootstrap registration skipped:', e.message)
+  }
   return result
 })
 

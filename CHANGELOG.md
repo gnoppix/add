@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-25 — Backup/Restore ID + AppImage in Releases + Auto Bootstrap Registration
+
+- **Desktop: Backup/Restore Identity.** New "Backup ID" section in Settings modal. Creates timestamped zip of `~/.add` (keys, contacts, messages, vault) stored in `~/.add-backup/`; keeps max 4 backups (auto-cleanup). Restore overwrites current identity with confirmation dialog. Delete individual backups. All strings translated for en/de/es/ja/fr.
+- **Desktop: AppImage included in GitHub Releases.** Linux builds now publish both `.deb` and `.AppImage` (distro-agnostic) assets attached to the GitHub Release.
+- **Electron IPC:** Added `add-backup`, `add-list-backups`, `add-restore`, `add-delete-backup` handlers (uses `archiver` + `unzipper`).
+- **TypeScript types:** Added `backup`, `listBackups`, `restore`, `deleteBackup` to `window.addAPI` types.
+- **Auto Bootstrap Registration:** On identity creation (`add-init`), the app now also calls `register-all-bootstraps` to register the new identity on all bootstrap servers (in addition to publishing the cert). Best-effort with fallback logging.
+
 ## 2026-07-23 — UI Settings "UI Settings" label fix + complete i18n for 5 languages + Settings modal navigation
 
 - **UI Settings label fixed.** The settings menu button "Interface Setting" now correctly shows "UI Settings" (translation key `ui.sidebar.uiSettings`). Clicking it opens the UISettings modal labeled "UI Settings" (`ui.settings.uiSettings`). Close button returns to main Settings modal.

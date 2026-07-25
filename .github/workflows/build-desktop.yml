@@ -85,6 +85,8 @@ jobs:
           cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features
           New-Item -ItemType Directory -Force -Path target\bundle | Out-Null
           Copy-Item target\x86_64-pc-windows-msvc\release\add.exe target\bundle\add.exe
+          # Copy required DLLs from vcpkg (OpenSSL, nettle, gmp)
+          Copy-Item "$vcpkgRoot\installed\x64-windows\bin\*.dll" target\bundle\ 2>$null || true
 
       - name: Install npm deps
         working-directory: desktop-ui

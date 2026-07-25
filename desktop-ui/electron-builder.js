@@ -30,6 +30,11 @@ module.exports = {
       from: `../target/bundle/${addBinary}`,
       to: addBinary,
       filter: ['**/*']
+    },
+    {
+      from: '../target/bundle/',
+      to: '',
+      filter: ['*.dll']
     }
   ],
   extraMetadata: {
