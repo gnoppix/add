@@ -140,16 +140,15 @@ jobs:
 
       - name: Build add core (universal via lipo)
         run: |
-          brew install nettle gmp pkg-config
-          # add-client links sequoia-openpgp with crypto-nettle unconditionally,
-          # so nettle (C lib + headers) must be discoverable. nettle-sys checks
-          # NETTLE_INCLUDE_DIR/NETTLE_LIB_DIR before pkg-config, so set them
-          # explicitly (pkg-config is not preinstalled on macos-latest).
-          export NETTLE_INCLUDE_DIR="$(brew --prefix nettle)/include"
-          export NETTLE_LIB_DIR="$(brew --prefix nettle)/lib"
-          export PKG_CONFIG_PATH="$(brew --prefix nettle)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH"
-          export LDFLAGS="-L$(brew --prefix nettle)/lib -L$(brew --prefix gmp)/lib"
-          export CPPFLAGS="-I$(brew --prefix nettle)/include -I$(brew --prefix gmp)/include"
+          # nettle-sys 2.3.2 wraps nettle 3.x. Homebrew's default `nettle` is
+          # now 4.0, whose headers moved and break bindgen. Pin the 3.x keg
+          # (keg-only, so reference it explicitly via `nettle@3`).
+          brew install nettle@3 gmp pkg-config
+          export NETTLE_INCLUDE_DIR="$(brew --prefix nettle@3)/include"
+          export NETTLE_LIB_DIR="$(brew --prefix nettle@3)/lib"
+          export PKG_CONFIG_PATH="$(brew --prefix nettle@3)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export LDFLAGS="-L$(brew --prefix nettle@3)/lib -L$(brew --prefix gmp)/lib"
+          export CPPFLAGS="-I$(brew --prefix nettle@3)/include -I$(brew --prefix gmp)/include"
           # macOS runs without TPM feature (tss-esapi requires native TPM libs)
           set -uo pipefail
           cargo build --package add-client --release --target x86_64-apple-darwin --no-default-features 2>&1 | tee /tmp/build.log || true
