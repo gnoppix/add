@@ -21,13 +21,18 @@ env:
   CARGO_NET_RETRY: "10"
   CARGO_NET_TIMEOUT: "120"
   CARGO_HTTP_TIMEOUT: "120"
-  CARGO_BUILD_JOBS: "2"
+  # Minimum parallelism to avoid OOM-killing the heavy native builds
+  # (aws-lc-sys prebuilt, ring -O3 C, sequoia-nettle, sqlx) on the
+  # 7-14 GB GitHub-hosted runners. A cold build that exhausts RAM is
+  # SIGKILLed with no stderr, surfacing only as a bare nonzero exit.
+  # Single-job builds use the least peak memory.
+  CARGO_BUILD_JOBS: "1"
   CARGO_TERM_COLOR: "never"
-  MAKEFLAGS: "-j2"
-  CMAKE_BUILD_PARALLEL_LEVEL: "2"
-  # cc-rs (used by aws-lc-sys/ring/sequoia-nettle build scripts) ignores
-  # CARGO_BUILD_JOBS; it honors NUM_JOBS, so bound it too to avoid OOM.
-  NUM_JOBS: "2"
+  MAKEFLAGS: "-j1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "1"
+  # cc-rs (used by ring/sequoia-nettle build scripts) ignores
+  # CARGO_BUILD_JOBS; it honors NUM_JOBS, so bound it too.
+  NUM_JOBS: "1"
 
 jobs:
   # ---------------------------------------------------------------------------
