@@ -605,6 +605,143 @@ ipcMain.handle('add-self-destruct', async (_, homeDir) => {
   return { success: true, message: 'Identity destroyed' }
 })
 
+// Backup/Restore functions for ~/.add directory
+const { createWriteStream } = require('fs')
+const { pipeline } = require('stream/promises')
+const archiver = require('archiver')
+const unzipper = require('unzipper')
+
+// Backup ~/.add to ~/.add-backup with timestamp, keep max 4 backups
+ipcMain.handle('add-backup', async () => {
+  try {
+    const homeDir = os.homedir()
+    const addDir = path.join(homeDir, '.add')
+    const backupDir = path.join(homeDir, '.add-backup')
+    
+    if (!fs.existsSync(addDir)) {
+      return { success: false, error: 'No .add directory found to backup' }
+    }
+    
+    // Ensure backup directory exists
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true })
+    }
+    
+    // Generate timestamped backup filename
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]
+    const backupName = `add-backup-${timestamp}.zip`
+    const backupPath = path.join(backupDir, backupName)
+    
+    // Create zip archive
+    const output = createWriteStream(backupPath)
+    const archive = archiver('zip', { zlib: { level: 9 } })
+    
+    await pipeline(archive, output)
+    
+    // Add all files from .add directory
+    archive.directory(addDir, false)
+    await archive.finalize()
+    
+    // Cleanup old backups (keep max 4)
+    const backups = fs.readdirSync(backupDir)
+      .filter(f => f.startsWith('add-backup-') && f.endsWith('.zip'))
+      .map(f => ({ name: f, time: fs.statSync(path.join(backupDir, f)).mtimeMs }))
+      .sort((a, b) => b.time - a.time)
+    
+    for (let i = 4; i < backups.length; i++) {
+      fs.unlinkSync(path.join(backupDir, backups[i].name))
+    }
+    
+    const stats = fs.statSync(backupPath)
+    return { 
+      success: true, 
+      backupName,
+      backupPath,
+      size: stats.size,
+      timestamp: new Date().toISOString()
+    }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+// List available backups in ~/.add-backup
+ipcMain.handle('add-list-backups', async () => {
+  try {
+    const backupDir = path.join(os.homedir(), '.add-backup')
+    if (!fs.existsSync(backupDir)) {
+      return { success: true, backups: [] }
+    }
+    
+    const backups = fs.readdirSync(backupDir)
+      .filter(f => f.startsWith('add-backup-') && f.endsWith('.zip'))
+      .map(f => {
+        const fullPath = path.join(backupDir, f)
+        const stats = fs.statSync(fullPath)
+        return {
+          name: f,
+          path: fullPath,
+          size: stats.size,
+          mtime: stats.mtime.toISOString()
+        }
+      })
+      .sort((a, b) => new Date(b.mtime) - new Date(a.mtime))
+    
+    return { success: true, backups }
+  } catch (err) {
+    return { success: false, error: err.message, backups: [] }
+  }
+})
+
+// Delete a backup
+ipcMain.handle('add-delete-backup', async (_, backupName) => {
+  try {
+    const backupDir = path.join(os.homedir(), '.add-backup')
+    const backupPath = path.join(backupDir, backupName)
+    
+    if (!fs.existsSync(backupPath)) {
+      return { success: false, error: 'Backup file not found' }
+    }
+    
+    fs.unlinkSync(backupPath)
+    return { success: true, message: `Deleted ${backupName}` }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+// Restore ~/.add from a backup zip
+ipcMain.handle('add-restore', async (_, backupName) => {
+  try {
+    const homeDir = os.homedir()
+    const addDir = path.join(homeDir, '.add')
+    const backupDir = path.join(homeDir, '.add-backup')
+    const backupPath = path.join(backupDir, backupName)
+    
+    if (!fs.existsSync(backupPath)) {
+      return { success: false, error: 'Backup file not found' }
+    }
+    
+    // Remove existing .add directory
+    if (fs.existsSync(addDir)) {
+      fs.rmSync(addDir, { recursive: true, force: true })
+    }
+    
+    // Create fresh .add directory
+    fs.mkdirSync(addDir, { recursive: true })
+    
+    // Extract backup
+    await pipeline(
+      fs.createReadStream(backupPath),
+      unzipper.Extract({ path: addDir })
+    )
+    
+    return { success: true, message: `Restored from ${backupName}` }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
 ipcMain.handle('add-passwd', async (_, current, newPass) => {
   runCliCommand(['passwd', '--current', current, '--new', newPass])
 })

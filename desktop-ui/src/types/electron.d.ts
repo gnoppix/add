@@ -37,11 +37,11 @@ declare global {
       send: (nullId: string, message: string, ttl?: string) => Promise<unknown>
       read: (json: boolean) => Promise<unknown>
       delete: (id: string) => Promise<unknown>
-      // Verification
+      // Verification (G6)
       verify: (nullId: string) => Promise<unknown>
       safetyNumber: (nullId: string) => Promise<unknown>
       status: () => Promise<unknown>
-      // P2P Listen
+      // P2P Listen (background process)
       listen: () => Promise<unknown>
       startListen: () => Promise<unknown>
       stopListen: () => Promise<unknown>
@@ -50,13 +50,22 @@ declare global {
       // Passphrase management (stored in memory, never persisted to disk)
       setPassphrase: (passphrase: string) => Promise<{ success: boolean }>
       clearPassphrase: () => Promise<{ success: boolean }>
-      // Security
+      submitPassphrase: (passphrase: string) => Promise<{ success: boolean; error?: string }>
+      // Security - Change GPG key passphrase
       passwd: (current: string, newPass: string) => Promise<unknown>
       unlock: (opts?: { pin?: string; password?: string }) => Promise<unknown>
       selfDestruct: (homeDir: string) => Promise<unknown>
-      // About
+      // Backup/Restore
+      backup: () => Promise<{ success: boolean; backupName?: string; backupPath?: string; size?: number; timestamp?: string; error?: string }>
+      listBackups: () => Promise<{ success: boolean; backups: Array<{ name: string; path: string; size: number; mtime: string }>; error?: string }>
+      restore: (backupName: string) => Promise<{ success: boolean; message?: string; error?: string }>
+      deleteBackup: (backupName: string) => Promise<{ success: boolean; message?: string; error?: string }>
+      // For About window
       openExternal: (url: string) => Promise<unknown>
-      // Subscribe to main-process push events
+      getVersion: () => Promise<unknown>
+
+      // Subscribe to main-process push events (e.g. live P2P inbound messages
+      // from the background listener). Returns an unsubscribe function.
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void
     }
   }

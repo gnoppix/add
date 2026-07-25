@@ -32,7 +32,9 @@
     "lucide-react": "^0.400.0",
     "i18next": "^24.0.0",
     "react-i18next": "^14.0.0",
-    "i18next-browser-languagedetector": "^8.0.0"
+    "i18next-browser-languagedetector": "^8.0.0",
+    "archiver": "^7.0.0",
+    "unzipper": "^0.12.3"
   },
   "devDependencies": {
     "@types/react": "^18.2.0",

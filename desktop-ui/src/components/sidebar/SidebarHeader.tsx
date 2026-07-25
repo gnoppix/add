@@ -17,6 +17,7 @@ import ProfileAvatar from './ProfileAvatar'
 import { generateInitialsAvatar } from '../../lib/identicon'
 import SecuritySettings from '../settings/SecuritySettings'
 import UISettings from '../settings/UISettings'
+import BackupSettings from '../settings/BackupSettings'
 import { useTranslation } from 'react-i18next'
 
 interface AddContactForm {
@@ -36,6 +37,7 @@ function SidebarHeader() {
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showUISettingsModal, setShowUISettingsModal] = useState(false)
   const [showSecurityModal, setShowSecurityModal] = useState(false)
+  const [showBackupModal, setShowBackupModal] = useState(false)
   const [showAddContact, setShowAddContact] = useState(false)
   const [showPasswdModal, setShowPasswdModal] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -316,6 +318,34 @@ function SidebarHeader() {
                   </button>
                 </div>
               )}
+
+              {/* Backup Settings */}
+              {isAuthenticated && (
+                <div className="border-t pt-3">
+                  <p className="font-medium">{t('ui.settings.backupSettings')}</p>
+                  <p className="text-xs text-gray-500 mt-1">{t('ui.settings.backupDesc')}</p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      onClick={() => {
+                        setShowSettingsModal(false)
+                        setShowBackupModal(true)
+                      }}
+                      className="rounded bg-primary-500 px-2 py-0.5 text-xs text-white hover:bg-primary-600"
+                    >
+                      {t('ui.settings.backupButton')}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowSettingsModal(false)
+                        setShowBackupModal(true)
+                      }}
+                      className="rounded bg-gray-100 px-2 py-0.5 text-xs hover:bg-gray-200"
+                    >
+                      {t('ui.settings.restoreButton')}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <button
@@ -342,6 +372,15 @@ function SidebarHeader() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
             <UISettings onClose={() => { setShowUISettingsModal(false); setShowSettingsModal(true); }} />
+          </div>
+        </div>
+      )}
+
+      {/* Backup Settings Modal */}
+      {showBackupModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
+            <BackupSettings onClose={() => { setShowBackupModal(false); setShowSettingsModal(true); }} />
           </div>
         </div>
       )}

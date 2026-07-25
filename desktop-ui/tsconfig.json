@@ -19,6 +19,5 @@
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "src/types/electron.d.ts"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src", "src/types/electron.d.ts"]
 }

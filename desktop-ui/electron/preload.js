@@ -93,6 +93,12 @@ contextBridge.exposeInMainWorld('addAPI', {
   openExternal: (url) => ipcRenderer.invoke('add-open-external', url),
   getVersion: () => ipcRenderer.invoke('add-get-version'),
 
+  // Backup/Restore
+  backup: () => ipcRenderer.invoke('add-backup'),
+  listBackups: () => ipcRenderer.invoke('add-list-backups'),
+  restore: (backupName) => ipcRenderer.invoke('add-restore', backupName),
+  deleteBackup: (backupName) => ipcRenderer.invoke('add-delete-backup', backupName),
+
   // Subscribe to main-process push events (e.g. live P2P inbound messages
   // from the background listener). Returns an unsubscribe function.
   on: (channel, callback) => {
