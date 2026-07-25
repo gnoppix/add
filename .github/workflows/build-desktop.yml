@@ -70,12 +70,17 @@ jobs:
         run: |
           $env:OPENSSL_STATIC="1"
           # add-client links sequoia-openpgp with crypto-nettle unconditionally,
-          # so nettle (C lib + headers) must be discoverable. Point nettle-sys
-          # at the vcpkg install prefix directly (skips pkg-config entirely).
+          # so nettle (C lib + headers) must be discoverable. nettle-sys checks
+          # NETTLE_INCLUDE_DIR/NETTLE_LIB_DIR before falling back to pkg-config,
+          # so set them explicitly (no pkg-config on PATH needed). vcpkg's pkgconf
+          # is also added to PATH as a fallback.
           $vcpkgRoot = "$env:VCPKG_INSTALLATION_ROOT"
-          $env:NETTLE_INCLUDE_DIR = "$vcpkgRoot\installed\x64-windows\include"
-          $env:NETTLE_LIB_DIR = "$vcpkgRoot\installed\x64-windows\lib"
-          $env:PKG_CONFIG_PATH = "$vcpkgRoot\installed\x64-windows\lib\pkgconfig"
+          $nettleInc = "$vcpkgRoot\installed\x64-windows\include"
+          $nettleLib = "$vcpkgRoot\installed\x64-windows\lib"
+          $env:NETTLE_INCLUDE_DIR = $nettleInc
+          $env:NETTLE_LIB_DIR = $nettleLib
+          $env:PKG_CONFIG_PATH = "$nettleLib\pkgconfig"
+          $env:PATH = "$vcpkgRoot\installed\x64-windows\tools\pkgconf;$vcpkgRoot\installed\x64-windows\bin;$env:PATH"
           # Windows runs without TPM feature (tss-esapi requires native TPM libs)
           cargo build --package add-client --release --target x86_64-pc-windows-msvc --no-default-features 2>&1 | Tee-Object -FilePath build.log
           Get-Content build.log | Select-Object -Last 400 >> $env:GITHUB_STEP_SUMMARY
@@ -135,10 +140,13 @@ jobs:
 
       - name: Build add core (universal via lipo)
         run: |
-          brew install nettle gmp
+          brew install nettle gmp pkg-config
           # add-client links sequoia-openpgp with crypto-nettle unconditionally,
-          # so nettle (C lib + headers) must be on the search path. Homebrew
-          # does not export PKG_CONFIG_PATH in CI, so set it explicitly.
+          # so nettle (C lib + headers) must be discoverable. nettle-sys checks
+          # NETTLE_INCLUDE_DIR/NETTLE_LIB_DIR before pkg-config, so set them
+          # explicitly (pkg-config is not preinstalled on macos-latest).
+          export NETTLE_INCLUDE_DIR="$(brew --prefix nettle)/include"
+          export NETTLE_LIB_DIR="$(brew --prefix nettle)/lib"
           export PKG_CONFIG_PATH="$(brew --prefix nettle)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH"
           export LDFLAGS="-L$(brew --prefix nettle)/lib -L$(brew --prefix gmp)/lib"
           export CPPFLAGS="-I$(brew --prefix nettle)/include -I$(brew --prefix gmp)/include"
