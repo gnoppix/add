@@ -238,7 +238,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: add-desktop-linux
-          path: desktop-ui/dist-electron/*.deb
+          path: |
+            desktop-ui/dist-electron/*.deb
+            desktop-ui/dist-electron/*.AppImage
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
@@ -261,3 +263,4 @@ jobs:
             artifacts/add-desktop-windows/*.exe
             artifacts/add-desktop-macos/*.dmg
             artifacts/add-desktop-linux/*.deb
+            artifacts/add-desktop-linux/*.AppImage

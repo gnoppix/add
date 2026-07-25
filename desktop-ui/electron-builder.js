@@ -36,7 +36,9 @@ module.exports = {
     main: 'electron/main.js'
   },
   linux: {
-    target: 'deb',
+    // deb for Debian/Ubuntu; AppImage for everything else (distro-agnostic,
+    // runs on any x86_64 Linux without a package manager).
+    target: ['deb', 'AppImage'],
     executableName: 'add-desktop',
     category: 'Network'
   },
