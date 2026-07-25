@@ -123,7 +123,7 @@ jobs:
       - name: Install Rust (1.97, universal)
         uses: dtolnay/rust-toolchain@1.97
         with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Cache cargo registry + build
         uses: Swatinem/rust-cache@v2
@@ -216,9 +216,7 @@ jobs:
         run: |
           # Linux uses TPM feature (requires tss-esapi packages)
           set -uo pipefail
-          cargo build --package add-client --release --target x86_64-unknown-linux-gnu --features tpm 2>&1 | tee /tmp/build.log || true
-          tail -n 400 /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
-          grep -qE '^error' /tmp/build.log && exit 1 || true
+          cargo build --package add-client --release --target x86_64-unknown-linux-gnu --features tpm
           mkdir -p target/bundle
           cp target/x86_64-unknown-linux-gnu/release/add target/bundle/add
           chmod +x target/bundle/add
