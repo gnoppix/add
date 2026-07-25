@@ -340,13 +340,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           seenIncoming.add(incomingKey(m.senderId, dedupeContent))
         }
       }
-      // Restore only the message history. The contact list is rebuilt from
-      // live state (CLI contacts + live inbound messages) so it always starts
-      // clean — no stale entries (e.g. the old reflector bot) linger from a
-      // previous version's localStorage.
-      set({ messages })
+      // Restore BOTH conversations and messages from localStorage.
+      // Conversations (contacts) are persisted so they survive app restarts
+      // without requiring CLI re-authentication.
+      const conversations = (saved.conversations || []).map((c) => ({
+        ...c,
+        lastMessageTimestamp: new Date(c.lastMessageTimestamp || Date.now()),
+      }));
+      set({ conversations, messages });
     } catch {
-      /* corrupt state — ignore */
+      /* corrupt state -- ignore */
     }
   },
 
