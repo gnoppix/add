@@ -1,0 +1,23 @@
+#!/bin/bash
+# Post-install script to fix the .desktop file with GPU/GLX disable flags
+# and set chrome-sandbox permissions so the renderer sandbox works.
+# (D-Bus is handled inside main.js via dbus-run-session re-exec when no
+#  session bus exists, so we do NOT set DBUS_SESSION_BUS_ADDRESS here.)
+
+DESKTOP_FILE="/usr/share/applications/add-desktop.desktop"
+CHROME_SANDBOX="/opt/Add Desktop/chrome-sandbox"
+
+if [ -f "$DESKTOP_FILE" ]; then
+    sed -i 's|^Exec=.*|Exec=env LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe "/opt/Add Desktop/add-desktop" --disable-gpu --disable-gpu-compositing --disable-gpu-sandbox --disable-software-rasterizer --disable-dev-shm-usage --disable-features=UseChromeOSDirectVideoDecoder,Vulkan %U|' "$DESKTOP_FILE"
+    echo "Fixed $DESKTOP_FILE with GPU/GLX flags"
+else
+    echo "Warning: $DESKTOP_FILE not found"
+fi
+
+if [ -f "$CHROME_SANDBOX" ]; then
+    chown root:root "$CHROME_SANDBOX"
+    chmod 4755 "$CHROME_SANDBOX"
+    echo "Fixed $CHROME_SANDBOX permissions (setuid root)"
+else
+    echo "Warning: $CHROME_SANDBOX not found"
+fi

@@ -8,5 +8,6 @@ eva_ratchet_sessions/
 /desktop-ui/*.sh
 /desktop-ui/dist/
 /desktop-ui/dist-electron/
-/desktop-ui/build/
+/desktop-ui/build/*
+!/desktop-ui/build/debian/
 /desktop-ui/node_modules/
