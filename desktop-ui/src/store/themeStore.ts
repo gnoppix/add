@@ -66,7 +66,11 @@ function applyCustomProperties(colors: ThemeColors) {
   })
 }
 
-function getActiveColors(theme: Theme, systemPrefersDark: boolean, customColors?: Partial<ThemeColors>): ThemeColors {
+function getActiveColors(
+  theme: Theme,
+  systemPrefersDark: boolean,
+  customColors?: Partial<ThemeColors>
+): ThemeColors {
   const isDark = theme === 'dark' || (theme === 'system' && systemPrefersDark)
   const baseColors = isDark ? darkColors : lightColors
   return { ...baseColors, ...customColors }
@@ -74,7 +78,7 @@ function getActiveColors(theme: Theme, systemPrefersDark: boolean, customColors?
 
 function applyTheme(theme: Theme, systemPrefersDark: boolean, customColors?: Partial<ThemeColors>) {
   const isDark = theme === 'dark' || (theme === 'system' && systemPrefersDark)
-  
+
   if (isDark) {
     document.documentElement.classList.add('dark')
     document.documentElement.setAttribute('data-theme', 'dark')
@@ -82,7 +86,7 @@ function applyTheme(theme: Theme, systemPrefersDark: boolean, customColors?: Par
     document.documentElement.classList.remove('dark')
     document.documentElement.setAttribute('data-theme', 'light')
   }
-  
+
   const activeColors = getActiveColors(theme, systemPrefersDark, customColors)
   applyCustomProperties(activeColors)
 }
@@ -119,7 +123,7 @@ export const useThemeStore = create<ThemeState>()(
     }),
     {
       name: 'theme-storage',
-      partialize: (state) => ({
+      partialize: state => ({
         theme: state.theme,
         customColors: state.customColors,
       }),
@@ -133,7 +137,7 @@ if (typeof window !== 'undefined') {
   const store = useThemeStore.getState()
   store.setSystemPrefersDark(mediaQuery.matches)
   applyTheme(store.theme, store.systemPrefersDark, store.customColors)
-  mediaQuery.addEventListener('change', (e) => {
+  mediaQuery.addEventListener('change', e => {
     store.setSystemPrefersDark(e.matches)
   })
 }

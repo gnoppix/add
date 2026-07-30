@@ -52,7 +52,8 @@ function ConversationRow({ conversation }: ConversationRowProps) {
     if (next && next !== conversation.name) {
       renameAlias(conversation.id, next)
       const api = window.addAPI
-      if (api) api.alias(next, conversation.id).catch((err) => console.error('Alias update failed:', err))
+      if (api)
+        api.alias(next, conversation.id).catch(err => console.error('Alias update failed:', err))
     }
     setEditing(false)
   }
@@ -68,8 +69,8 @@ function ConversationRow({ conversation }: ConversationRowProps) {
           <input
             autoFocus
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => {
               if (e.key === 'Enter') commitRename()
               if (e.key === 'Escape') setEditing(false)
             }}
@@ -104,7 +105,9 @@ function ConversationRow({ conversation }: ConversationRowProps) {
 
         {/* Avatar */}
         <div className="relative flex-shrink-0">
-          <div className={`h-12 w-12 rounded-full bg-gray-300 ${!isOnline && !conversation.isGroup ? 'grayscale' : ''}`}>
+          <div
+            className={`h-12 w-12 rounded-full bg-gray-300 ${!isOnline && !conversation.isGroup ? 'grayscale' : ''}`}
+          >
             {conversation.avatarUrl ? (
               <img
                 src={conversation.avatarUrl}
@@ -112,7 +115,9 @@ function ConversationRow({ conversation }: ConversationRowProps) {
                 className={`h-full w-full rounded-full object-cover ${!isOnline && !conversation.isGroup ? 'grayscale' : ''}`}
               />
             ) : (
-              <div className={`flex h-full w-full items-center justify-center text-sm font-medium text-gray-600 dark:text-gray-300 ${!isOnline && !conversation.isGroup ? 'grayscale' : ''}`}>
+              <div
+                className={`flex h-full w-full items-center justify-center text-sm font-medium text-gray-600 dark:text-gray-300 ${!isOnline && !conversation.isGroup ? 'grayscale' : ''}`}
+              >
                 {conversation.name.charAt(0)}
               </div>
             )}

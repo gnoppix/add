@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-07-29 — Root-cause fix: Electron↔Rust `add` IPC bridge hung forever (no ID / no contacts / missing Settings)
+
+- **Symptom:** App launched and unlocked, but showed **no Null ID, no contacts, no messages**, and the Settings sections gated on `isAuthenticated` (backup, self-destruction, change-password) were missing.
+- **Root cause (engineered, not guessed):** `queuedCommand()` in `electron/main.js` wrapped its promise chain in `new Promise((resolve, reject) => { …; return chain })`. A `Promise` executor's `return` value is **discarded** — `resolve`/`reject` were never called — so `queuedCommand()` returned a promise that **stayed PENDING FOREVER**. Every IPC call that routes through it (`add-id`, `add-read`, `add-contacts`, `add-send`, …) therefore never settled → renderer got `Error invoking remote method 'X': reply was never sent`. The CLI itself was always correct (`add id` returns the ID in ~6ms); only the bridge was broken.
+- **Fix:** `queuedCommand()` now returns the chained promise (`chain`) directly so it settles with the command result. Retry/lock-contention logic preserved.
+- **Backup fix (same v0.3.31 build):** `add-backup` handler wrote 0-byte zip files because `await pipeline(archive, output)` ran **before** `archive.directory()`/`finalize()`. Swapped order: add files → finalize → then stream to disk. Also fixed Archiver 8 ESM import for CommonJS: use `const { ZipArchive } = require('archiver')` + `new ZipArchive()` instead of broken `Archiver('zip')` wrapper.
+- **Supporting fixes shipped in the same v0.3.31 build:**
+  - `chatStore.initialize()` re-entrancy guard (`_initializing`) — kills the double-invoke that raced two `add id` calls at unlock.
+  - `chatStore` catch-block no longer wipes `isAuthenticated: false` once `myId` is already set — a late `loadMessages`/`startListen` network error can no longer collapse the Settings menu.
+  - `submitPassphrase` returns its Promise; `App.onUnlock` awaits `initialize()`.
+  - Rust `add` CLI: `MessageStore::open` now enables **WAL + `busy_timeout=5000`** so the persistent `add listen` writer and `add read` no longer deadlock on the SQLite write lock of `~/.add/messages.db`.
+  - Workspace `Cargo.toml` bumped `0.3.30 → 0.3.31` so `add -V` reflects the shipped binary.
+- **Verification:** Fresh build v0.3.31 — `add id` returns `Null ID: NN-a969-…` through the IPC handler; renderer logs `add-id handler RETURNING {"id":"NN-a969-…","fingerprint":"…"}`; ID, contacts, messages and the Settings sections now render after unlock. Backup creates non-zero zip. `npm run lint` clean; `node --check` syntax OK; promise-settling logic proven via harness.
+
+## 2026-07-26 — Fixed Linux X-session crash (self-reap → Chromium FATAL) + D-Bus private bus + structured debug logging
+
+- **Root cause (engineered, not guessed):** On Linux, `reapStaleAddProcesses()` used `comm.startsWith('add')` and `pgrep -f add`, which matched the app's own Electron binary `add-desktop` and its Chromium child processes (GPU, network, zygotes). Killing them made Chromium abort with `FATAL:dbus/bus.cc:1245 D-Bus connection was disconnected. Aborting.` — and because the app was the session leader under startx, the X server dropped to login. Under LightDM the bus was already set but unstable, so the abort still fired.
+- **Fix 1 — reap only the Rust `add` CLI:** New `isRustAddCli(pid)` checks `/proc/<pid>/comm` (exactly `add`) and `/proc/<pid>/cmdline` (ends with `add` or `add listen`). Explicitly returns `false` for `add-desktop` and any `add-...` children. Fallback pgrep changed from `-f` (substring) to `-x` (exact name match).
+- **Fix 2 — always run under a private session bus:** On Linux, the app now ALWAYS re-execs itself under `dbus-run-session` (if available), regardless of whether `DBUS_SESSION_BUS_ADDRESS` is already set. Guarded by `ADD_DESKTOP_HAS_BUS=1` so the child doesn't re-exec again. macOS/Windows untouched (guard is `process.platform === 'linux'`).
+- **Fix 3 — structured lifecycle debugging:** Every launch appends JSON lines to `~/.cache/add-desktop-debug.log`: bus guard decision, re-exec fire, GL flags, single-instance lock result, `app.whenReady`, `createWindow`, `before-quit`, `quit`, `SIGINT`/`SIGTERM`, and `uncaughtException`/`unhandledRejection` with stack. A crash now leaves a factual trail, not silence.
+- **Verification:** Fresh build v0.3.31 runs 8+ seconds under Xvfb + real session bus with 7 Chromium child processes alive, zero `FATAL` lines, reaches unlock screen. Self-reap bug eliminated.
+
 ## 2026-07-25 — Backup/Restore ID + AppImage in Releases + Auto Bootstrap Registration + Contact Persistence Fix + Windows DLL Fix + Security Fix
 
 - **Desktop: Backup/Restore Identity.** New "Backup ID" section in Settings modal. Creates timestamped zip of `~/.add` (keys, contacts, messages, vault) stored in `~/.add-backup/`; keeps max 4 backups (auto-cleanup). Restore overwrites current identity with confirmation dialog. Delete individual backups. All strings translated for en/de/es/ja/fr.

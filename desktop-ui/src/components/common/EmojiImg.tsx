@@ -29,7 +29,7 @@ function toCodepoint(emoji: string): string {
     const h = cp.codePointAt(0)
     if (h) codePoints.push(h)
   }
-  return codePoints.map((h) => h.toString(16).toLowerCase()).join('-')
+  return codePoints.map(h => h.toString(16).toLowerCase()).join('-')
 }
 
 /**
@@ -76,10 +76,7 @@ export const EmojiImg: React.FC<EmojiImgProps> = ({ emoji, size = 20, className 
   // No GIF asset: fall back to rendering the Unicode character
   if (!url) {
     return (
-      <span
-        style={{ fontSize: size, lineHeight: 1 }}
-        className={className}
-      >
+      <span style={{ fontSize: size, lineHeight: 1 }} className={className}>
         {emoji}
       </span>
     )

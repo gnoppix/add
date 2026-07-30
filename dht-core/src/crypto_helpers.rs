@@ -61,13 +61,15 @@ pub fn cache_verifying_key(fingerprint: &str, vk: &MlDsa87VerifyingKey) {
     cache.insert(key.clone(), (vk.clone(), Instant::now()));
 
     // SECURITY FIX (H10): Evict LRU entry if over capacity
-    if cache.len() > CERT_CACHE_MAX_ENTRIES
-        && let Some(lru_key) = cache
+    #[allow(clippy::collapsible_if)]
+    if cache.len() > CERT_CACHE_MAX_ENTRIES {
+        if let Some(lru_key) = cache
             .iter()
             .min_by_key(|(_, (_, ts))| *ts)
             .map(|(k, _)| k.clone())
-    {
-        cache.remove(&lru_key);
+        {
+            cache.remove(&lru_key);
+        }
     }
 }
 
@@ -114,13 +116,14 @@ pub fn pin_verifying_key(fingerprint: &str, vk: &MlDsa87VerifyingKey) -> Result<
         None => {
             cache.insert(key, (vk.clone(), Instant::now()));
             // Enforce capacity
-            if cache.len() > CERT_CACHE_MAX_ENTRIES
-                && let Some(lru_key) = cache
+            if cache.len() > CERT_CACHE_MAX_ENTRIES {
+                if let Some(lru_key) = cache
                     .iter()
                     .min_by_key(|(_, (_, ts))| *ts)
                     .map(|(k, _)| k.clone())
-            {
-                cache.remove(&lru_key);
+                {
+                    cache.remove(&lru_key);
+                }
             }
             Ok(true)
         }
@@ -130,21 +133,19 @@ pub fn pin_verifying_key(fingerprint: &str, vk: &MlDsa87VerifyingKey) -> Result<
 /// Look up a cached verifying key by fingerprint.
 ///
 /// SECURITY FIX (H10): Updates the last access time on lookup (true LRU behavior).
+#[allow(clippy::collapsible_if)]
 pub fn get_cached_verifying_key(fingerprint: &str) -> Option<MlDsa87VerifyingKey> {
     // First try read lock for lookup
-    {
-        let guard = verifying_key_cache_read();
-        if let Some(ref cache) = *guard
-            && let Some((vk, _)) = cache.get(&fingerprint.to_uppercase())
-        {
+    let cache_read = verifying_key_cache_read();
+    if let Some(ref cache) = *cache_read {
+        if let Some((vk, _)) = cache.get(&fingerprint.to_uppercase()) {
             let vk = vk.clone();
-            drop(guard);
+            drop(cache_read);
+
             // Update access time with write lock
-            {
-                let mut write_guard = verifying_key_cache_write();
-                if let Some(ref mut cache) = *write_guard
-                    && let Some(entry) = cache.get_mut(&fingerprint.to_uppercase())
-                {
+            let mut write_guard = verifying_key_cache_write();
+            if let Some(ref mut cache) = *write_guard {
+                if let Some(entry) = cache.get_mut(&fingerprint.to_uppercase()) {
                     entry.1 = Instant::now();
                 }
             }
@@ -172,7 +173,9 @@ pub fn validate_null_id(nid: &str) -> bool {
     if parts.len() != 9 || parts[0] != "NN" {
         return false;
     }
-    parts[1..].iter().all(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_hexdigit()))
+    parts[1..]
+        .iter()
+        .all(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// Verify that a null ID is the correct hash of the given fingerprint.
@@ -204,7 +207,11 @@ pub fn compute_null_id(fingerprint: &str) -> String {
     let _ = hasher.finalize_variable(&mut result);
 
     let hex = hex::encode(result); // 32 hex chars
-    let groups: Vec<&str> = hex.as_str().as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect();
+    let groups: Vec<&str> = hex
+        .as_bytes()
+        .chunks(4)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
     format!("NN-{}", groups.join("-"))
 }
 
@@ -311,11 +318,19 @@ mod tests {
 
     #[test]
     fn test_validate_null_id() {
-        assert!(validate_null_id("NN-1ae2-e797-1e6b-fff8-9e79-f936-0627-d10f"));
-        assert!(!validate_null_id("XX-1ae2-e797-1e6b-fff8-9e79-f936-0627-d10f"));
+        assert!(validate_null_id(
+            "NN-1ae2-e797-1e6b-fff8-9e79-f936-0627-d10f"
+        ));
+        assert!(!validate_null_id(
+            "XX-1ae2-e797-1e6b-fff8-9e79-f936-0627-d10f"
+        ));
         assert!(!validate_null_id("NN-1ae2-e797-1e6b"));
-        assert!(!validate_null_id("NN-1ae2-e797-1e6b-fff8-9e79-f936-0627-d10f00"));
-        assert!(!validate_null_id("NN-1ae2-e797-1e6b-fff8-9e79-f936-0627-d10g"));
+        assert!(!validate_null_id(
+            "NN-1ae2-e797-1e6b-fff8-9e79-f936-0627-d10f00"
+        ));
+        assert!(!validate_null_id(
+            "NN-1ae2-e797-1e6b-fff8-9e79-f936-0627-d10g"
+        ));
     }
 
     #[test]

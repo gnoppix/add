@@ -17,6 +17,8 @@ function App() {
 
   // Check identity on mount - return early to show skeleton immediately
   useEffect(() => {
+    // Only check if not yet authenticated
+    if (isAuthenticated) return
     const checkIdentity = async () => {
       const api = getEvaAPI()
       if (!api) {
@@ -25,19 +27,29 @@ function App() {
         return
       }
       try {
-        const identity = await api.getMyId()
-        if (identity.id && identity.id.trim() !== '') {
-          // Identity exists - check if we need to unlock
-          if (isAuthenticated) {
-            setAppState('ready')
-          } else {
-            setAppState('unlock')
-          }
+        // First check if ~/.add identity files exist
+        const existsResult = await api.checkIdentityExists?.()
+        const identityExists = existsResult?.exists === true
+
+        if (identityExists) {
+          // Identity files exist - show unlock dialog
+          setAppState('unlock')
         } else {
+          // No identity files - create new identity
           setAppState('createIdentity')
         }
       } catch {
-        setAppState('createIdentity')
+        // If check fails, fall back to getMyId
+        try {
+          const identity = await api.getMyId()
+          if (identity.id && identity.id.trim() !== '') {
+            setAppState('unlock')
+          } else {
+            setAppState('createIdentity')
+          }
+        } catch {
+          setAppState('createIdentity')
+        }
       }
 
       // Allow skeleton to show briefly, then transition (simplified - no cleanup needed)
@@ -60,26 +72,31 @@ function App() {
 
   useEffect(() => {
     if (appState !== 'ready') return
-    
+
     // Initial poll after short delay for UI render
     const initialTimer = setTimeout(async () => {
       await loadMessages()
-        .then(() => { backupMsRef.current = 10000 }) // reset backoff on success
+        .then(() => {
+          backupMsRef.current = 10000
+        }) // reset backoff on success
         .catch(() => {})
-      
+
       // Start interval
       intervalIdRef.current = setInterval(async () => {
         await loadMessages()
-          .then(() => { backupMsRef.current = 10000 })
+          .then(() => {
+            backupMsRef.current = 10000
+          })
           .catch(() => {
             backupMsRef.current = Math.min(backupMsRef.current * 1.5, 30000) // exponential backoff up to 30s
           })
       }, backupMsRef.current)
     }, 800) // slight initial delay for UI render
-    
+
     return () => {
       if (initialTimer) clearTimeout(initialTimer as unknown as number)
-      if (intervalIdRef.current) clearInterval(intervalIdRef.current as ReturnType<typeof setInterval>)
+      if (intervalIdRef.current)
+        clearInterval(intervalIdRef.current as ReturnType<typeof setInterval>)
     }
   }, [loadMessages, appState])
 
@@ -93,7 +110,7 @@ function App() {
       const state = useChatStore.getState()
       const myId = state.myId
       if (myId && msg.from === myId) return
-      if (!state.conversations.some((c) => c.id === msg.from)) {
+      if (!state.conversations.some(c => c.id === msg.from)) {
         state.addConversation({
           id: msg.from,
           name: msg.from,
@@ -112,13 +129,21 @@ function App() {
 
   if (showSkeleton && appState === 'checking') {
     return (
-      <div className="flex h-screen w-full overflow-hidden" style={{ backgroundColor: 'var(--color-background)' }}>
+      <div
+        className="flex h-screen w-full overflow-hidden"
+        style={{ backgroundColor: 'var(--color-background)' }}
+      >
         {/* Skeleton Sidebar */}
         <div className="w-64 bg-gray-100 dark:bg-gray-800 border-r border-gray-300 dark:border-gray-700">
-          <div className="p-4"><div className="h-8 w-2/3 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div></div>
+          <div className="p-4">
+            <div className="h-8 w-2/3 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
+          </div>
           <div className="px-2 space-y-1 py-2">
             {[...Array(6)].map((_, i) => (
-              <div key={i} className="h-14 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"></div>
+              <div
+                key={i}
+                className="h-14 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"
+              ></div>
             ))}
           </div>
         </div>
@@ -129,11 +154,14 @@ function App() {
           </div>
           <div className="flex-1 p-4 space-y-2">
             {[...Array(5)].map((_, i) => {
-              const isTall = i % 3 === 0;
-              const isLeft = i % 2 === 0;
+              const isTall = i % 3 === 0
+              const isLeft = i % 2 === 0
               return (
-                <div key={i} className={`${isTall ? 'h-16' : ''} bg-gray-200 dark:bg-gray-700 rounded animate-pulse ${isLeft ? 'ml-4' : 'mr-4'}`}></div>
-              );
+                <div
+                  key={i}
+                  className={`${isTall ? 'h-16' : ''} bg-gray-200 dark:bg-gray-700 rounded animate-pulse ${isLeft ? 'ml-4' : 'mr-4'}`}
+                ></div>
+              )
             })}
           </div>
           <div className="h-16 border-t border-gray-300 dark:border-gray-700 p-3">
@@ -149,11 +177,14 @@ function App() {
   }
 
   if (appState === 'unlock') {
-    return <StartupUnlockDialog onUnlock={() => setAppState('ready')} />
+    return <StartupUnlockDialog onUnlock={async () => {
+      setAppState('ready')
+      await initialize()
+    }} />
   }
 
   return (
-    <div 
+    <div
       className="flex h-screen w-full overflow-hidden"
       style={{ backgroundColor: 'var(--color-background)' }}
     >

@@ -17,16 +17,14 @@ export default function SecuritySettings({ onClose }: SecuritySettingsProps) {
 
   return (
     <div className="p-4">
-      <h2 className="mb-4 text-lg font-semibold">
-        {t('ui.settings.securitySettings')}
-      </h2>
-      
+      <h2 className="mb-4 text-lg font-semibold">{t('ui.settings.securitySettings')}</h2>
+
       <div className="mb-4">
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
             checked={security.selfDestructEnabled}
-            onChange={(e) => setSelfDestructEnabled(e.target.checked)}
+            onChange={e => setSelfDestructEnabled(e.target.checked)}
             className="h-4 w-4"
           />
           {t('ui.settings.enableSelfDestruct')}
@@ -40,7 +38,7 @@ export default function SecuritySettings({ onClose }: SecuritySettingsProps) {
           </label>
           <select
             value={security.selfDestructThreshold}
-            onChange={(e) => setSelfDestructThreshold(Number(e.target.value))}
+            onChange={e => setSelfDestructThreshold(Number(e.target.value))}
             className="w-full rounded border border-gray-300 px-2 py-1 dark:border-gray-600 dark:bg-gray-700"
           >
             <option value={3}>{t('ui.settings.attempts', { count: 3 })}</option>
@@ -50,9 +48,7 @@ export default function SecuritySettings({ onClose }: SecuritySettingsProps) {
             <option value={15}>{t('ui.settings.attempts', { count: 15 })}</option>
             <option value={20}>{t('ui.settings.attempts', { count: 20 })}</option>
           </select>
-          <p className="mt-1 text-xs text-gray-500">
-            {t('ui.settings.afterWrongEntriesWiped')}
-          </p>
+          <p className="mt-1 text-xs text-gray-500">{t('ui.settings.afterWrongEntriesWiped')}</p>
         </div>
       )}
 

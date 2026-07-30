@@ -529,10 +529,12 @@ impl SecKit {
         let dirs = default_provider_dirs(state_dir);
         let mut found: Vec<Shard> = Vec::with_capacity(3);
         for dir in &dirs {
-            if let Ok(bytes) = fs::read(dir.join(SHARD_FILE))
-                && let Ok(s) = Shard::from_bytes(&bytes)
-            {
-                found.push(s);
+            let bytes_res = fs::read(dir.join(SHARD_FILE));
+            if let Ok(bytes) = bytes_res {
+                let shard_res = Shard::from_bytes(&bytes);
+                if let Ok(s) = shard_res {
+                    found.push(s);
+                }
             }
             if found.len() >= 2 {
                 break;

@@ -43,7 +43,7 @@ function ConversationList() {
           No conversations found
         </div>
       ) : (
-        sortedConversations.map((conversation) => (
+        sortedConversations.map(conversation => (
           <ConversationRow key={conversation.id} conversation={conversation} />
         ))
       )}

@@ -30,7 +30,7 @@ export default function ProfileAvatar({ size = 32 }: { size?: number }) {
     if (!file) return
 
     const reader = new FileReader()
-    reader.onload = (e) => {
+    reader.onload = e => {
       if (e.target?.result) {
         setAvatar(e.target.result as string)
       }
@@ -49,11 +49,12 @@ export default function ProfileAvatar({ size = 32 }: { size?: number }) {
     toggleListen()
   }
 
-  const sizeClasses = {
-    32: 'w-8 h-8',
-    40: 'w-10 h-10',
-    48: 'w-12 h-12',
-  }[size] || 'w-8 h-8'
+  const sizeClasses =
+    {
+      32: 'w-8 h-8',
+      40: 'w-10 h-10',
+      48: 'w-12 h-12',
+    }[size] || 'w-8 h-8'
 
   // LED badge: green when listener running (online), red when stopped.
   const ledColor = listenRunning ? 'bg-green-500' : 'bg-red-500'
@@ -66,15 +67,28 @@ export default function ProfileAvatar({ size = 32 }: { size?: number }) {
         onContextMenu={handleContextMenu}
         className={`${sizeClasses} flex items-center justify-center rounded-full bg-primary-500 text-white overflow-hidden transition-opacity hover:opacity-80`}
         aria-label={listenRunning ? 'Online — click to go offline' : 'Offline — click to go online'}
-        title={listenRunning ? 'Online (listener running) — click to go offline' : 'Offline (listener stopped) — click to go online'}
+        title={
+          listenRunning
+            ? 'Online (listener running) — click to go offline'
+            : 'Offline (listener stopped) — click to go online'
+        }
       >
         {avatarUrl ? (
           <img src={avatarUrl} alt="Profile" className="w-full h-full object-cover" />
         ) : myId ? (
-          <img src={generateInitialsAvatar(myId)} alt="Profile" className="w-full h-full object-cover" />
+          <img
+            src={generateInitialsAvatar(myId)}
+            alt="Profile"
+            className="w-full h-full object-cover"
+          />
         ) : (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14v7m-3 0h6" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14v7m-3 0h6"
+            />
           </svg>
         )}
       </button>

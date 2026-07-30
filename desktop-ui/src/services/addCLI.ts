@@ -80,16 +80,16 @@ export class AddCLI {
   }
 
   async contacts(): Promise<Contact[]> {
-      const output = await this.runCommand(['contacts'])
-      const contacts: Contact[] = []
-      const lines = output.split('\n')
-      for (const line of lines) {
-        // CLI format: "  NN-xxxx-xxxx -> FINGERPRINT" (fingerprint is uppercase hex)
-        const match = line.match(/(NN-[A-Z0-9-]+)\s*->\s*([A-Z0-9]+)/i)
-        if (match) contacts.push({ nullId: match[1], fingerprint: match[2] })
-      }
-      return contacts
+    const output = await this.runCommand(['contacts'])
+    const contacts: Contact[] = []
+    const lines = output.split('\n')
+    for (const line of lines) {
+      // CLI format: "  NN-xxxx-xxxx -> FINGERPRINT" (fingerprint is uppercase hex)
+      const match = line.match(/(NN-[A-Z0-9-]+)\s*->\s*([A-Z0-9]+)/i)
+      if (match) contacts.push({ nullId: match[1], fingerprint: match[2] })
     }
+    return contacts
+  }
 
   async alias(name: string, nullId: string): Promise<void> {
     await this.runCommand(['alias', name, nullId])
@@ -101,7 +101,7 @@ export class AddCLI {
     await this.runCommand(args)
   }
 
-  async read(): Promise<Array<{id: string; content: string; timestamp: string}>> {
+  async read(): Promise<Array<{ id: string; content: string; timestamp: string }>> {
     // TODO: Parse CLI output format
     await this.runCommand(['read'])
     return []
@@ -116,7 +116,10 @@ export class AddCLI {
   }
 
   // Write security settings to ~/.add/settings.json
-  async saveSecuritySettings(settings: { selfDestructEnabled: boolean; selfDestructThreshold: number }): Promise<void> {
+  async saveSecuritySettings(settings: {
+    selfDestructEnabled: boolean
+    selfDestructThreshold: number
+  }): Promise<void> {
     const { writeFile, mkdir } = await import('fs/promises')
     const { homedir } = await import('os')
     const path = `${homedir()}/.add/settings.json`

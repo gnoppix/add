@@ -18,7 +18,9 @@ import { parseAttachment } from '../lib/attachment'
 // Track sent message content to filter out relay echoes
 // (only used to detect our own messages echoed back via relay)
 const sentContent = new Set<string>()
-const markSent = (text: string) => { sentContent.add(text) }
+const markSent = (text: string) => {
+  sentContent.add(text)
+}
 
 // Dedupe key for incoming relay messages. The relay mailbox is not reliably
 // purged, so `add read --json` can return the same messages on every poll.
@@ -37,6 +39,7 @@ interface ChatStore {
   myId: string | null
   myFingerprint: string | null
   isAuthenticated: boolean
+  _initializing: boolean
 
   setActiveConversation: (id: string | null) => void
   addConversation: (conversation: Conversation) => void
@@ -63,6 +66,8 @@ interface ChatStore {
 
   // Passphrase management (stored in memory, never persisted to disk)
   setPassphrase: (passphrase: string) => void
+  storeSetPassphrase: (passphrase: string) => void
+  submitPassphrase: (passphrase: string) => void
   clearPassphrase: () => void
 
   initialize: () => Promise<void>
@@ -91,10 +96,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   myId: null,
   myFingerprint: null,
   isAuthenticated: false,
+  _initializing: false,
   listenRunning: false,
   _lastToggleAt: 0,
 
-  setActiveConversation: (id) => {
+  setActiveConversation: id => {
     set({ activeConversationId: id })
     if (id) {
       get().markAsRead(id)
@@ -103,15 +109,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  addConversation: (conversation) => {
+  addConversation: conversation => {
     // Never add our own Null ID as a contact (self-echo from relay).
     const myId = get().myId
     if (myId && conversation.id === myId) return
-    set((state) => {
+    set(state => {
       // Idempotent: don't create a second entry for the same contact id.
-      if (state.conversations.some((c) => c.id === conversation.id)) {
+      if (state.conversations.some(c => c.id === conversation.id)) {
         return {
-          conversations: state.conversations.map((c) =>
+          conversations: state.conversations.map(c =>
             c.id === conversation.id ? { ...c, ...conversation } : c
           ),
         }
@@ -122,14 +128,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   addMessage: (conversationId, message) => {
-    set((state) => {
+    set(state => {
       const existingMessages = state.messages[conversationId] || []
       return {
         messages: {
           ...state.messages,
           [conversationId]: [...existingMessages, message],
         },
-        conversations: state.conversations.map((conv) =>
+        conversations: state.conversations.map(conv =>
           conv.id === conversationId
             ? { ...conv, lastMessage: message.content, lastMessageTimestamp: message.timestamp }
             : conv
@@ -140,59 +146,57 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   updateMessageStatus: (conversationId, messageId, status) =>
-    set((state) => ({
+    set(state => ({
       messages: {
         ...state.messages,
-        [conversationId]: (state.messages[conversationId] || []).map((msg) =>
+        [conversationId]: (state.messages[conversationId] || []).map(msg =>
           msg.id === messageId ? { ...msg, status } : msg
         ),
       },
     })),
 
-  markAsRead: (conversationId) =>
-    set((state) => ({
-      conversations: state.conversations.map((conv) =>
+  markAsRead: conversationId =>
+    set(state => ({
+      conversations: state.conversations.map(conv =>
         conv.id === conversationId ? { ...conv, unreadCount: 0 } : conv
       ),
     })),
 
-  setSearchQuery: (query) => set({ searchQuery: query }),
+  setSearchQuery: query => set({ searchQuery: query }),
 
   getFilteredConversations: () => {
     const { conversations, searchQuery } = get()
     if (!searchQuery) return conversations
-    return conversations.filter((conv) =>
-      conv.name.toLowerCase().includes(searchQuery.toLowerCase())
-    )
+    return conversations.filter(conv => conv.name.toLowerCase().includes(searchQuery.toLowerCase()))
   },
 
   updateContactOnlineStatus: (nullId: string, isOnline: boolean) =>
-    set((state) => ({
-      conversations: state.conversations.map((conv) =>
+    set(state => ({
+      conversations: state.conversations.map(conv =>
         conv.id === nullId ? { ...conv, isOnline } : conv
       ),
     })),
 
   renameAlias: (nullId: string, alias: string) =>
-    set((state) => ({
-      conversations: state.conversations.map((conv) =>
+    set(state => ({
+      conversations: state.conversations.map(conv =>
         conv.id === nullId ? { ...conv, name: alias } : conv
       ),
     })),
 
   addIncomingMessage: (conversationId: string, content: string) => {
-      // An incoming message may carry a file-attachment envelope.
-      const parsed = parseAttachment(content)
-      const attachment = parsed?.meta
-      const body = attachment ? '' : content
-      // Dedupe key: for attachments, fold in the name+size so two different
-      // files from the same sender are not treated as one repeat.
-      const dedupeContent = attachment ? `\u0000${attachment.name}\u0000${attachment.size}` : body
-      const key = incomingKey(conversationId, dedupeContent)
-      if (seenIncoming.has(key)) return
-      seenIncoming.add(key)
+    // An incoming message may carry a file-attachment envelope.
+    const parsed = parseAttachment(content)
+    const attachment = parsed?.meta
+    const body = attachment ? '' : content
+    // Dedupe key: for attachments, fold in the name+size so two different
+    // files from the same sender are not treated as one repeat.
+    const dedupeContent = attachment ? `\u0000${attachment.name}\u0000${attachment.size}` : body
+    const key = incomingKey(conversationId, dedupeContent)
+    if (seenIncoming.has(key)) return
+    seenIncoming.add(key)
 
-    set((state) => {
+    set(state => {
       const existingMessages = state.messages[conversationId] || []
       const message: Message = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -208,7 +212,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           ...state.messages,
           [conversationId]: [...existingMessages, message],
         },
-        conversations: state.conversations.map((conv) =>
+        conversations: state.conversations.map(conv =>
           conv.id === conversationId
             ? {
                 ...conv,
@@ -228,7 +232,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   checkContactsOnlineStatus: async () => {
     const api = getEvaAPI()
     if (!api) return
-    
+
     try {
       const result = await api.checkContactStatus()
       // Result should be an array of { nullId, isOnline }
@@ -268,17 +272,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // Never create a conversation / show a message from our own Null ID.
       // Self-echoes can arrive via the relay round-trip.
       if (myId && from === myId) continue
-      
+
       // Dedupe key: for attachments, fold in the name+size so two different
       // files from the same sender are not treated as one repeat; for plain text use content.
       const dedupeContent = text || ''
       const key = incomingKey(from, dedupeContent)
       if (seenIncoming.has(key)) continue
-      
+
       seenIncoming.add(key)
 
       // Ensure a conversation exists for the sender (creates one on first message).
-      const exists = state.conversations.some((c) => c.id === from)
+      const exists = state.conversations.some(c => c.id === from)
       if (!exists) {
         state.addConversation({
           id: from,
@@ -343,20 +347,28 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // Restore BOTH conversations and messages from localStorage.
       // Conversations (contacts) are persisted so they survive app restarts
       // without requiring CLI re-authentication.
-      const conversations = (saved.conversations || []).map((c) => ({
+      const conversations = (saved.conversations || []).map(c => ({
         ...c,
         lastMessageTimestamp: new Date(c.lastMessageTimestamp || Date.now()),
-      }));
-      set({ conversations, messages });
+      }))
+      set({ conversations, messages })
     } catch {
       /* corrupt state -- ignore */
     }
   },
 
   initialize: async () => {
+    console.log('[chatStore] initialize() called')
+    // Guard against re-entrant / concurrent calls (App.tsx triggers it both
+    // from onUnlock and the 'ready' useEffect, producing a double-invoke).
+    if (get()._initializing) {
+      console.log('[chatStore] initialize() already in progress — skipping duplicate')
+      return
+    }
+    set({ _initializing: true })
     const api = getEvaAPI()
     if (!api) {
-      console.warn('Add API not available (running in browser?)')
+      console.warn('[chatStore] Add API not available (running in browser?)')
       return
     }
     // `getMyId()` can transiently throw "Another add instance is already
@@ -368,12 +380,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const readIdentity = async (): Promise<{ id: string; fingerprint: string } | null> => {
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
+          console.log(`[chatStore] readIdentity attempt ${attempt}`)
           return await api.getMyId()
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           if (msg.includes('already running') && attempt < 5) {
             console.warn(`[chatStore] getMyId blocked by lock (attempt ${attempt}/5), retrying...`)
-            await new Promise((r) => setTimeout(r, 600))
+            await new Promise(r => setTimeout(r, 600))
             continue
           }
           throw err
@@ -383,19 +396,43 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
 
     try {
+      console.log('[chatStore] reading identity...')
       const identity = await readIdentity()
       if (!identity?.id) {
         // Genuinely no identity — let the UI prompt to create one.
+        console.log('[chatStore] no identity found')
         set({ isAuthenticated: false })
         return
       }
+      console.log('[chatStore] identity found:', identity.id)
       set({ myId: identity.id, myFingerprint: identity.fingerprint, isAuthenticated: true })
+
       get().hydrate()
 
-      // Always start the P2P listener immediately after unlock so inbound
-      // messages arrive without requiring a manual toggle. Chain bootstrap
-      // registration to the listener so our new IP/port is advertised only
-      // once the listener is actually up.
+      // Register with all known bootstrap nodes in the background (fire-and-forget).
+      // This refreshes our presence/cert + our freshly-advertised listener
+      // address on the bootstrap network. Failures are non-fatal (bootstrap
+      // nodes temporarily unreachable).
+      api
+        .registerAllBootstraps()
+        .then(() => console.log('[chatStore] register-all-bootstraps completed'))
+        .catch((err: unknown) => console.warn('[chatStore] register-all-bootstraps failed:', err))
+
+      // Load existing message history (read-only `add read`). This runs BEFORE
+      // startListen on purpose: `add listen` holds an exclusive SQLite write
+      // lock on ~/.add/messages.db, and a concurrent `add read` would block on
+      // that lock. Reading first (listener not yet up) avoids the deadlock and
+      // guarantees the UI shows the ID immediately even if the listener is slow.
+      try {
+        await get().loadMessages()
+        console.log('[chatStore] initial message load complete')
+      } catch (err: unknown) {
+        console.warn('[chatStore] initial message load failed (non-fatal):', err)
+      }
+
+      // Always start the P2P listener after identity + history are loaded, so
+      // inbound messages arrive without requiring a manual toggle. The listener
+      // is started LAST so it can never wedge the identity/history load above.
       try {
         await api.startListen()
         set({ listenRunning: true })
@@ -403,19 +440,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       } catch (err) {
         console.error('[chatStore] Failed to auto-start listener:', err)
       }
-
-      // Register with all known bootstrap nodes in the background (fire-and-forget).
-      // This refreshes our presence/cert + our freshly-advertised listener
-      // address on the bootstrap network. Failures are non-fatal (bootstrap
-      // nodes temporarily unreachable).
-      api.registerAllBootstraps()
-        .then(() => console.log('[chatStore] register-all-bootstraps completed'))
-        .catch((err) => console.warn('[chatStore] register-all-bootstraps failed:', err))
     } catch (err) {
       console.error('[chatStore] initialize failed:', err)
-      set({ isAuthenticated: false })
+      // Only mark unauthenticated if we never actually got an identity.
+      // A failure in loadMessages/startListen (network, listener) must NOT
+      // wipe a successfully-loaded identity — that would hide the ID and
+      // collapse the Settings menu (gated on isAuthenticated).
+      if (!get().myId) {
+        set({ isAuthenticated: false })
+      }
+    } finally {
+      set({ _initializing: false })
     }
-  },
+    },
 
   loadContacts: async () => {
     const api = getEvaAPI()
@@ -424,13 +461,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     try {
       const [contacts, aliases] = await Promise.all([api.contacts(), api.aliases()])
       const { addConversation } = get()
-      
+
       // Build alias map for display names
-      const aliasMap = new Map(aliases.map(a => [a.nullId, a.alias]))
-      
+      const aliasMap = new Map<string, string>(aliases.map((a: { alias: string; nullId: string }) => [a.nullId, a.alias]))
+
       // Only the user's real contacts populate the list — start clean, no
       // injected default entries.
-      contacts.forEach((contact) =>
+      contacts.forEach((contact: { nullId: string; fingerprint: string }) =>
         addConversation({
           id: contact.nullId,
           name: aliasMap.get(contact.nullId) || contact.nullId,
@@ -480,15 +517,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   clearMessages: (conversationId: string) =>
-    set((state) => {
+    set(state => {
       const newMessages = { ...state.messages }
       delete newMessages[conversationId]
       return { messages: newMessages }
     }),
 
   deleteConversation: (nullId: string) =>
-    set((state) => ({
-      conversations: state.conversations.filter((c) => c.id !== nullId),
+    set(state => ({
+      conversations: state.conversations.filter(c => c.id !== nullId),
     })),
 
   checkListenStatus: async () => {
@@ -542,18 +579,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // Passphrase is stored in memory via main process (never persisted to disk)
   setPassphrase: (passphrase: string) => {
     const api = getEvaAPI()
-    if (api) { void api.setPassphrase(passphrase) }
+    if (api) {
+      void api.setPassphrase(passphrase)
+    }
   },
   storeSetPassphrase: (passphrase: string) => {
     const api = getEvaAPI()
-    if (api) { void api.setPassphrase(passphrase) }
+    if (api) {
+      void api.setPassphrase(passphrase)
+    }
   },
   submitPassphrase: (passphrase: string) => {
     const api = getEvaAPI()
-    if (api) { void api.submitPassphrase(passphrase) }
+    if (api) {
+      return api.submitPassphrase(passphrase)
+    }
+    return Promise.reject(new Error('IPC API not available'))
   },
   clearPassphrase: () => {
     const api = getEvaAPI()
-    if (api) { void api.clearPassphrase() }
+    if (api) {
+      void api.clearPassphrase()
+    }
   },
 }))

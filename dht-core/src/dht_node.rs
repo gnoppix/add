@@ -666,7 +666,11 @@ impl DhtNodeRuntime {
                     .await;
             }
             Err(e) => {
-                error!("storage error for blob (kind={}): {}", key.split(':').next().unwrap_or("cert"), e);
+                error!(
+                    "storage error for blob (kind={}): {}",
+                    key.split(':').next().unwrap_or("cert"),
+                    e
+                );
                 let resp = build_dht_error(&key, "storage error");
                 let _ = ws_tx
                     .send(Message::Text(resp.to_json().unwrap_or_default().into()))
@@ -719,7 +723,11 @@ impl DhtNodeRuntime {
                     .await;
             }
             Err(e) => {
-                error!("get error for blob (kind={}): {}", key.split(':').next().unwrap_or("cert"), e);
+                error!(
+                    "get error for blob (kind={}): {}",
+                    key.split(':').next().unwrap_or("cert"),
+                    e
+                );
                 let resp = build_dht_error(key, "storage error");
                 let _ = ws_tx
                     .send(Message::Text(resp.to_json().unwrap_or_default().into()))
@@ -754,7 +762,10 @@ impl DhtNodeRuntime {
         ws_tx: &mut (impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
         store: &DhtStore,
     ) {
-        tracing::info!("handle_blob_put: received blob-put for key={}", env.payload_str("key").unwrap_or(""));
+        tracing::info!(
+            "handle_blob_put: received blob-put for key={}",
+            env.payload_str("key").unwrap_or("")
+        );
         let key = match env.payload_str("key") {
             Some(k) if !k.is_empty() => k.to_string(),
             _ => {
@@ -827,7 +838,11 @@ impl DhtNodeRuntime {
                     .await;
             }
             Err(e) => {
-                error!("blob-put storage error (kind={}): {}", key.split(':').next().unwrap_or("cert"), e);
+                error!(
+                    "blob-put storage error (kind={}): {}",
+                    key.split(':').next().unwrap_or("cert"),
+                    e
+                );
                 let resp = build_dht_error(&key, "storage error");
                 let _ = ws_tx
                     .send(Message::Text(resp.to_json().unwrap_or_default().into()))
@@ -886,7 +901,11 @@ impl DhtNodeRuntime {
                     .await;
             }
             Err(e) => {
-                error!("blob-get error (kind={}): {}", key.split(':').next().unwrap_or("cert"), e);
+                error!(
+                    "blob-get error (kind={}): {}",
+                    key.split(':').next().unwrap_or("cert"),
+                    e
+                );
                 let resp = build_dht_error(&key, "storage error");
                 let _ = ws_tx
                     .send(Message::Text(resp.to_json().unwrap_or_default().into()))
@@ -1123,6 +1142,7 @@ mod tests {
     /// `verify_dht_put_signature` (the path that previously failed with
     /// "signature verification failed" because it compared the VK-derived PQ
     /// fp against the GPG `publisher_fp`).
+    #[allow(clippy::too_many_arguments)]
     fn create_signed_put_env_with_vk(
         key: &str,
         value: &str,
@@ -1198,7 +1218,12 @@ mod tests {
             key,
             env.payload_i64("nonce").unwrap()
         );
-        assert!(verify_dht_put_signature(&sign_data_str, &env.sig, publisher_fp, &env));
+        assert!(verify_dht_put_signature(
+            &sign_data_str,
+            &env.sig,
+            publisher_fp,
+            &env
+        ));
     }
 
     #[test]
@@ -1232,7 +1257,12 @@ mod tests {
             key,
             env.payload_i64("nonce").unwrap()
         );
-        assert!(!verify_dht_put_signature(&sign_data_str, &env.sig, publisher_fp, &env));
+        assert!(!verify_dht_put_signature(
+            &sign_data_str,
+            &env.sig,
+            publisher_fp,
+            &env
+        ));
     }
 
     #[test]

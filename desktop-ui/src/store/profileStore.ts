@@ -21,7 +21,7 @@ interface ProfileState {
 
 export const useProfileStore = create<ProfileState>()(
   persist(
-    (set) => ({
+    set => ({
       avatarUrl: undefined,
       setAvatar: (url: string) => {
         set({ avatarUrl: url })

@@ -10,17 +10,117 @@
  *-------------------------------------------------------------------------------
  */
 
-const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron')
-const { spawn, execSync } = require('child_process')
-const path = require('path')
+/**
+ * Linux D-Bus hardening (engineering, not guesswork):
+ *
+ * FACT (captured from add-xvfb-run.log): when a session D-Bus exists, Chromium
+ * connects to it and — if that bus gets disconnected (e.g. during startx/startxfce4
+ * bring-up, or the bus is later torn down) — aborts with
+ *   FATAL:dbus/bus.cc:1245] D-Bus connection was disconnected. Aborting.
+ * Under XFCE/startx, DBUS_SESSION_BUS_ADDRESS IS already set, so a
+ * "if (!DBUS_SESSION_BUS_ADDRESS)" guard is a no-op and never protected anything.
+ *
+ * FIX: on Linux, ALWAYS re-exec the browser under a *private, dedicated* session
+ * bus via `dbus-run-session`. That bus lives exactly for this app's lifetime and
+ * is never the session/X bus, so a flaky system bus can't kill Chromium (and thus
+ * can't drop the X session to login). The re-exec is guarded by ADD_DESKTOP_HAS_BUS
+ * so we never loop. macOS/Windows don't use this bus path → untouched.
+ *
+ * DEBUGGING: every launch writes structured facts to ~/.cache/add-desktop-debug.log
+ * (env-var check, bus address, re-exec decision, uncaught exceptions, exit codes)
+ * so a crash can be compared against what we expected.
+ */
 const fs = require('fs')
 const os = require('os')
+const path = require('path')
+const { spawn: childSpawn, execSync } = require('child_process')
+
+function dbgLog(...args) {
+  try {
+    const dir = path.join(os.homedir(), '.cache')
+    fs.mkdirSync(dir, { recursive: true })
+    const ts = new Date().toISOString()
+    fs.appendFileSync(
+      path.join(dir, 'add-desktop-debug.log'),
+      `[${ts}] ${args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')}\n`
+    )
+  } catch { /* best effort */ }
+}
+
+if (process.platform === 'linux' && process.env.ADD_DESKTOP_HAS_BUS !== '1') {
+  let hasRunner = false
+  try {
+    execSync('command -v dbus-run-session', { stdio: 'ignore' })
+    hasRunner = true
+  } catch { hasRunner = false }
+  dbgLog('linux-bus-guard', {
+    dbusAddr: process.env.DBUS_SESSION_BUS_ADDRESS || '(unset)',
+    hasRunner,
+  })
+  if (hasRunner) {
+    const args = [process.execPath, ...process.argv.slice(1)]
+    const childEnv = { ...process.env, ADD_DESKTOP_HAS_BUS: '1' }
+    dbgLog('re-exec under dbus-run-session')
+    const child = childSpawn('dbus-run-session', args, {
+      stdio: 'inherit',
+      env: childEnv,
+    })
+    child.on('exit', (code) => {
+      dbgLog('dbus-run-session child exited', code)
+      process.exit(code === null ? 1 : code)
+    })
+    // Block the parent; the re-exec'd child is the real app.
+    process.exit(0)
+  } else {
+    dbgLog('dbus-run-session NOT available — running without private bus')
+  }
+}
+
+// Global crash instrumentation: never silently disappear.
+process.on('uncaughtException', (err) => {
+  dbgLog('uncaughtException', err && err.stack ? err.stack : String(err))
+})
+process.on('unhandledRejection', (reason) => {
+  dbgLog('unhandledRejection', String(reason))
+})
+
+const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron')
+const { spawn } = require('child_process')
+
+// Harden Linux against X-session crashes.
+// 1) GL: route GL to software (llvmpipe) so Chromium never probes the X server's
+//    hardware GLX/mesa driver at startup (a buggy hardware GLX path can crash X).
+// 2) D-Bus: handled above — we now always run under a private session bus, so
+//    Chromium never hits the fatal "bus disconnected" abort.
+// Must run BEFORE any app event handlers or whenReady.
+if (process.platform === 'linux') {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
+  app.commandLine.appendSwitch('disable-software-rasterizer')
+  app.commandLine.appendSwitch('disable-gpu-sandbox')
+  app.commandLine.appendSwitch('disable-features', 'UseChromeOSDirectVideoDecoder,Vulkan')
+  // /dev/shm is often tiny on startx sessions; a full renderer can OOM-kill X.
+  app.commandLine.appendSwitch('disable-dev-shm-usage')
+  // Software GL: never touch the hardware X GLX driver.
+  process.env.LIBGL_ALWAYS_SOFTWARE = '1'
+  process.env.GALLIUM_DRIVER = 'llvmpipe'
+  process.env.ELECTRON_DISABLE_GPU = '1'
+  process.env.ELECTRON_DISABLE_GPU_COMPOSITING = '1'
+  dbgLog('linux GL flags applied')
+}
+
+// Version check integration
+const { initializeVersionCheck, setupVersionCheckIPC } = require('./version-check-integration.js')
 
 // Single-instance: only ONE add-desktop may own the CLI singleton lock
 // (~/.add/add.pid) and the background listener at a time. A second launch
 // focuses the existing window instead of spawning another listener that
 // would collide with the pid lock and the listen pid file.
-if (!app.requestSingleInstanceLock()) {
+const gotSingleInstance = app.requestSingleInstanceLock()
+dbgLog('requestSingleInstanceLock', gotSingleInstance)
+if (!gotSingleInstance) {
+  dbgLog('second instance — quitting')
   app.quit()
 }
 
@@ -45,11 +145,19 @@ function getAddCliPath() {
   // Windows binaries carry a .exe suffix; everything else is extensionless.
   const ext = process.platform === 'win32' ? '.exe' : ''
 
-  // 2. Packaged mode: resources/extra/add[.exe]
+  // 2. Packaged mode: resources/add/add[.exe] or resources/extra/add[.exe]
   if (app.isPackaged) {
-    const packagedPath = path.join(process.resourcesPath, 'add' + ext)
-    if (fs.existsSync(packagedPath)) {
-      return packagedPath
+    const candidates = [
+      path.join(process.resourcesPath, 'add', 'add' + ext),
+      path.join(process.resourcesPath, 'extra', 'add' + ext),
+      // Note: resources/add is a directory (containing the binary), not the binary itself
+    ]
+    for (const packagedPath of candidates) {
+      try {
+        if (fs.statSync(packagedPath).isFile()) {
+          return packagedPath
+        }
+      } catch { /* ignore */ }
     }
   }
 
@@ -69,6 +177,36 @@ const PID_DIR = path.join(os.homedir(), '.add')
 const LISTEN_PID_FILE = path.join(PID_DIR, 'add_listen.pid')
 const APP_PID_FILE = path.join(PID_DIR, 'add.pid')
 
+// True ONLY for the Rust `add` CLI binary (e.g. `add` or `add listen`).
+// Critically this must NOT match our own Electron app `add-desktop` or its
+// Chromium child processes (GPU/network/zygote) — those are also named
+// `add-desktop` and live under /proc/<pid>/comm as `add-desktop`. Killing them
+// made Chromium abort (FATAL:dbus/bus.cc:1245) and dropped the X session.
+function isRustAddCli(pid) {
+  if (pid === process.pid) return false
+  if (listenProcess && listenProcess.pid === pid) return false
+  // Fast path: /proc/<pid>/comm is the short process name (no args).
+  try {
+    const comm = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim()
+    if (comm === 'add') return true
+    if (comm === 'add-desktop') return false       // our Electron app — NEVER reap
+    if (comm.startsWith('add')) return false        // add-desktop children
+  } catch { /* can't read /proc */ }
+  // Slow path: full command line. Match only a bare `add` or `add listen`
+  // invocation: basename ends in `/add` (or ` add`) and is NOT `add-desktop`.
+  try {
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+      .split('\u0000').filter(Boolean).join(' ').trim()
+    const base = cmdline.split(/\s+/)[0] || ''
+    const name = base.split('/').pop() || ''
+    if (name === 'add-desktop') return false
+    if (name === 'add') return true
+    // e.g. `add listen` or `/path/to/add listen`
+    if (/\badd(\s+listen)?$/.test(cmdline)) return true
+  } catch { /* can't read /proc */ }
+  return false
+}
+
 // Reap stale CLI processes from a previous (crashed) app run. Without this,
 // an orphaned `add`/`add listen` keeps holding ~/.add/add.pid and every
 // one-shot command (id, read, send) fails with "Another add instance is
@@ -83,31 +221,45 @@ function reapStaleAddProcesses() {
         fs.unlinkSync(pidFile)
         continue
       }
-      // Only reap if the PID is actually alive AND points at an `add` process.
-      // Skip our own live listener PID (written lazily further down).
       let alive = false
       try { process.kill(pid, 0); alive = true } catch { /* not running */ }
       if (!alive) {
         fs.unlinkSync(pidFile)
         continue
       }
-      // confirm it's an add process (avoid killing an unrelated PID that
-      // happens to occupy the now-stale number)
-      let isAdd = false
-      try {
-        const stat = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim()
-        isAdd = stat === 'add' || stat.startsWith('add')
-      } catch { /* can't read /proc — treat as non-add, leave it alone */ }
-      if (isAdd) {
+      // Only reap the real Rust `add` CLI — never our own add-desktop/Chromium.
+      if (isRustAddCli(pid)) {
         try {
           process.kill(pid, 'SIGTERM')
           console.log(`[reap] Terminated stale add process PID ${pid} (${pidFile})`)
         } catch { /* already gone */ }
       }
-      // Remove the stale pid file regardless so we don't trip on it later.
       try { fs.unlinkSync(pidFile) } catch { /* ignore */ }
     } catch { /* ignore per-file errors */ }
   }
+
+  // Fallback: kill any orphaned `add` CLI (exact name only) holding the lock,
+  // but NEVER add-desktop or its Chromium children.
+  try {
+    const { execSync } = require('child_process')
+    // pgrep -x matches the exact process NAME (comm), so 'add' won't match
+    // 'add-desktop'. (-u limits to current user; '|| true' avoids non-zero exit.)
+    const currentUser = os.userInfo().username
+    let out = ''
+    try {
+      out = String(execSync(`pgrep -x -u ${currentUser} add || true`)).trim()
+    } catch (_) {}
+    if (out) {
+      const pids = out.split(/\s+/).map(n => parseInt(n, 10)).filter(Number.isFinite)
+      for (const pid of pids) {
+        if (!isRustAddCli(pid)) continue
+        try {
+          process.kill(pid, 'SIGTERM')
+          console.log(`[reap] Terminated orphan add process PID ${pid}`)
+        } catch {}
+      }
+    }
+  } catch { /* ignore fallback cleanup errors */ }
 }
 
 // Ensure PID directory exists
@@ -117,8 +269,14 @@ function ensurePidDir() {
   }
 }
 
-// CLI command queue to prevent PID lock conflicts
+// CLI command queue to prevent PID lock conflicts.
+// Two queues: the DEFAULT queue serializes identity/messaging/listener control
+// (id, send, listen, init, unlock, ...) and the READ queue isolates `add read`
+// (loadMessages / message polling). This prevents a slow or DB-locked `add read`
+// — which blocks while the persistent `add listen` holds the SQLite write lock on
+// ~/.add/messages.db — from wedging every other command (e.g. getMyId) behind it.
 let cliQueue = Promise.resolve();
+let cliReadQueue = Promise.resolve();
 
 // In-memory store for DB passphrase (never persisted to disk)
 let dbPassphrase = null;
@@ -126,6 +284,7 @@ let mainWindow = null;
 let listenProcess = null;
 
 function runCliCommand(args, input) {
+  console.log(`[runCliCommand] Spawning: ${ADD_CLI} ${args.join(' ')}` + (input ? ' (stdin)' : ''))
   return new Promise((resolve, reject) => {
     // Build env with passphrase if stored in memory (never persisted to disk)
     const childEnv = { ...process.env }
@@ -155,12 +314,32 @@ function runCliCommand(args, input) {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: childEnv,
     })
+    dbgLog('runCliCommand spawned', cmd, JSON.stringify(cmdArgs), 'pid=', child.pid)
 
     let stdout = ''
     let stderr = ''
+    let settled = false
 
-    child.stdout.on('data', (data) => { stdout += data.toString() })
-    child.stderr.on('data', (data) => { stderr += data.toString() })
+    // Hard timeout so a hung CLI can never block the renderer (and thus the
+    // whole UI) forever. add-id that hangs silently is exactly what left myId
+    // null and hid the Settings items. 12s is generous for a local key read.
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try { child.kill('SIGKILL') } catch {}
+      dbgLog('runCliCommand TIMEOUT after 12s', cmd, JSON.stringify(cmdArgs),
+             'stdout=', JSON.stringify(stdout), 'stderr=', JSON.stringify(stderr))
+      reject(new Error(`CLI command timed out after 12s: ${cmd} ${cmdArgs.join(' ')}`))
+    }, 12000)
+
+    child.stdout.on('data', (data) => { 
+      stdout += data.toString()
+      console.log(`[runCliCommand] stdout:`, data.toString())
+    })
+    child.stderr.on('data', (data) => { 
+      stderr += data.toString()
+      console.warn(`[runCliCommand] stderr:`, data.toString())
+    })
 
     // When we have a body to send, write it to stdin and close the stream so
     // the CLI (which reads `-` from stdin) receives the full payload without
@@ -177,19 +356,68 @@ function runCliCommand(args, input) {
     }
 
     child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
       if (code === 0) resolve(stdout.trim())
       else reject(new Error(stderr.trim() || `Exit code ${code}`))
     })
 
-    child.on('error', (err) => reject(err))
+    child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(err)
+    })
   })
 }
 
-// Queue wrapper to serialize CLI calls
+// Queue wrapper to serialize CLI calls, with retry for singleton lock contention
 function queuedCommand(args, input) {
-  return new Promise((resolve, reject) => {
-    cliQueue = cliQueue.then(() => runCliCommand(args, input)).then(resolve, reject)
+  // Route read-only `read` onto its own queue so a DB-locked `add read`
+  // (blocked behind the listener's SQLite write lock) can never stall
+  // identity lookups / message sends / listener control.
+  const isRead = args[0] === 'read'
+  const queue = isRead ? cliReadQueue : cliQueue
+  // NOTE: previously this wrapped the chain in `new Promise((resolve,reject)=>{...; return chain})`.
+  // An executor's return value is DISCARDED by Promise — resolve/reject were never
+  // called, so queuedCommand() returned a promise that stayed PENDING FOREVER, which
+  // made every IPC call (add-id, add-read, ...) hang ("reply was never sent"). Return
+  // the chained promise directly so it settles with the command's result.
+  const chain = queue.then(async () => {
+    // Retry up to 3 times if the command fails due to another instance holding the lock
+    const maxRetries = 3
+    let lastErr = null
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[queuedCommand] Executing: add ${args.join(' ')}${input ? ' (with stdin)' : ''}`)
+        const result = await runCliCommand(args, input)
+        console.log(`[queuedCommand] Command success: add ${args.join(' ')}, output:`, result)
+        return result
+      } catch (err) {
+        // Check if this is a lock contention error ("Another add instance is already running")
+        const msg = err instanceof Error ? String(err).toLowerCase() : String(err).toLowerCase()
+        console.log(`[queuedCommand] Command failed: add ${args.join(' ')}, error:`, err)
+        if (msg.includes('another add instance is already running') ||
+            msg.includes('already another instance is running')) {
+          if (attempt < maxRetries) {
+            // Before retry, reap stale add processes to clear the singleton lock
+            console.log(`[queuedCommand] Lock contention, attempt ${attempt}/${maxRetries} — reaping stale processes before retry...`)
+            reapStaleAddProcesses()
+            await new Promise((r) => setTimeout(r, 300 * attempt))
+            continue
+          }
+        }
+        lastErr = err
+        break // Not a lock error or max retries reached, reject with the error
+      }
+    }
+    if (lastErr) throw lastErr
+    throw new Error('CLI command failed')
   })
+  if (isRead) cliReadQueue = chain
+  else cliQueue = chain
+  return chain
 }
 
 // Write PID file for listen process
@@ -213,11 +441,9 @@ function checkExistingListenProcess() {
       try {
         // Check if process exists (signal 0 doesn't kill, just checks)
         process.kill(pid, 0)
-        console.log(`Found existing listen process with PID ${pid}`)
         return pid
       } catch (e) {
         // Process doesn't exist, remove stale PID file
-        console.log('Stale PID file found, removing...')
         removeListenPidFile()
       }
     }
@@ -231,11 +457,10 @@ function killExistingListenProcess() {
   if (pid) {
     try {
       process.kill(pid, 'SIGTERM')
-      console.log(`Killed existing listen process (PID ${pid})`)
       // Give it a moment to terminate
       setTimeout(() => {}, 500)
     } catch (e) {
-      console.log(`Could not kill process ${pid}:`, e.message)
+      // ignore errors
     }
   }
   removeListenPidFile()
@@ -251,7 +476,6 @@ function startListenProcess() {
     let alive = false
     try { process.kill(listenProcess.pid, 0); alive = true } catch { /* dead handle */ }
     if (alive) {
-      console.log('Listen process already running, leaving it alone')
       return
     }
   }
@@ -260,15 +484,10 @@ function startListenProcess() {
   killExistingListenProcess()
   listenProcess = null
 
-  console.log('Starting background add listen process...')
-  console.log('[listen] dbPassphrase available:', !!dbPassphrase)
   // Build env with passphrase if stored in memory
   const listenEnv = { ...process.env }
   if (dbPassphrase) {
     listenEnv.ADD_DB_PASSPHRASE = dbPassphrase
-    console.log('[listen] ADD_DB_PASSPHRASE set in env')
-  } else {
-    console.warn('[listen] WARNING: dbPassphrase not set!')
   }
   listenProcess = spawn(ADD_CLI, ['listen'], {
     shell: false,
@@ -292,9 +511,7 @@ function startListenProcess() {
     }
   }
   listenProcess.stdout?.on('data', (data) => {
-    const chunk = data.toString()
-    console.log(`[listen] ${chunk.trim()}`)
-    listenBuf += chunk
+    listenBuf += data.toString()
     let nl
     while ((nl = listenBuf.indexOf('\n')) !== -1) {
       const line = listenBuf.slice(0, nl).trim()
@@ -302,35 +519,28 @@ function startListenProcess() {
       if (line) forwardInbound(line)
     }
   })
+  
   // Flush any trailing line on close
   listenProcess.on('close', (code) => {
     if (listenBuf.trim()) forwardInbound(listenBuf.trim())
     listenBuf = ''
-    console.log(`Listen process exited with code ${code}`)
     listenProcess = null
     removeListenPidFile()
   })
-  
-  listenProcess.stderr?.on('data', (data) => {
-    console.error(`[listen] ${data.toString().trim()}`)
-  })
-  
 
   listenProcess.on('error', (err) => {
-    console.error('Listen process error:', err)
+    // ignore errors for the background listener process
     listenProcess = null
     removeListenPidFile()
   })
-  
+
   // Write PID file after successful spawn
   writeListenPidFile(listenProcess.pid)
-  console.log(`Listen process started with PID ${listenProcess.pid}`)
 }
 
 // Kill the background listen process
 function killListenProcess() {
   if (listenProcess) {
-    console.log(`Killing listen process (PID ${listenProcess.pid})...`)
     listenProcess.kill('SIGTERM')
     listenProcess = null
     removeListenPidFile()
@@ -378,6 +588,7 @@ function hardenWebContents(win) {
 }
 
 function createWindow() {
+  dbgLog('createWindow')
   const version = getAppVersion()
   const mainWindow = new BrowserWindow({
     width: 1280,
@@ -408,6 +619,25 @@ function createWindow() {
   // Surface load failures instead of a silent white window.
   mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
     console.error('Window failed to load:', code, desc)
+  })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    dbgLog('renderer did-finish-load')
+  })
+
+  // Bridge the RENDERER console into the debug log so frontend failures (e.g.
+  // chatStore.initialize, getMyId results) become visible facts instead of
+  // being lost on stdout. level: 0=debug 1=warn 2=error 3=info (electron enum).
+  mainWindow.webContents.on('console-message', (_e, level, message, sourceId, lineNo) => {
+    dbgLog('[renderer]', `L${level}`, `${message}${sourceId ? ` (${sourceId}:${lineNo})` : ''}`)
+  })
+
+  mainWindow.on('close', () => {
+    dbgLog('window close event')
+  })
+
+  mainWindow.on('closed', () => {
+    dbgLog('window closed')
   })
 
   return mainWindow
@@ -451,10 +681,29 @@ ipcMain.handle('add-publish-cert', async () => {
 })
 
 ipcMain.handle('add-id', async () => {
-  const output = await queuedCommand(['id'])
+  dbgLog('add-id handler START', { pid: process.pid, bus: process.env.ADD_DESKTOP_HAS_BUS || '(unset)' })
+  let output
+  try {
+    output = await queuedCommand(['id'])
+    dbgLog('add-id handler RAW OUTPUT len=', (output || '').length, 'head=', (output || '').slice(0, 60))
+  } catch (e) {
+    dbgLog('add-id handler ERROR:', e && e.message ? e.message : String(e))
+    throw e
+  }
   const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
   const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
-  return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
+  const result = { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
+  dbgLog('add-id handler RETURNING', JSON.stringify(result))
+  return result
+})
+
+ipcMain.handle('add-check-identity-exists', async () => {
+  const homeDir = require('os').homedir()
+  const addDir = require('path').join(homeDir, '.add')
+  const identityFile = require('path').join(addDir, 'identity.json')
+  const dbKeyFile = require('path').join(addDir, 'db_key.json')
+  const exists = require('fs').existsSync(identityFile) && require('fs').existsSync(dbKeyFile)
+  return { exists }
 })
 
 ipcMain.handle('add-register', async () => queuedCommand(['register']))
@@ -600,7 +849,16 @@ ipcMain.handle('add-unlock', async (_, opts) => {
   const args = ['unlock']
   if (opts.pin) args.push('--pin', opts.pin)
   if (opts.password) args.push('--password', opts.password)
+  console.log(`[add-unlock] Executing unlock command: add ${args.join(' ')}`)
   await queuedCommand(args)
+  console.log('[add-unlock] Unlock completed, triggering bootstrap registration...')
+  // Also register the new identity on all bootstrap servers after unlock
+  try {
+    await queuedCommand(['register-all-bootstraps'])
+    console.log('[add-unlock] registered on all bootstrap servers')
+  } catch (e) {
+    console.warn('[add-unlock] bootstrap registration skipped:', e.message)
+  }
 })
 
 // Self-destruct: delete ~/.add directory (messages, keys, identity)
@@ -615,7 +873,7 @@ ipcMain.handle('add-self-destruct', async (_, homeDir) => {
 // Backup/Restore functions for ~/.add directory
 const { createWriteStream } = require('fs')
 const { pipeline } = require('stream/promises')
-const archiver = require('archiver')
+const { ZipArchive } = require('archiver')
 const unzipper = require('unzipper')
 
 // Backup ~/.add to ~/.add-backup with timestamp, keep max 4 backups
@@ -641,13 +899,14 @@ ipcMain.handle('add-backup', async () => {
     
     // Create zip archive
     const output = createWriteStream(backupPath)
-    const archive = archiver('zip', { zlib: { level: 9 } })
-    
-    await pipeline(archive, output)
-    
-    // Add all files from .add directory
+    const archive = new ZipArchive({ zlib: { level: 9 } })
+
+    // Add all files from .add directory FIRST
     archive.directory(addDir, false)
     await archive.finalize()
+
+    // Now stream the finalized archive to disk
+    await pipeline(archive, output)
     
     // Cleanup old backups (keep max 4)
     const backups = fs.readdirSync(backupDir)
@@ -1073,6 +1332,7 @@ function showPassphraseDialog() {
 }
 
 app.whenReady().then(async () => {
+  dbgLog('app.whenReady resolved')
   // Kill any orphaned `add`/`add listen` from a previous (crashed) run before
   // we start issuing CLI commands, otherwise the singleton pid lock blocks us.
   reapStaleAddProcesses()
@@ -1080,6 +1340,10 @@ app.whenReady().then(async () => {
   // Create window first, then show unlock dialog inside the app
   createWindow()
   createAppMenu()
+
+  // Setup version check IPC and initialize periodic checks
+  setupVersionCheckIPC()
+  initializeVersionCheck(mainWindow)
 
   // Auto-start background listen process (will wait for unlock)
   console.log('[main] App ready, waiting for unlock...')
@@ -1116,13 +1380,22 @@ function cleanupOnExit() {
   killListenProcess()
 }
 
-app.on('before-quit', cleanupOnExit)
+app.on('before-quit', (e) => {
+  dbgLog('before-quit', { defaultPrevented: e.defaultPrevented })
+  cleanupOnExit()
+})
+
+app.on('quit', (e, exitCode) => {
+  dbgLog('quit', { exitCode })
+})
 
 process.on('SIGINT', () => {
+  dbgLog('SIGINT')
   cleanupOnExit()
   process.exit(130)
 })
 process.on('SIGTERM', () => {
+  dbgLog('SIGTERM')
   cleanupOnExit()
   process.exit(143)
 })

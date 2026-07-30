@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('addAPI', {
   init: (opts) => ipcRenderer.invoke('add-init', opts),
   publishCert: () => ipcRenderer.invoke('add-publish-cert'),
   getMyId: () => ipcRenderer.invoke('add-id'),
+  checkIdentityExists: () => ipcRenderer.invoke('add-check-identity-exists'),
   register: () => ipcRenderer.invoke('add-register'),
   registerAllBootstraps: () => ipcRenderer.invoke('add-register-all-bootstraps'),
   checkRegister: () => ipcRenderer.invoke('add-check-register'),
@@ -85,8 +86,10 @@ contextBridge.exposeInMainWorld('addAPI', {
   // Self-destruct: wipe all identity data (messages, keys, vault)
   selfDestruct: (homeDir) => ipcRenderer.invoke('add-self-destruct', homeDir),
 
-  // Read a bundled sticker asset as a base64 data URL. Delegated to the main
-  // process (which has fs) so the sandboxed preload stays Node-free.
+  // Read a bundled sticker asset as a base64 data URL.
+  // The preload is sandboxed (no fs), so it delegates here. Assets are unpacked
+  // next to the asar at <resources>/app.asar.unpacked/dist/<relPath> so animated
+  // formats render; fall back to the plain asar copy if needed.
   readAsset: (relPath) => ipcRenderer.invoke('add-read-asset', relPath),
 
   // For About window
@@ -98,6 +101,9 @@ contextBridge.exposeInMainWorld('addAPI', {
   listBackups: () => ipcRenderer.invoke('add-list-backups'),
   restore: (backupName) => ipcRenderer.invoke('add-restore', backupName),
   deleteBackup: (backupName) => ipcRenderer.invoke('add-delete-backup', backupName),
+
+  // Version Check
+  checkVersion: () => ipcRenderer.invoke('add-check-version'),
 
   // Subscribe to main-process push events (e.g. live P2P inbound messages
   // from the background listener). Returns an unsubscribe function.

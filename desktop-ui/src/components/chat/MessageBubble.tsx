@@ -25,7 +25,8 @@ interface MessageBubbleProps {
 
 // Extensions that, when double-clicked, can execute code on the user's machine.
 // We don't block the download (user-initiated), but we flag it loudly (L1).
-const DANGEROUS_EXT = /\.(exe|msi|bat|cmd|com|scr|ps1|vbs|js|jar|app|deb|rpm|dmg|pkg|sh|py|rb|php|wsf|hta|lnk|scr)$/i
+const DANGEROUS_EXT =
+  /\.(exe|msi|bat|cmd|com|scr|ps1|vbs|js|jar|app|deb|rpm|dmg|pkg|sh|py|rb|php|wsf|hta|lnk|scr)$/i
 
 // Build a downloadable object URL from a base64 attachment and trigger a save.
 function downloadAttachment(name: string, mime: string, data: string) {
@@ -154,19 +155,18 @@ function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
           {att && !isImage && !isKnownStickerAttachment && (
             <button
               type="button"
-              onClick={() =>
-                downloadAttachment(
-                  att!.name,
-                  att!.mime,
-                  att!.data
-                )
-              }
+              onClick={() => downloadAttachment(att!.name, att!.mime, att!.data)}
               className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
                 isOutgoing ? 'bg-white/15 hover:bg-white/25' : 'bg-black/5 hover:bg-black/10'
               }`}
               title={`Download ${att.name}`}
             >
-              <svg className="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg
+                className="h-5 w-5 shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -195,7 +195,9 @@ function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
               {formatTime(message.timestamp)}
             </span>
           )}
-          {isOutgoing && showTimestamp && <div className="mt-0.5 inline-block">{getStatusIcon()}</div>}
+          {isOutgoing && showTimestamp && (
+            <div className="mt-0.5 inline-block">{getStatusIcon()}</div>
+          )}
         </div>
       </div>
 

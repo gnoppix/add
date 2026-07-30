@@ -33,7 +33,7 @@ interface PasswdForm {
 }
 
 function SidebarHeader() {
-  const { addConversation } = useChatStore()
+  const { addConversation, myId, myFingerprint, isAuthenticated, listenRunning, checkListenStatus: storeCheckListenStatus, initialize } = useChatStore()
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [showUISettingsModal, setShowUISettingsModal] = useState(false)
   const [showSecurityModal, setShowSecurityModal] = useState(false)
@@ -52,17 +52,10 @@ function SidebarHeader() {
     new: '',
     confirm: '',
   })
-  const {
-    initialize,
-    myId,
-    myFingerprint,
-    isAuthenticated,
-    listenRunning,
-  } = useChatStore()
   const { t } = useTranslation()
   useEffect(() => {
-    initialize()
-  }, [initialize])
+    storeCheckListenStatus()
+  }, [storeCheckListenStatus])
 
   const handleInit = async () => {
     const api = window.addAPI
@@ -209,8 +202,18 @@ function SidebarHeader() {
           title="Settings"
         >
           <svg className="h-[22px] w-[22px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.004.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.8}
+              d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.004.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.281z"
+            />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.8}
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+            />
           </svg>
         </button>
 
@@ -225,9 +228,7 @@ function SidebarHeader() {
 
             <div className="space-y-3 text-sm">
               {errorMessage && (
-                <div className="rounded bg-red-100 p-2 text-xs text-red-700">
-                  {errorMessage}
-                </div>
+                <div className="rounded bg-red-100 p-2 text-xs text-red-700">{errorMessage}</div>
               )}
 
               <div className="border-b pb-3">
@@ -235,8 +236,12 @@ function SidebarHeader() {
                 <div className="text-xs font-mono text-gray-700 space-y-1 mt-1">
                   {isAuthenticated ? (
                     <>
-                      <p>Null ID: <span className="font-mono">{myId}</span></p>
-                      <p>Fingerprint: <span className="font-mono">{myFingerprint}</span></p>
+                      <p>
+                        Null ID: <span className="font-mono">{myId}</span>
+                      </p>
+                      <p>
+                        Fingerprint: <span className="font-mono">{myFingerprint}</span>
+                      </p>
                     </>
                   ) : (
                     <p>Not initialized</p>
@@ -257,7 +262,9 @@ function SidebarHeader() {
                 <div className="flex flex-col gap-1 mt-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-gray-600">Status</span>
-                    <span className={`px-1.5 py-0.5 rounded text-xs ${listenRunning ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-xs ${listenRunning ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                    >
                       {listenRunning ? 'Online' : 'Invisible'}
                     </span>
                   </div>
@@ -278,7 +285,6 @@ function SidebarHeader() {
                     </button>
                   </div>
                 </div>
-
               </div>
 
               {/* Security: Change Passphrase / Self-destruct / UI Settings */}
@@ -362,7 +368,12 @@ function SidebarHeader() {
       {showSecurityModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
-            <SecuritySettings onClose={() => { setShowSecurityModal(false); setShowSettingsModal(true); }} />
+            <SecuritySettings
+              onClose={() => {
+                setShowSecurityModal(false)
+                setShowSettingsModal(true)
+              }}
+            />
           </div>
         </div>
       )}
@@ -371,7 +382,12 @@ function SidebarHeader() {
       {showUISettingsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
-            <UISettings onClose={() => { setShowUISettingsModal(false); setShowSettingsModal(true); }} />
+            <UISettings
+              onClose={() => {
+                setShowUISettingsModal(false)
+                setShowSettingsModal(true)
+              }}
+            />
           </div>
         </div>
       )}
@@ -380,7 +396,12 @@ function SidebarHeader() {
       {showBackupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
-            <BackupSettings onClose={() => { setShowBackupModal(false); setShowSettingsModal(true); }} />
+            <BackupSettings
+              onClose={() => {
+                setShowBackupModal(false)
+                setShowSettingsModal(true)
+              }}
+            />
           </div>
         </div>
       )}
@@ -392,9 +413,7 @@ function SidebarHeader() {
             <h2 className="mb-4 text-lg font-semibold">Add Contact</h2>
 
             {errorMessage && (
-              <div className="mb-3 rounded bg-red-100 p-2 text-xs text-red-700">
-                {errorMessage}
-              </div>
+              <div className="mb-3 rounded bg-red-100 p-2 text-xs text-red-700">{errorMessage}</div>
             )}
 
             <div className="space-y-3">
@@ -402,21 +421,21 @@ function SidebarHeader() {
                 type="text"
                 placeholder="Null ID (NN-XXXX-XXXX)"
                 value={contactForm.nullId}
-                onChange={(e) => setContactForm({ ...contactForm, nullId: e.target.value })}
+                onChange={e => setContactForm({ ...contactForm, nullId: e.target.value })}
                 className="w-full rounded border px-2 py-1 text-sm"
               />
               <input
                 type="text"
                 placeholder="Fingerprint"
                 value={contactForm.fingerprint}
-                onChange={(e) => setContactForm({ ...contactForm, fingerprint: e.target.value })}
+                onChange={e => setContactForm({ ...contactForm, fingerprint: e.target.value })}
                 className="w-full rounded border px-2 py-1 text-sm"
               />
               <input
                 type="text"
                 placeholder="Alias (optional)"
                 value={contactForm.alias}
-                onChange={(e) => setContactForm({ ...contactForm, alias: e.target.value })}
+                onChange={e => setContactForm({ ...contactForm, alias: e.target.value })}
                 className="w-full rounded border px-2 py-1 text-sm"
               />
             </div>
@@ -456,21 +475,21 @@ function SidebarHeader() {
                 type="password"
                 placeholder="Current passphrase"
                 value={passwdForm.current}
-                onChange={(e) => setPasswdForm({ ...passwdForm, current: e.target.value })}
+                onChange={e => setPasswdForm({ ...passwdForm, current: e.target.value })}
                 className="w-full rounded border px-2 py-1 text-sm"
               />
               <input
                 type="password"
                 placeholder="New passphrase"
                 value={passwdForm.new}
-                onChange={(e) => setPasswdForm({ ...passwdForm, new: e.target.value })}
+                onChange={e => setPasswdForm({ ...passwdForm, new: e.target.value })}
                 className="w-full rounded border px-2 py-1 text-sm"
               />
               <input
                 type="password"
                 placeholder="Confirm new passphrase"
                 value={passwdForm.confirm}
-                onChange={(e) => setPasswdForm({ ...passwdForm, confirm: e.target.value })}
+                onChange={e => setPasswdForm({ ...passwdForm, confirm: e.target.value })}
                 className="w-full rounded border px-2 py-1 text-sm"
               />
             </div>

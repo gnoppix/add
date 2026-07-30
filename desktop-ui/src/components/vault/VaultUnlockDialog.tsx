@@ -42,7 +42,7 @@ function VaultUnlockDialog({ isOpen, onClose, onSuccess, homeDir }: VaultUnlockD
       const newAttempts = failedAttempts + 1
       setFailedAttempts(newAttempts)
       const msg = err instanceof Error ? err.message : String(err)
-      
+
       // 10 failed attempts triggers self-destruct
       if (newAttempts >= 10) {
         if (api?.selfDestruct) {
@@ -75,15 +75,13 @@ function VaultUnlockDialog({ isOpen, onClose, onSuccess, homeDir }: VaultUnlockD
           <input
             type="password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={e => setPassword(e.target.value)}
             placeholder="16-character passphrase"
             className="mb-4 w-full rounded border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
             autoFocus
             required
           />
-          {error && (
-            <p className="mb-3 text-sm text-red-500">{error}</p>
-          )}
+          {error && <p className="mb-3 text-sm text-red-500">{error}</p>}
           <div className="flex gap-2">
             <button
               type="button"

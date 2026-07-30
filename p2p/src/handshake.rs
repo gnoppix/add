@@ -43,7 +43,12 @@ pub async fn handshake_initiator(
     // specific peer's public key makes each handshake's PoW peer-specific.
     let mut rng = rand::thread_rng();
     let base_nonce: u64 = rng.r#gen();
-    let nonce = match solve_hello_pow(public_key_b64, base_nonce, HELLO_POW_BITS, public_key_b64.as_bytes()) {
+    let nonce = match solve_hello_pow(
+        public_key_b64,
+        base_nonce,
+        HELLO_POW_BITS,
+        public_key_b64.as_bytes(),
+    ) {
         Some(n) => n,
         None => {
             return Err(P2pError::Handshake(
@@ -214,7 +219,12 @@ fn solve_hello_pow(
 
 /// Verify a received handshake message's PoW.
 /// `node_secret` is the initiator's public key (see SECURITY FIX AUDIT-5).
-pub fn verify_hello_pow(public_key_b64: &str, nonce: u64, difficulty: u32, node_secret: &[u8]) -> bool {
+pub fn verify_hello_pow(
+    public_key_b64: &str,
+    nonce: u64,
+    difficulty: u32,
+    node_secret: &[u8],
+) -> bool {
     let data = format!("{}{}", public_key_b64, nonce);
     pow_check(&data, nonce, difficulty, node_secret).unwrap_or(false)
 }

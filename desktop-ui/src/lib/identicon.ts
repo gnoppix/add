@@ -27,9 +27,11 @@ const GRADIENTS: [string, string][] = [
   ['#14B8A6', '#22C55E'], // teal -> green
   ['#EF4444', '#F97316'], // red -> orange
   ['#6366F1', '#3B82F6'], // indigo -> blue
-  '#F43F5E', '#8B5CF6'  , // rose -> violet
+  '#F43F5E',
+  '#8B5CF6', // rose -> violet
   ['#06B6D4', '#3B82F6'], // cyan -> blue
-  '#84CC16', '#10B981'  , // lime -> emerald
+  '#84CC16',
+  '#10B981', // lime -> emerald
 ]
 
 // Simple 32-bit hash for deterministic selection
@@ -37,7 +39,7 @@ function hashCode(str: string): number {
   let hash = 0
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i)
-    hash = ((hash << 5) - hash) + char
+    hash = (hash << 5) - hash + char
     hash = hash & hash
   }
   return Math.abs(hash)
@@ -49,11 +51,7 @@ function hashCode(str: string): number {
  * @param size  output size in px (square)
  * @param rounded  if true => rounded-square (squircle), else circle
  */
-export function generateInitialsAvatar(
-  seed: string,
-  size: number = 40,
-  rounded = true,
-): string {
+export function generateInitialsAvatar(seed: string, size: number = 40, rounded = true): string {
   if (!seed) return ''
 
   const initials = getInitials(seed)

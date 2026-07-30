@@ -45,7 +45,9 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
         setMessageType('error')
       }
     } catch (err) {
-      setMessage(t('ui.backup.loadError') + ': ' + (err instanceof Error ? err.message : String(err)))
+      setMessage(
+        t('ui.backup.loadError') + ': ' + (err instanceof Error ? err.message : String(err))
+      )
       setMessageType('error')
     } finally {
       setLoading(false)
@@ -66,7 +68,9 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
         setMessageType('error')
       }
     } catch (err) {
-      setMessage(t('ui.backup.createError') + ': ' + (err instanceof Error ? err.message : String(err)))
+      setMessage(
+        t('ui.backup.createError') + ': ' + (err instanceof Error ? err.message : String(err))
+      )
       setMessageType('error')
     } finally {
       setLoading(false)
@@ -85,10 +89,10 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
 
   const confirmAction = async () => {
     if (!showConfirm) return
-    
+
     setLoading(true)
     setMessage('')
-    
+
     try {
       if (actionType === 'restore') {
         const result = await window.addAPI.restore(showConfirm)
@@ -112,7 +116,11 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
         }
       }
     } catch (err) {
-      setMessage((actionType === 'restore' ? t('ui.backup.restoreError') : t('ui.backup.deleteError')) + ': ' + (err instanceof Error ? err.message : String(err)))
+      setMessage(
+        (actionType === 'restore' ? t('ui.backup.restoreError') : t('ui.backup.deleteError')) +
+          ': ' +
+          (err instanceof Error ? err.message : String(err))
+      )
       setMessageType('error')
     } finally {
       setLoading(false)
@@ -138,21 +146,24 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
     <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">{t('ui.settings.backupSettings')}</h2>
-        <button
-          onClick={onClose}
-          className="text-gray-400 hover:text-gray-600"
-          aria-label="Close"
-        >
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600" aria-label="Close">
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>
 
       {message && (
-        <div className={`mb-4 rounded p-2 text-xs ${
-          messageType === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-        }`}>
+        <div
+          className={`mb-4 rounded p-2 text-xs ${
+            messageType === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+          }`}
+        >
           {message}
         </div>
       )}
@@ -178,7 +189,7 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
             <div className="py-4 text-center text-sm text-gray-500">{t('ui.backup.noBackups')}</div>
           ) : (
             <div className="max-h-60 overflow-y-auto space-y-2">
-              {backups.map((backup) => (
+              {backups.map(backup => (
                 <div
                   key={backup.name}
                   className="flex items-center justify-between p-2 rounded border bg-gray-50"
@@ -221,7 +232,9 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
             <div className="w-96 rounded-lg bg-white p-6 shadow-xl">
               <h3 className="mb-4 text-lg font-semibold">
-                {actionType === 'restore' ? t('ui.backup.confirmRestore') : t('ui.backup.confirmDelete')}
+                {actionType === 'restore'
+                  ? t('ui.backup.confirmRestore')
+                  : t('ui.backup.confirmDelete')}
               </h3>
               <p className="mb-4 text-sm text-gray-600">
                 {actionType === 'restore'
@@ -230,7 +243,10 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
               </p>
               <div className="flex justify-end gap-2">
                 <button
-                  onClick={() => { setShowConfirm(null); setActionType(null); }}
+                  onClick={() => {
+                    setShowConfirm(null)
+                    setActionType(null)
+                  }}
                   className="rounded bg-gray-100 px-3 py-1.5 text-sm hover:bg-gray-200"
                 >
                   {t('ui.common.cancel')}
@@ -244,7 +260,11 @@ export default function BackupSettings({ onClose }: BackupSettingsProps) {
                       : 'bg-red-500 text-white hover:bg-red-600'
                   } disabled:opacity-50`}
                 >
-                  {loading ? t('ui.common.loading') : (actionType === 'restore' ? t('ui.backup.restore') : t('ui.backup.delete'))}
+                  {loading
+                    ? t('ui.common.loading')
+                    : actionType === 'restore'
+                      ? t('ui.backup.restore')
+                      : t('ui.backup.delete')}
                 </button>
               </div>
             </div>

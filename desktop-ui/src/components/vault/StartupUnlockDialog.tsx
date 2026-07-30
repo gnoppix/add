@@ -16,25 +16,23 @@ export function StartupUnlockDialog({ onUnlock }: StartupUnlockDialogProps) {
   const [passphrase, setPassphrase] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isUnlocking, setIsUnlocking] = useState(false)
-  const { submitPassphrase, setPassphrase: storeSetPassphrase } = useChatStore()
+  const { submitPassphrase } = useChatStore()
   const { t } = useTranslation()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
     setIsUnlocking(true)
+    console.log('[StartupUnlockDialog] Submitting passphrase...')
 
     try {
-      // Send passphrase to main process for in-memory storage
-      await storeSetPassphrase(passphrase)
-      
-      // Test that the passphrase works by trying a read
-      await submitPassphrase(passphrase)
-      
+      const result = await submitPassphrase(passphrase)
+      console.log('[StartupUnlockDialog] submitPassphrase result:', result)
       setPassphrase('')
       onUnlock()
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      console.error('[StartupUnlockDialog] submitPassphrase error:', msg)
       setError(msg)
     } finally {
       setIsUnlocking(false)
@@ -50,14 +48,12 @@ export function StartupUnlockDialog({ onUnlock }: StartupUnlockDialogProps) {
         <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
           {t('ui.unlock.enterPassphraseDesc')}
         </p>
-        {error && (
-          <p className="mb-4 text-sm text-red-500">{error}</p>
-        )}
+        {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
         <form onSubmit={handleSubmit}>
           <input
             type="password"
             value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
+            onChange={e => setPassphrase(e.target.value)}
             placeholder={t('ui.unlock.yourPassphrase')}
             className="mb-4 w-full rounded border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
             autoFocus

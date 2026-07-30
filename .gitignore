@@ -5,6 +5,7 @@ eva_keys/
 eva_ratchet_sessions/  
 /scritps/
 # Desktop UI build outputs
+/desktop-ui/*.sh
 /desktop-ui/dist/
 /desktop-ui/dist-electron/
 /desktop-ui/build/

@@ -29,6 +29,10 @@ fi
 export ADD_CLI_PATH="$CLI_BINARY"
 export NODE_ENV=development
 
+# Disable GPU acceleration to prevent X session crashes on Linux
+export ELECTRON_DISABLE_GPU=1
+export ELECTRON_DISABLE_GPU_COMPOSITING=1
+
 echo "CLI path: $ADD_CLI_PATH"
 cd "$SCRIPT_DIR"
 npm run dev

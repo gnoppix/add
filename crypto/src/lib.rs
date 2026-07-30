@@ -32,7 +32,11 @@ pub mod pir;
 pub mod secure_mem;
 pub mod snapshot_defense;
 pub mod tpm_vault;
-pub use tpm_vault::{cache_mak, encrypt_with_mak, decrypt_with_mak, seal_with_passphrase, unseal_with_passphrase, check_failed_attempts, reset_failed_attempts, self_destruct, MasterAppKey, VaultFile, VaultKind};
+pub use tpm_vault::{
+    MasterAppKey, VaultFile, VaultKind, cache_mak, check_failed_attempts, decrypt_with_mak,
+    encrypt_with_mak, reset_failed_attempts, seal_with_passphrase, self_destruct,
+    unseal_with_passphrase,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
@@ -265,7 +269,8 @@ impl DoubleRatchetSession {
     /// of out-of-order/duplicate messages.
     fn prune_skipped_keys(&mut self) {
         if self.state.skipped_keys.len() > MAX_SKIPPED_KEYS {
-            if let Some(k) = self.state.skipped_keys.keys().next().cloned() {
+            let k = self.state.skipped_keys.keys().next().cloned();
+            if let Some(k) = k {
                 self.state.skipped_keys.remove(&k);
             }
         }

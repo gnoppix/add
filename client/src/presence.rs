@@ -13,8 +13,8 @@
 // decapsulation key and cannot recover the address.
 //-------------------------------------------------------------------------------
 
+use crate::{DbEncryptionKey, load_or_generate_kyber};
 use crate::{Identity, null_id_from_fingerprint, uuid_hex};
-use crate::{load_or_generate_kyber, DbEncryptionKey};
 use add_crypto::kyber::KyberKeypair;
 use add_protocol::constants::ADDR_TTL;
 use add_protocol::envelope::WireEnvelope;
@@ -42,9 +42,7 @@ use tokio_tungstenite::tungstenite::Message;
 /// decapsulating `ct` with their OWN random secret key. An outsider who only
 /// knows the public Null ID cannot derive the peer's secret key and therefore
 /// cannot learn the presence plaintext.
-async fn pair_encapsulate(
-    peer_fp: &str,
-) -> Result<(String, Vec<u8>), Box<dyn std::error::Error>> {
+async fn pair_encapsulate(peer_fp: &str) -> Result<(String, Vec<u8>), Box<dyn std::error::Error>> {
     let (_, bootstraps, _) = crate::discover_all_servers().await;
     let mut last_err = String::new();
     for seed_url in &bootstraps {
@@ -69,7 +67,10 @@ async fn pair_encapsulate(
             }
         }
     }
-    Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("pair_encapsulate: {last_err}"))))
+    Err(Box::new(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("pair_encapsulate: {last_err}"),
+    )))
 }
 
 /// Recover the per-pair shared secret as the reader: decapsulate `ct_hex` with
@@ -370,7 +371,8 @@ mod tests {
         // at all and therefore cannot AES-open the address (it yields garbage).
         let eve_kp = add_crypto::kyber::KyberKeypair::generate().unwrap();
         let eve_ct_bytes = hex::decode(&ct_hex_clone).unwrap();
-        let eve_kyber_ct = add_crypto::kyber::MlKem1024Ciphertext::try_from(&eve_ct_bytes[..]).unwrap();
+        let eve_kyber_ct =
+            add_crypto::kyber::MlKem1024Ciphertext::try_from(&eve_ct_bytes[..]).unwrap();
         let eve_ss = eve_kp.decapsulate(&eve_kyber_ct).ok();
         let eve_opened = eve_ss.and_then(|ss| open(&ss, blob.split('.').nth(1).unwrap()).ok());
         assert!(

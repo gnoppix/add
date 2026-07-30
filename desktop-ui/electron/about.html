@@ -23,6 +23,69 @@
     }
     .link:hover { color: #004499; }
     .thanks { text-align: left; margin-top: 20px; }
+    .version-info {
+      margin: 20px 0;
+      padding: 15px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .version-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #eee;
+    }
+    .version-row:last-child { border-bottom: none; }
+    .version-label { color: #666; }
+    .version-value { font-weight: 500; }
+    .update-banner {
+      background: #e8f5e9;
+      border: 1px solid #4caf50;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 16px 0;
+      text-align: left;
+    }
+    .update-banner.error {
+      background: #fff3e0;
+      border-color: #ff9800;
+    }
+    .update-banner h3 { margin: 0 0 8px; font-size: 16px; }
+    .update-banner p { margin: 4px 0; color: #333; }
+    .update-banner button {
+      margin-top: 12px;
+      padding: 8px 16px;
+      background: #4caf50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .update-banner button:hover { background: #43a047; }
+    .check-version-btn {
+      margin-top: 16px;
+      padding: 8px 16px;
+      background: #2196f3;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .check-version-btn:hover { background: #1976d2; }
+    .check-version-btn:disabled { background: #90caf9; cursor: not-allowed; }
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      border-top-color: transparent;
+      animation: spin 1s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -32,6 +95,30 @@
   <p>Secure P2P messaging with post-quantum cryptography.</p>
   <p>© 2002 - 2026 By Andreas Mueller - Gnoppix Linux</p>
   <p>Gnoppix Add Messenger is Open Source under <a href="#" id="license-link" class="link">BSL License</a></p>
+  
+  <div class="version-info">
+    <div class="version-row">
+      <span class="version-label">App Version:</span>
+      <span class="version-value" id="app-version">-</span>
+    </div>
+    <div class="version-row">
+      <span class="version-label">CLI Version:</span>
+      <span class="version-value" id="cli-version">-</span>
+    </div>
+    <div class="version-row">
+      <span class="version-label">Latest Release:</span>
+      <span class="version-value" id="latest-version">-</span>
+    </div>
+    <div class="version-row">
+      <span class="version-label">Last Checked:</span>
+      <span class="version-value" id="last-checked">-</span>
+    </div>
+  </div>
+
+  <div id="update-banner" style="display: none;"></div>
+
+  <button id="check-version-btn" class="check-version-btn">Check for Updates</button>
+
   <div class="thanks">
     <p>Add's Special thanks to:</p>
     <ul style="text-align: left; margin-left: 30px;">
@@ -39,14 +126,92 @@
       <li>Ross Anderson</li>
     </ul>
   </div>
+  
   <script>
+    // Load app version on start
     window.addAPI.getVersion().then(v => {
-      document.getElementById('version').textContent = v
-    })
+      document.getElementById('version').textContent = v;
+      document.getElementById('app-version').textContent = v;
+    });
+
+    // Check version on load
+    checkVersion();
+
+    // Manual check button
+    document.getElementById('check-version-btn').addEventListener('click', () => {
+      checkVersion(true);
+    });
+
+    async function checkVersion(force = false) {
+      const btn = document.getElementById('check-version-btn');
+      const banner = document.getElementById('update-banner');
+      
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Checking...';
+      banner.style.display = 'none';
+
+      try {
+        const result = await window.addAPI.checkVersion();
+        
+        document.getElementById('cli-version').textContent = result.local_version || 'Unknown';
+        document.getElementById('latest-version').textContent = result.latest_version || 'Unknown';
+        document.getElementById('last-checked').textContent = result.checked_at ? new Date(result.checked_at).toLocaleString() : 'Never';
+
+        if (result.status === 'UPDATE_AVAILABLE') {
+          banner.className = 'update-banner';
+          banner.style.display = 'block';
+          banner.innerHTML = `
+            <h3>Update Available!</h3>
+            <p>Version <strong>${result.latest_version}</strong> is available. You have <strong>${result.local_version}</strong>.</p>
+            <button onclick="window.addAPI.openExternal('${result.release_url}')">View Release</button>
+          `;
+        } else if (result.status === 'UP_TO_DATE') {
+          banner.className = 'update-banner';
+          banner.style.display = 'block';
+          banner.innerHTML = `
+            <h3>You're Up to Date!</h3>
+            <p>Version <strong>${result.local_version}</strong> is the latest release.</p>
+          `;
+        } else {
+          banner.className = 'update-banner error';
+          banner.style.display = 'block';
+          banner.innerHTML = `
+            <h3>Could Not Check for Updates</h3>
+            <p>Unable to determine latest version. Please check your internet connection or try again later.</p>
+            <button onclick="checkVersion(true)">Retry</button>
+          `;
+        }
+      } catch (err) {
+        console.error('Version check failed:', err);
+        banner.className = 'update-banner error';
+        banner.style.display = 'block';
+        banner.innerHTML = `
+          <h3>Check Failed</h3>
+          <p>Error: ${err.message}</p>
+          <button onclick="checkVersion(true)">Retry</button>
+        `;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Check for Updates';
+      }
+    }
+
+    // Listen for auto-update notifications from main process
+    window.addAPI.on('add-update-available', (result) => {
+      const banner = document.getElementById('update-banner');
+      banner.className = 'update-banner';
+      banner.style.display = 'block';
+      banner.innerHTML = `
+        <h3>Update Available!</h3>
+        <p>Version <strong>${result.latest_version}</strong> is available. You have <strong>${result.local_version}</strong>.</p>
+        <button onclick="window.addAPI.openExternal('${result.release_url}')">View Release</button>
+      `;
+    });
+
     document.getElementById('license-link').addEventListener('click', (e) => {
-      e.preventDefault()
-      window.addAPI.openExternal('https://github.com/gnoppix/add/blob/main/LICENSE.md')
-    })
+      e.preventDefault();
+      window.addAPI.openExternal('https://github.com/gnoppix/add/blob/main/LICENSE.md');
+    });
   </script>
 </body>
 </html>

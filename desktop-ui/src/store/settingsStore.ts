@@ -31,7 +31,7 @@ interface SettingsStore {
 
 export const useSettingsStore = create<SettingsStore>()(
   persist(
-    (set) => ({
+    set => ({
       security: {
         selfDestructEnabled: true, // Enabled by default
         selfDestructThreshold: 10,
@@ -39,16 +39,16 @@ export const useSettingsStore = create<SettingsStore>()(
       ui: {
         autoStartListener: false, // Disabled by default - opt-in
       },
-      setSelfDestructEnabled: (enabled) =>
-        set((state) => ({
+      setSelfDestructEnabled: enabled =>
+        set(state => ({
           security: { ...state.security, selfDestructEnabled: enabled },
         })),
-      setSelfDestructThreshold: (threshold) =>
-        set((state) => ({
+      setSelfDestructThreshold: threshold =>
+        set(state => ({
           security: { ...state.security, selfDestructThreshold: threshold },
         })),
-      setAutoStartListener: (enabled) =>
-        set((state) => ({
+      setAutoStartListener: enabled =>
+        set(state => ({
           ui: { ...state.ui, autoStartListener: enabled },
         })),
     }),

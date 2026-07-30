@@ -106,8 +106,8 @@ impl VaultFile {
 
     /// Read + parse a vault file.
     pub fn read_from(path: &std::path::Path) -> Result<Self, CryptoError> {
-        let content =
-            std::fs::read_to_string(path).map_err(|e| CryptoError::Io(format!("vault read: {e}")))?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| CryptoError::Io(format!("vault read: {e}")))?;
         serde_json::from_str(&content)
             .map_err(|e| CryptoError::Serialization(format!("vault parse: {e}")))
     }
@@ -118,14 +118,14 @@ impl VaultFile {
 // ============================================================================
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Key, Nonce,
+    aead::{Aead, KeyInit, Payload},
 };
 use argon2::{
-    password_hash::{rand_core::OsRng, SaltString},
     Argon2,
+    password_hash::{SaltString, rand_core::OsRng},
 };
-use base64::engine::{general_purpose::STANDARD as B64, Engine};
+use base64::engine::{Engine, general_purpose::STANDARD as B64};
 
 /// Argon2id parameters for the password -> KEK derivation.
 const ARGON2_MEMORY_KIB: u32 = 19456; // ~19 MiB
@@ -143,8 +143,12 @@ fn max_wrong_attempts() -> u8 {
     };
     let settings_path = home.join(".add/settings.json");
     if let Ok(content) = std::fs::read_to_string(&settings_path) {
-        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(threshold) = settings.get("selfDestructThreshold").and_then(|v| v.as_u64()) {
+        let settings_res = serde_json::from_str::<serde_json::Value>(&content);
+        if let Ok(settings) = settings_res {
+            let threshold_opt = settings
+                .get("selfDestructThreshold")
+                .and_then(|v| v.as_u64());
+            if let Some(threshold) = threshold_opt {
                 return threshold.clamp(3, 20) as u8; // Configurable: 3-20 attempts
             }
         }
@@ -182,8 +186,7 @@ pub fn check_failed_attempts(home: &std::path::Path, increment: bool) -> Result<
 pub fn reset_failed_attempts(home: &std::path::Path) -> Result<(), CryptoError> {
     let path = home.join(".add/failed_attempts.json");
     if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| CryptoError::Io(format!("failed-remove: {e}")))?;
+        std::fs::remove_file(&path).map_err(|e| CryptoError::Io(format!("failed-remove: {e}")))?;
     }
     Ok(())
 }
@@ -224,7 +227,13 @@ fn aes_wrap(kek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ct = cipher
-        .encrypt(nonce, Payload { msg: plaintext, aad: b"add-mak-v1" })
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad: b"add-mak-v1",
+            },
+        )
         .map_err(|e| CryptoError::EncryptFailed(format!("aes-wrap: {e}")))?;
     let mut out = Vec::with_capacity(12 + ct.len());
     out.extend_from_slice(&nonce_bytes);
@@ -240,17 +249,18 @@ fn aes_unwrap(kek: &[u8; 32], wrapped: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let (nonce, ct) = wrapped.split_at(12);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(kek));
     cipher
-        .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: b"add-mak-v1" })
-        .map_err(|_| {
-            CryptoError::DecryptFailed("aes-unwrap: auth failed (bad password)".into())
-        })
+        .decrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: ct,
+                aad: b"add-mak-v1",
+            },
+        )
+        .map_err(|_| CryptoError::DecryptFailed("aes-unwrap: auth failed (bad password)".into()))
 }
 
 /// Seal the MAK under a 16-char password -> VaultFile (Passphrase).
-pub fn seal_with_passphrase(
-    mak: &MasterAppKey,
-    password: &[u8],
-) -> Result<VaultFile, CryptoError> {
+pub fn seal_with_passphrase(mak: &MasterAppKey, password: &[u8]) -> Result<VaultFile, CryptoError> {
     let salt = SaltString::generate(&mut OsRng);
     let kek = derive_kek(password, &salt)?;
     let wrapped = aes_wrap(&kek, mak.as_bytes())?;
@@ -269,7 +279,9 @@ pub fn unseal_with_passphrase(
     password: &[u8],
 ) -> Result<MasterAppKey, CryptoError> {
     let VaultKind::Passphrase { wrapped_b64 } = &vault.kind else {
-        return Err(CryptoError::DecryptFailed("vault is not passphrase mode".into()));
+        return Err(CryptoError::DecryptFailed(
+            "vault is not passphrase mode".into(),
+        ));
     };
     let salt = vault
         .pw_salt_b64
@@ -329,16 +341,16 @@ mod tpm {
     use super::*;
     use std::str::FromStr;
     use tss_esapi::{
+        Context, TctiNameConf,
         attributes::{ObjectAttributesBuilder, SessionAttributesBuilder},
         constants::session_type::SessionType,
         handles::{KeyHandle, PersistentTpmHandle, TpmHandle},
         interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm},
         structures::{
-            Auth, KeyedHashScheme, Public, PublicBuilder, PublicKeyedHashParameters,
-            SensitiveData, SymmetricDefinition,
+            Auth, KeyedHashScheme, Public, PublicBuilder, PublicKeyedHashParameters, SensitiveData,
+            SymmetricDefinition,
         },
         utils::TpmsContext,
-        Context, TctiNameConf,
     };
 
     /// Persistent SRK handle used as the seal parent.
@@ -359,8 +371,10 @@ mod tpm {
     /// Open an ESYS context against the system TPM (resource manager) with an
     /// HMAC auth session established (required for `create`/`load`/`unseal`).
     fn open_context() -> Result<Context, CryptoError> {
-            let tcti = TctiNameConf::from_str("tabrmd:bus_name=com.intel.tss2.Tabrmd").map_err(|e| CryptoError::HardwareError(format!("TCTI config: {e:?}")))?;
-            let mut ctx = Context::new(tcti).map_err(|e| CryptoError::HardwareError(format!("ESYS init: {e:?}")))?;
+        let tcti = TctiNameConf::from_str("tabrmd:bus_name=com.intel.tss2.Tabrmd")
+            .map_err(|e| CryptoError::HardwareError(format!("TCTI config: {e:?}")))?;
+        let mut ctx = Context::new(tcti)
+            .map_err(|e| CryptoError::HardwareError(format!("ESYS init: {e:?}")))?;
 
         let session = ctx
             .start_auth_session(
@@ -376,7 +390,8 @@ mod tpm {
             .with_decrypt(true)
             .with_encrypt(true)
             .build();
-        let s = session.ok_or_else(|| CryptoError::HardwareError("TPM returned no auth session".into()))?;
+        let s = session
+            .ok_or_else(|| CryptoError::HardwareError("TPM returned no auth session".into()))?;
         ctx.tr_sess_set_attributes(s, attrs, mask)
             .map_err(|e| CryptoError::HardwareError(format!("session attrs: {e:?}")))?;
         ctx.set_sessions((Some(s), None, None));
@@ -549,7 +564,11 @@ mod tests {
         let mak = MasterAppKey::from_raw([1u8; MAK_LEN]);
 
         let wrapped = encrypt_with_mak(&mak, &seed).unwrap();
-        assert_ne!(&wrapped[..], &seed[..], "seed must not be stored in plaintext");
+        assert_ne!(
+            &wrapped[..],
+            &seed[..],
+            "seed must not be stored in plaintext"
+        );
 
         let recovered = decrypt_with_mak(&mak, &wrapped).unwrap();
         assert_eq!(recovered, seed);

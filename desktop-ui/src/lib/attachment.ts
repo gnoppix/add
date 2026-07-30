@@ -20,7 +20,7 @@ export function downscaleImageDataUrl(
   maxDim = 512,
   quality = 0.82
 ): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     if (typeof document === 'undefined' || typeof Image === 'undefined') {
       resolve(dataUrl)
       return
@@ -122,57 +122,57 @@ export function attachmentDataUrl(a: AttachmentMeta): string {
 
 /** Known sticker filenames (from bundled pack). */
 const KNOWN_STICKERS = new Set([
-  "AgAD0wEAArMeMEc.webp",
-  "AgAD1AIAAiSuMEc.webp",
-  "AgAD3wEAAgNOMUc.webp",
-  "AgAD4QEAAlsHMEc.webp",
-  "AgAD4QEAAvD4KUc.webp",
-  "AgAD5wIAAohuMUc.webp",
-  "AgAD6AEAArydMUc.webp",
-  "AgAD8gMAAlkNKEc.webp",
-  "AgAD9AEAAs0iKEc.webp",
-  "AgADAQIAAs-QMUc.webp",
-  "AgADCQIAAogeKUc.webp",
-  "AgADDwIAAlCNKEc.webp",
-  "AgADFQIAAofXMUc.webp",
-  "AgADIAIAAljNMUc.webp",
-  "AgADIAMAAgnYGUQ.webp",
-  "AgADJQMAAjUwKEc.webp",
-  "AgADJQMAArRdKUc.webp",
-  "AgADJgIAAhurMEc.webp",
-  "AgADKQIAAm-aKEc.webp",
-  "AgADKQIAAnM7MUc.webp",
-  "AgADKwIAAonnMUc.webp",
-  "AgADLwMAAoU-MUc.webp",
-  "AgADMAIAAlQ7KEc.webp",
-  "AgADMAQAAhyYKEc.webp",
-  "AgADNQIAAiZ8MEc.webp",
-  "AgADNwIAAh8GKEc.webp",
-  "AgADQAUAAoiEMEc.webp",
-  "AgADVAIAApvVMUc.webp",
-  "AgADVgMAAnNoMEc.webp",
-  "AgADXwIAAvZ9MUc.webp",
-  "AgADZAIAApt9MEc.webp",
-  "AgAD_wEAAg62MUc.webp",
-  "AgADaAMAAhABMEc.webp",
-  "AgADagIAApFlKEc.webp",
-  "AgADbQEAAgXqKUc.webp",
-  "AgADcQIAAvC5MEc.webp",
-  "AgADdgIAAh7pMUc.webp",
-  "AgADfAIAApqyMEc.webp",
-  "AgADgAIAAgxWKEc.webp",
-  "AgADggIAAtYxKUc.webp",
-  "AgADhAIAAlmOKEc.webp",
-  "AgADiQIAAqbhMEc.webp",
-  "AgADkgIAAhc3KUc.webp",
-  "AgADlAEAAp7xMEc.webp",
-  "AgADngIAAv9iMUc.webp",
-  "AgADqAEAAur2MEc.webp",
-  "AgADtAIAAv1TMUc.webp",
-  "AgADtQIAAitvMUc.webp",
-  "AgADvgEAAkdyKEc.webp",
-  "AgADyQcAAuN4BAAB.webp",
-  "AgADywIAAn6AIEQ.webp",
+  'AgAD0wEAArMeMEc.webp',
+  'AgAD1AIAAiSuMEc.webp',
+  'AgAD3wEAAgNOMUc.webp',
+  'AgAD4QEAAlsHMEc.webp',
+  'AgAD4QEAAvD4KUc.webp',
+  'AgAD5wIAAohuMUc.webp',
+  'AgAD6AEAArydMUc.webp',
+  'AgAD8gMAAlkNKEc.webp',
+  'AgAD9AEAAs0iKEc.webp',
+  'AgADAQIAAs-QMUc.webp',
+  'AgADCQIAAogeKUc.webp',
+  'AgADDwIAAlCNKEc.webp',
+  'AgADFQIAAofXMUc.webp',
+  'AgADIAIAAljNMUc.webp',
+  'AgADIAMAAgnYGUQ.webp',
+  'AgADJQMAAjUwKEc.webp',
+  'AgADJQMAArRdKUc.webp',
+  'AgADJgIAAhurMEc.webp',
+  'AgADKQIAAm-aKEc.webp',
+  'AgADKQIAAnM7MUc.webp',
+  'AgADKwIAAonnMUc.webp',
+  'AgADLwMAAoU-MUc.webp',
+  'AgADMAIAAlQ7KEc.webp',
+  'AgADMAQAAhyYKEc.webp',
+  'AgADNQIAAiZ8MEc.webp',
+  'AgADNwIAAh8GKEc.webp',
+  'AgADQAUAAoiEMEc.webp',
+  'AgADVAIAApvVMUc.webp',
+  'AgADVgMAAnNoMEc.webp',
+  'AgADXwIAAvZ9MUc.webp',
+  'AgADZAIAApt9MEc.webp',
+  'AgAD_wEAAg62MUc.webp',
+  'AgADaAMAAhABMEc.webp',
+  'AgADagIAApFlKEc.webp',
+  'AgADbQEAAgXqKUc.webp',
+  'AgADcQIAAvC5MEc.webp',
+  'AgADdgIAAh7pMUc.webp',
+  'AgADfAIAApqyMEc.webp',
+  'AgADgAIAAgxWKEc.webp',
+  'AgADggIAAtYxKUc.webp',
+  'AgADhAIAAlmOKEc.webp',
+  'AgADiQIAAqbhMEc.webp',
+  'AgADkgIAAhc3KUc.webp',
+  'AgADlAEAAp7xMEc.webp',
+  'AgADngIAAv9iMUc.webp',
+  'AgADqAEAAur2MEc.webp',
+  'AgADtAIAAv1TMUc.webp',
+  'AgADtQIAAitvMUc.webp',
+  'AgADvgEAAkdyKEc.webp',
+  'AgADyQcAAuN4BAAB.webp',
+  'AgADywIAAn6AIEQ.webp',
 ])
 
 export function isKnownSticker(name: string): boolean {
@@ -188,9 +188,7 @@ export function isKnownSticker(name: string): boolean {
  * v3: Known sticker reference format: `<filename>\n\n0\n\n` sends only the filename,
  * size 0. Receiver renders from bundled assets via StickerImg.
  */
-export function parseAttachment(
-  body: string
-): { meta: AttachmentMeta; caption: string } | null {
+export function parseAttachment(body: string): { meta: AttachmentMeta; caption: string } | null {
   const m = body.match(ATTACHMENT_RE)
   if (!m) return null
   const name = m[2]

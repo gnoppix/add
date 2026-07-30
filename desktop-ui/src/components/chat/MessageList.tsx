@@ -39,7 +39,9 @@ function MessageList() {
   if (conversationMessages.length === 0) {
     return (
       <div className="flex h-full items-center justify-center bg-light-background dark:bg-dark-background">
-        <p className="text-sm text-gray-500 dark:text-gray-400">No messages yet. Start the conversation!</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          No messages yet. Start the conversation!
+        </p>
       </div>
     )
   }
@@ -49,7 +51,7 @@ function MessageList() {
       ref={scrollRef}
       className="flex flex-1 flex-col gap-1 overflow-y-auto p-4 bg-light-background dark:bg-dark-background"
     >
-      {conversationMessages.map((message) => (
+      {conversationMessages.map(message => (
         <MessageBubble
           key={message.id}
           message={message}

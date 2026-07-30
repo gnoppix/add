@@ -28,7 +28,7 @@ module.exports = {
   extraResources: [
     {
       from: `../target/bundle/${addBinary}`,
-      to: addBinary,
+      to: 'add',
       filter: ['**/*']
     },
     {
@@ -71,5 +71,9 @@ module.exports = {
   // inside the asar (dist/ is the app root there). Static png/jpg/svg are fine
   // packed, but unpacking them too keeps the loader simple.
   asarUnpack: ['dist/**/*.{gif,webp,apng,avif,png,jpg,jpeg,svg}'],
-  compression: 'maximum'
+  compression: 'maximum',
+  // deb-specific options
+  deb: {
+    afterInstall: 'build/debian/fix-desktop.postinst'
+  }
 }

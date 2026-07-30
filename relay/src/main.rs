@@ -819,8 +819,8 @@ impl RelayState {
                 .await?;
 
             sqlx::query(
-                "CREATE INDEX IF NOT EXISTS idx_mailbox_tag ON mailbox_entries(recipient_tag)"
-                )
+                "CREATE INDEX IF NOT EXISTS idx_mailbox_tag ON mailbox_entries(recipient_tag)",
+            )
             .execute(&pool)
             .await?;
 
@@ -1080,7 +1080,11 @@ impl RelayState {
             // Encrypt sender metadata: [sender_nid][sender_fp] -> AES-256-GCM
             let sender_plaintext = format!("{}\n{}", req.sender_nid, req.sender_fp);
             let sender_encrypted = Self::encrypt_metadata(&sender_plaintext, &self.metadata_key);
-            let stored_recipient_nid = if tag.is_some() { "" } else { req.recipient_nid.as_str() };
+            let stored_recipient_nid = if tag.is_some() {
+                ""
+            } else {
+                req.recipient_nid.as_str()
+            };
             let stored_recipient_tag = tag.clone().unwrap_or_default();
 
             sqlx::query(
@@ -1617,7 +1621,12 @@ async fn handle_message(
             // the bootstrap sees the relay's IP, never the client's. The relay
             // does not log the key and pipes the bootstrap's raw `dht-found`
             // response straight back to the client (transparent proxy).
-            let key = env.payload.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let key = env
+                .payload
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if key.is_empty() {
                 return Err("dht-proxy-get missing key".to_string());
             }
@@ -2781,11 +2790,9 @@ async fn proxy_dht_get(
         "sig": "",
         "payload": { "key": key }
     });
-    sink.send(Message::Text(
-        serde_json::to_string(&req)?.into(),
-    ))
-    .await
-    .map_err(|e| format!("proxy blob-get send failed: {e}"))?;
+    sink.send(Message::Text(serde_json::to_string(&req)?.into()))
+        .await
+        .map_err(|e| format!("proxy blob-get send failed: {e}"))?;
     if let Some(msg) = stream.next().await {
         match msg {
             Ok(Message::Text(t)) => Ok(t.to_string()),
@@ -3297,7 +3304,9 @@ fn routing_epoch(now_secs: u64) -> u64 {
 }
 
 fn recipient_tag(secret: &Option<String>, nid: &str, epoch: u64) -> Option<String> {
-    secret.as_ref().map(|s| compute_hmac(&format!("{}|{}", nid, epoch), s))
+    secret
+        .as_ref()
+        .map(|s| compute_hmac(&format!("{}|{}", nid, epoch), s))
 }
 
 /// Parse a relay URL into (host, port, use_tls).
@@ -3441,9 +3450,6 @@ struct Args {
     #[arg(long, action = clap::ArgAction::Append)]
     bootstrap: Vec<String>,
 }
-
-
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -3953,7 +3959,12 @@ mod tests {
 
     /// Build a minimal store request (signature/auth fields are not checked
     /// here; we test the storage/lookup keying directly).
-    fn store_req(recipient_nid: &str, sender_nid: &str, blob: &str, tag: &str) -> MailboxStoreRequest {
+    fn store_req(
+        recipient_nid: &str,
+        sender_nid: &str,
+        blob: &str,
+        tag: &str,
+    ) -> MailboxStoreRequest {
         MailboxStoreRequest {
             recipient_nid: recipient_nid.to_string(),
             recipient_tag: tag.to_string(),
@@ -3998,7 +4009,10 @@ mod tests {
         // The in-memory mailbox is keyed by the blind tag, not the nid.
         let mailboxes = state.mailboxes.read().await;
         assert!(mailboxes.contains_key(&tag), "mailbox keyed by blind tag");
-        assert!(!mailboxes.contains_key(nid), "plaintext nid is NOT a mailbox key");
+        assert!(
+            !mailboxes.contains_key(nid),
+            "plaintext nid is NOT a mailbox key"
+        );
         drop(mailboxes);
 
         // Retrievable by the (correct) tag-derived nid lookup.
@@ -4039,7 +4053,10 @@ mod tests {
             .expect("store ok");
 
         let mailboxes = state.mailboxes.read().await;
-        assert!(mailboxes.contains_key(nid), "legacy keying uses plaintext nid");
+        assert!(
+            mailboxes.contains_key(nid),
+            "legacy keying uses plaintext nid"
+        );
         drop(mailboxes);
 
         let got = state.fetch_messages(nid).await;

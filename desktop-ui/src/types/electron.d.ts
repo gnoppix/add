@@ -21,7 +21,10 @@ declare global {
       // relPath is relative to the app's dist/ dir (e.g. "emoji/gif/AgAD.webp").
       readAsset?: (relPath: string) => string | null
       // Identity
-      init: (opts?: { pin?: string; password?: string }) => Promise<{ id: string; fingerprint: string }>
+      init: (opts?: {
+        pin?: string
+        password?: string
+      }) => Promise<{ id: string; fingerprint: string }>
       publishCert: () => Promise<unknown>
       getMyId: () => Promise<{ id: string; fingerprint: string }>
       register: () => Promise<unknown>
@@ -56,13 +59,37 @@ declare global {
       unlock: (opts?: { pin?: string; password?: string }) => Promise<unknown>
       selfDestruct: (homeDir: string) => Promise<unknown>
       // Backup/Restore
-      backup: () => Promise<{ success: boolean; backupName?: string; backupPath?: string; size?: number; timestamp?: string; error?: string }>
-      listBackups: () => Promise<{ success: boolean; backups: Array<{ name: string; path: string; size: number; mtime: string }>; error?: string }>
-      restore: (backupName: string) => Promise<{ success: boolean; message?: string; error?: string }>
-      deleteBackup: (backupName: string) => Promise<{ success: boolean; message?: string; error?: string }>
+      backup: () => Promise<{
+        success: boolean
+        backupName?: string
+        backupPath?: string
+        size?: number
+        timestamp?: string
+        error?: string
+      }>
+      listBackups: () => Promise<{
+        success: boolean
+        backups: Array<{ name: string; path: string; size: number; mtime: string }>
+        error?: string
+      }>
+      restore: (
+        backupName: string
+      ) => Promise<{ success: boolean; message?: string; error?: string }>
+      deleteBackup: (
+        backupName: string
+      ) => Promise<{ success: boolean; message?: string; error?: string }>
       // For About window
       openExternal: (url: string) => Promise<unknown>
       getVersion: () => Promise<unknown>
+
+      // Version Check
+      checkVersion: () => Promise<{
+        status: string
+        local_version: string
+        latest_version: string
+        release_url: string
+        checked_at: string
+      }>
 
       // Subscribe to main-process push events (e.g. live P2P inbound messages
       // from the background listener). Returns an unsubscribe function.

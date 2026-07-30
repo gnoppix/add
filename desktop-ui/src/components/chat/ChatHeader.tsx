@@ -51,12 +51,12 @@ function ChatHeader() {
   const [showSafetyNumbers, setShowSafetyNumbers] = useState(false)
   const [mutedContacts, setMutedContacts] = useState<Set<string>>(new Set())
 
-  const activeConversation = conversations.find((c) => c.id === activeConversationId)
+  const activeConversation = conversations.find(c => c.id === activeConversationId)
 
   if (!activeConversation) return null
 
   const handleMuteToggle = () => {
-    setMutedContacts((prev) => {
+    setMutedContacts(prev => {
       const next = new Set(prev)
       if (next.has(activeConversation.id)) {
         next.delete(activeConversation.id)

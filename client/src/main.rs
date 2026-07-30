@@ -17,10 +17,10 @@
 //-------------------------------------------------------------------------------
 
 use std::collections::HashMap;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::io::Read;
 use std::sync::Arc;
 
 use base64::Engine;
@@ -32,9 +32,9 @@ use hickory_resolver::config::ResolverConfig;
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::domain::IntoName;
 use serde::{Deserialize, Serialize};
+use sqlx::AssertSqlSafe;
 use sqlx::Pool;
 use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::AssertSqlSafe;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 use tracing_subscriber::EnvFilter;
@@ -107,9 +107,7 @@ const REFLECTOR_FINGERPRINT: &str = "3957378550B111F2678DC1B4A58C27B22091D5CF";
 /// (DESIGN.md §6 exception). Reachable without a contact entry. Add new
 /// public bots/services here as an explicit allow-list rather than hardcoding
 /// a single constant deeper in the logic. Matched by fingerprint.
-const PUBLIC_SERVICE_FINGERPRINTS: &[&str] = &[
-    REFLECTOR_FINGERPRINT,
-];
+const PUBLIC_SERVICE_FINGERPRINTS: &[&str] = &[REFLECTOR_FINGERPRINT];
 
 /// True for a well-known public service (reflector, future bots). Public
 /// services are exempt from the mutual-consent gate so they can initiate
@@ -409,11 +407,9 @@ impl DbEncryptionKey {
                         "DB key is passphrase-encrypted; set ADD_DB_PASSPHRASE or run interactively",
                     )
                 })?;
-                let decrypted = decrypt_cert_armored(
-                    trimmed,
-                    pass,
-                )
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+                let decrypted = decrypt_cert_armored(trimmed, pass).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
                 let bytes = hex::decode(decrypted.trim())
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
                 if bytes.len() != 32 {
@@ -481,15 +477,17 @@ impl DbEncryptionKey {
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
         type HmacSha256 = Hmac<Sha256>;
-        let mut mac =
-            HmacSha256::new_from_slice(&self.key).expect("32-byte key for HMAC");
+        let mut mac = HmacSha256::new_from_slice(&self.key).expect("32-byte key for HMAC");
         mac.update(value.as_bytes());
         let out = mac.finalize().into_bytes();
         hex::encode(&out[..16])
     }
 
     /// Encrypt an optional string (None → None).
-    fn encrypt_opt(&self, plaintext: &Option<String>) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    fn encrypt_opt(
+        &self,
+        plaintext: &Option<String>,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         match plaintext {
             Some(s) => Ok(Some(self.encrypt(s)?)),
             None => Ok(None),
@@ -566,7 +564,9 @@ const KYBER_KEY_PATH: &str = ".add/kyber_key.json";
 /// cannot prompt, the operator supplies `ADD_DB_PASSPHRASE` (a service
 /// credential). Returns None when unset (legacy plaintext key tolerated).
 fn read_db_passphrase() -> Option<String> {
-    std::env::var("ADD_DB_PASSPHRASE").ok().filter(|s| !s.is_empty())
+    std::env::var("ADD_DB_PASSPHRASE")
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// TIER-0 (metadata hardening): compute the blind relay routing tag for a
@@ -578,7 +578,9 @@ fn read_db_passphrase() -> Option<String> {
 /// `recipient_tag()`. Returns None when no secret is configured (the client
 /// then falls back to sending the plaintext null_id, preserving compat).
 fn relay_routing_tag(recipient_nid: &str) -> Option<String> {
-    let secret = std::env::var("ADD_RELAY_SHARED_SECRET").ok().filter(|s| !s.is_empty())?;
+    let secret = std::env::var("ADD_RELAY_SHARED_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -686,9 +688,17 @@ fn load_cert() -> Result<sequoia_openpgp::Cert, Box<dyn std::error::Error>> {
         let password = std::env::var("ADD_CERT_PASSPHRASE")
             .ok()
             .filter(|s| !s.is_empty())
-            .or_else(|| if std::env::var("ADD_DB_PASSPHRASE").ok().filter(|s| !s.is_empty()).is_some() {
-                std::env::var("ADD_DB_PASSPHRASE").ok()
-            } else { None });
+            .or_else(|| {
+                if std::env::var("ADD_DB_PASSPHRASE")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .is_some()
+                {
+                    std::env::var("ADD_DB_PASSPHRASE").ok()
+                } else {
+                    None
+                }
+            });
         let password = match password {
             Some(p) if !p.is_empty() => p,
             _ => return Err("encrypted own_cert.age requires a passphrase (set ADD_CERT_PASSPHRASE or ADD_DB_PASSPHRASE)".into()),
@@ -1057,11 +1067,11 @@ async fn ws_connect(
 
 const TLS_PIN_CACHE_PATH: &str = ".add/tls_pin_cache.json";
 
-use sha2::{Sha256, Digest as _};
-use rustls::client::danger::{ServerCertVerifier, ServerCertVerified};
-use rustls::client::WebPkiServerVerifier;
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::Error as TlsError;
+use rustls::client::WebPkiServerVerifier;
+use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use sha2::{Digest as _, Sha256};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 #[derive(Debug)]
@@ -1122,8 +1132,13 @@ impl ServerCertVerifier for PinnedCertVerifier {
         now: UnixTime,
     ) -> Result<ServerCertVerified, TlsError> {
         // 1) Normal WebPKI chain + expiry validation first.
-        self.inner
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)?;
+        self.inner.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            now,
+        )?;
 
         // 2) Pin check (TOFU). Pin the ISSUER CA's SPKI, not the leaf cert:
         //   leaf certs rotate every 75-90 days, so pinning the leaf would break
@@ -1203,7 +1218,7 @@ async fn ws_connect_pinned(
 > {
     // Ensure crypto provider is installed before any TLS operation
     let _ = rustls::crypto::ring::default_provider().install_default();
-    
+
     if !url.starts_with("wss://") {
         // Plaintext (local dev) — no TLS, no pinning.
         return tokio_tungstenite::connect_async(url)
@@ -1443,6 +1458,23 @@ impl MessageStore {
             .connect(&url)
             .await?;
 
+        // CONCURRENCY FIX (root cause of desktop-UI identity/message deadlock):
+        // `add listen` keeps this pool alive for the whole process. In the
+        // default ROLLBACK journal mode SQLite takes a single-writer lock, so a
+        // concurrent `add read` (run by the UI's loadMessages) blocks forever on
+        // the writer held by the idle listener pool — the UI never gets the ID
+        // and the whole init chain stalls.
+        //   * WAL lets readers proceed concurrently with a single writer.
+        //   * busy_timeout makes any contended statement wait+retry instead of
+        //     hanging on futex_do_wait (which is what we observed in /proc).
+        // Applied once per opened pool; idempotent across processes.
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA busy_timeout=5000")
+            .execute(&pool)
+            .await?;
+
         // Set permissions on the database file (may need to retry on race condition)
         #[cfg(unix)]
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
@@ -1528,23 +1560,31 @@ impl MessageStore {
         //    PRAGMA table_info and ALTER only the missing ones.
         if !Self::table_has_column(pool, "messages", "from_nid_enc").await {
             sqlx::query("ALTER TABLE messages ADD COLUMN from_nid_enc TEXT")
-                .execute(pool).await?;
+                .execute(pool)
+                .await?;
             sqlx::query("ALTER TABLE messages ADD COLUMN to_nid_enc TEXT")
-                .execute(pool).await?;
+                .execute(pool)
+                .await?;
             sqlx::query("ALTER TABLE messages ADD COLUMN timestamp_enc TEXT")
-                .execute(pool).await?;
+                .execute(pool)
+                .await?;
             sqlx::query("ALTER TABLE messages ADD COLUMN read_receipt_at_enc TEXT")
-                .execute(pool).await?;
+                .execute(pool)
+                .await?;
             sqlx::query("ALTER TABLE messages ADD COLUMN message_id_enc TEXT")
-                .execute(pool).await?;
+                .execute(pool)
+                .await?;
             sqlx::query("ALTER TABLE messages ADD COLUMN message_id_idx TEXT")
-                .execute(pool).await?;
+                .execute(pool)
+                .await?;
         }
         if !Self::table_has_column(pool, "ratchet_sessions", "peer_nid_enc").await {
             sqlx::query("ALTER TABLE ratchet_sessions ADD COLUMN peer_nid_idx TEXT")
-                .execute(pool).await?;
+                .execute(pool)
+                .await?;
             sqlx::query("ALTER TABLE ratchet_sessions ADD COLUMN peer_nid_enc TEXT")
-                .execute(pool).await?;
+                .execute(pool)
+                .await?;
         }
 
         // 2) Re-encrypt any legacy plaintext rows (those whose *_enc is still
@@ -1596,9 +1636,11 @@ impl MessageStore {
         }
 
         // ratchet_sessions: peer_nid + session_data -> *_enc + peer_nid_idx.
-        if let Ok(rows) = sqlx::query("SELECT id, peer_nid, session_data FROM ratchet_sessions WHERE peer_nid_enc IS NULL")
-            .fetch_all(pool)
-            .await
+        if let Ok(rows) = sqlx::query(
+            "SELECT id, peer_nid, session_data FROM ratchet_sessions WHERE peer_nid_enc IS NULL",
+        )
+        .fetch_all(pool)
+        .await
         {
             for r in rows {
                 let id: i64 = r.try_get("id")?;
@@ -1624,11 +1666,7 @@ impl MessageStore {
 
     /// Probe whether a column exists in a table (SQLite has no
     /// "ADD COLUMN IF NOT EXISTS", so the migration uses this to decide).
-    async fn table_has_column(
-        pool: &sqlx::SqlitePool,
-        table: &str,
-        col: &str,
-    ) -> bool {
+    async fn table_has_column(pool: &sqlx::SqlitePool, table: &str, col: &str) -> bool {
         use sqlx::Row;
         let pragma = format!("PRAGMA table_info({})", table);
         let rows = sqlx::query(AssertSqlSafe(pragma))
@@ -1888,7 +1926,8 @@ impl MessageStore {
                 "new_status": status,
                 "status_updated_at": timestamp,
                 "transition_reason": reason,
-            }).to_string();
+            })
+            .to_string();
             let record_enc = self.db_key.encrypt(&record)?;
             sqlx::query(
                         "INSERT INTO message_history (message_id_idx, record_enc, created_at)\n                         VALUES (?, ?, ?)"
@@ -2287,13 +2326,16 @@ async fn dht_register(
     let identity = Identity::load()?;
     let (vk_b64, pq_publisher_fp) = if let Some(sk_b64) = identity.ml_dsa87_signing_key {
         let sk_bytes = base64::engine::general_purpose::STANDARD.decode(sk_b64)?;
-        use ml_dsa::{KeyInit, Keypair, KeyExport};
+        use ml_dsa::{KeyExport, KeyInit, Keypair};
         let sk = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes)
             .map_err(|e| format!("ML-DSA-87 key reconstruction failed: {e}"))?;
         let vk = Keypair::verifying_key(&sk).clone();
         let vk_bytes = vk.to_bytes();
         let pq_fp = add_crypto_pq::fingerprint_from_verifying_key(&vk);
-        (base64::engine::general_purpose::STANDARD.encode(vk_bytes), pq_fp)
+        (
+            base64::engine::general_purpose::STANDARD.encode(vk_bytes),
+            pq_fp,
+        )
     } else {
         (String::new(), String::new())
     };
@@ -2369,9 +2411,7 @@ fn cert_blob_key(fingerprint: &str) -> String {
 /// and signed over `{cert_b64}|{fingerprint}` with our ML-DSA-87 key. The
 /// server stores it opaquely — it learns the public cert + fingerprint but
 /// gains no trusted ID↔key statement.
-async fn dht_publish_cert(
-    identity: &Identity,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn dht_publish_cert(identity: &Identity) -> Result<(), Box<dyn std::error::Error>> {
     use add_protocol::envelope::WireEnvelope;
 
     // SECURITY: publish the PUBLIC cert only — strip all secret key material.
@@ -2418,7 +2458,10 @@ async fn dht_publish_cert(
 
     // ML-KEM (Kyber) encapsulation key — PUBLISH our random on-disk key
     // (NOT derived from null_id). Loaded from disk so sender/receiver agree.
-    let kyber_kp = load_or_generate_kyber(&identity.null_id, &DbEncryptionKey::load_or_create_sync().key().clone())?;
+    let kyber_kp = load_or_generate_kyber(
+        &identity.null_id,
+        &DbEncryptionKey::load_or_create_sync().key().clone(),
+    )?;
     let kyber_enc_b64 = add_crypto::kyber::encode_enc_key(&kyber_kp.enc);
 
     let key = cert_blob_key(&fp);
@@ -2453,7 +2496,7 @@ async fn dht_publish_cert(
                 continue;
             }
         };
-        
+
         // Publish under PQ fingerprint key (primary)
         let key_pq = cert_blob_key(&fp);
         let req_pq = WireEnvelope {
@@ -2513,7 +2556,7 @@ async fn dht_publish_cert(
                 last_error = Some(format!("cert publish rejected: {}", resp.msg_type));
             }
         }
-        
+
         // Also publish under GPG fingerprint key for GPG-based lookups
         let gpg_fp = {
             use sequoia_openpgp::parse::Parse;
@@ -2523,12 +2566,13 @@ async fn dht_publish_cert(
             cert.armored()
                 .serialize(&mut buf)
                 .map_err(|e| format!("serialize public cert: {}", e))?;
-            let armored = String::from_utf8(buf).map_err(|e| format!("armored cert invalid UTF-8: {}", e))?;
+            let armored =
+                String::from_utf8(buf).map_err(|e| format!("armored cert invalid UTF-8: {}", e))?;
             let cert_obj: sequoia_openpgp::Cert = armored.parse()?;
             cert_obj.fingerprint().to_hex().to_uppercase()
         };
         let key_gpg = cert_blob_key(&gpg_fp);
-        
+
         // The cert is still signed by our PQ key (VK derives to PQ fp), so use PQ fp for publisher_fp
         let req_gpg = WireEnvelope {
             msg_type: "blob-put".to_string(),
@@ -2537,7 +2581,10 @@ async fn dht_publish_cert(
             sig: sig.clone(),
             payload: {
                 let mut m = serde_json::Map::new();
-                m.insert("key".to_string(), serde_json::Value::String(key_gpg.clone()));
+                m.insert(
+                    "key".to_string(),
+                    serde_json::Value::String(key_gpg.clone()),
+                );
                 m.insert(
                     "value".to_string(),
                     serde_json::Value::String(value_b64.clone()),
@@ -2545,7 +2592,7 @@ async fn dht_publish_cert(
                 m.insert("sig".to_string(), serde_json::Value::String(sig.clone()));
                 m.insert(
                     "publisher_fp".to_string(),
-                    serde_json::Value::String(fp.clone()),  // Use PQ fp for VK binding
+                    serde_json::Value::String(fp.clone()), // Use PQ fp for VK binding
                 );
                 m.insert(
                     "publisher_verifying_key".to_string(),
@@ -2771,9 +2818,7 @@ async fn fetch_public_service_addr(null_id: &str) -> Option<String> {
     for seed_url in &bootstraps {
         // Blind lookup (relay-proxied) with direct fallback. The bootstrap
         // then sees the relay's IP, not ours (item 2, Option A).
-        if let Ok((_cert, vk_b64, _kyber)) =
-            dht_fetch_cert_blind(&_relays, seed_url, fp).await
-        {
+        if let Ok((_cert, vk_b64, _kyber)) = dht_fetch_cert_blind(&_relays, seed_url, fp).await {
             // Pin the VK from the authoritative published bundle.
             if let Ok(vk_bytes) = base64::engine::general_purpose::STANDARD.decode(&vk_b64)
                 && let Ok(vk) = add_crypto_pq::decode_verifying_key(&vk_bytes)
@@ -3284,10 +3329,7 @@ fn start_cover_traffic(relay_urls: Vec<String>) {
             });
             let _ = ws.send(Message::Text(req.to_string().into())).await;
             // Drain the (empty) response so the socket stays healthy.
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                ws.next(),
-            ).await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next()).await;
         }
     });
 }
@@ -3849,7 +3891,8 @@ async fn lookup_kyber_for_nid(
         for seed in &bootstraps {
             if let Ok((_armored, _vk, _kyber)) = dht_fetch_cert_blind(&_relays, seed, id).await {
                 // Extract PQ FP from the cert's VK
-                let vk_bytes = base64::engine::general_purpose::STANDARD.decode(&_vk)
+                let vk_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&_vk)
                     .map_err(|e| format!("decode vk: {}", e))?;
                 let vk_parsed = add_crypto_pq::decode_verifying_key(&vk_bytes)
                     .map_err(|_e| "parse vk: invalid length")?;
@@ -4140,8 +4183,11 @@ async fn send_message(
         tokio::time::timeout(P2P_TOTAL_TIMEOUT, async {
             let mut last_err = String::from("no candidate addresses");
             for cand in &candidates {
-                match tokio::time::timeout(CANDIDATE_TIMEOUT, tokio_tungstenite::connect_async(cand))
-                    .await
+                match tokio::time::timeout(
+                    CANDIDATE_TIMEOUT,
+                    tokio_tungstenite::connect_async(cand),
+                )
+                .await
                 {
                     Ok(Ok(result)) => return Ok(result),
                     Ok(Err(e)) => {
@@ -4337,30 +4383,32 @@ async fn send_message(
     // responder can decapsulate the SAME shared secret (symmetric ratchet seed).
     // OPTIMIZATION: Try loading existing session first to avoid ratchet desync.
     let peer_nid = add_crypto::null_id(recipient_fp);
-    let (mut ratchet_session, kyber_ct_b64_opt) = if let Some(json) = store.load_session(&peer_nid).await? {
-        // Existing session: no new Kyber exchange needed
-        (
-            add_crypto::DoubleRatchetSession::deserialize(&json)
-                .map_err(|e| format!("ratchet load: {}", e))?,
-            None,
-        )
-    } else {
-        // First message: perform KEM exchange
-        let peer_kyber = peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?;
-        let (init_ct, init_shared_secret) = add_crypto::kyber::KyberKeypair::encapsulate(peer_kyber)
-            .map_err(|e| format!("kyber encapsulate: {}", e))?;
-        let init_ct_b64 =
-            base64::engine::general_purpose::STANDARD.encode(AsRef::<[u8]>::as_ref(&init_ct));
-        let session = add_crypto::DoubleRatchetSession::new(
-            recipient_fp,
-            &peer_nid,
-            &identity.fingerprint,
-            true, // is_initiator
-            &init_shared_secret,
-        )
-        .map_err(|e| format!("ratchet init: {}", e))?;
-        (session, Some(init_ct_b64))
-    };
+    let (mut ratchet_session, kyber_ct_b64_opt) =
+        if let Some(json) = store.load_session(&peer_nid).await? {
+            // Existing session: no new Kyber exchange needed
+            (
+                add_crypto::DoubleRatchetSession::deserialize(&json)
+                    .map_err(|e| format!("ratchet load: {}", e))?,
+                None,
+            )
+        } else {
+            // First message: perform KEM exchange
+            let peer_kyber = peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?;
+            let (init_ct, init_shared_secret) =
+                add_crypto::kyber::KyberKeypair::encapsulate(peer_kyber)
+                    .map_err(|e| format!("kyber encapsulate: {}", e))?;
+            let init_ct_b64 =
+                base64::engine::general_purpose::STANDARD.encode(AsRef::<[u8]>::as_ref(&init_ct));
+            let session = add_crypto::DoubleRatchetSession::new(
+                recipient_fp,
+                &peer_nid,
+                &identity.fingerprint,
+                true, // is_initiator
+                &init_shared_secret,
+            )
+            .map_err(|e| format!("ratchet init: {}", e))?;
+            (session, Some(init_ct_b64))
+        };
     // SECURITY FIX (G9): Persist the ratchet session for this peer so
     // future relay-fetched messages (or re-connections) can decrypt.
     let session_json = ratchet_session
@@ -4379,7 +4427,10 @@ async fn send_message(
         // First message: use encrypt_first (chain key derived from handshake Kyber SS)
         Some(_) => ratchet_session.encrypt_first(&padded_message, &[], &[])?,
         // Subsequent: fresh Kyber encapsulation per message
-        None => ratchet_session.encrypt_message(&padded_message, peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?)?,
+        None => ratchet_session.encrypt_message(
+            &padded_message,
+            peer_kyber_enc.as_ref().ok_or("no peer Kyber key")?,
+        )?,
     };
     let encrypted_msg_b64 = base64::engine::general_purpose::STANDARD.encode(&encrypted_msg);
     let msg_hash = sha256_hex(&encrypted_msg);
@@ -4783,7 +4834,6 @@ async fn run_listener(
     }
 }
 
-
 async fn handle_incoming_connection(
     stream: TcpStream,
     _peer_addr: std::net::SocketAddr,
@@ -5064,9 +5114,14 @@ async fn handle_incoming_connection(
         let peer_nid = add_crypto::null_id(peer_fp);
 
         // OPTIMIZATION: Try loading existing session first to maintain ratchet continuity.
-        let (mut ratchet_session, session_created) = if let Some(json) = store.load_session(&peer_nid).await? {
-            (add_crypto::DoubleRatchetSession::deserialize(&json)
-                .map_err(|e| format!("ratchet load: {}", e))?, false)
+        let (mut ratchet_session, session_created) = if let Some(json) =
+            store.load_session(&peer_nid).await?
+        {
+            (
+                add_crypto::DoubleRatchetSession::deserialize(&json)
+                    .map_err(|e| format!("ratchet load: {}", e))?,
+                false,
+            )
         } else {
             // No session yet: derive the initial shared secret SYMMETRICALLY.
             let init_shared_secret: Vec<u8> =
@@ -5492,6 +5547,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse args FIRST to know what command we're running
     let args = Args::parse();
+    eprintln!("[DIAG] args parsed: {:?}", std::any::type_name_of_val(&args.cmd));
 
     // PID file: prevent multiple instances from racing on the same DB/GPG home
     let pid_path = dirs::home_dir()
@@ -5503,6 +5559,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main PID file: only serialize non-listen commands (they run sequentially via queue)
     // Listen command uses its own PID file (add_listen.pid) and bypasses main PID file
+    eprintln!("[DIAG] entering pid-file check; cmd={:?}", std::any::type_name_of_val(&args.cmd));
     if !matches!(args.cmd, Commands::Listen { .. }) {
         if pid_path.exists() {
             // Check if the PID is still alive
@@ -5557,8 +5614,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         // Write listen PID file for listen command
-        std::fs::write(&listen_pid_path, format!("{}\n", current_pid))
-            .map_err(|e| format!("Cannot write listen PID file {}: {}", listen_pid_path.display(), e))?;
+        std::fs::write(&listen_pid_path, format!("{}\n", current_pid)).map_err(|e| {
+            format!(
+                "Cannot write listen PID file {}: {}",
+                listen_pid_path.display(),
+                e
+            )
+        })?;
     } else {
         // Write main PID file for non-listen commands
         std::fs::write(&pid_path, format!("{}\n", current_pid))
@@ -5607,7 +5669,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Resolve seed and relay URLs: CLI flag > SRV discovery > hardcoded defaults > localhost fallback
+    eprintln!("[DIAG] before discover_servers");
     let (srv_seed, srv_relays) = discover_servers().await;
+    eprintln!("[DIAG] after discover_servers seed={} relays={}", srv_seed, srv_relays.len());
 
     let seed_url = args
         .seed
@@ -5646,6 +5710,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Using relay server: {}", relay_url);
     }
 
+    eprintln!("[DIAG] entering command dispatch");
     match args.cmd {
         Commands::Init { pin, password } => {
             // Check if identity already exists — require confirmation to overwrite
@@ -5705,7 +5770,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 // No auth provided — generate ephemeral MAK, no vault file
                 println!("WARNING: No --pin or --password provided. MAK stored in memory only.");
-                println!("         This identity is NOT protected at rest. Re-init with --pin/--password to secure it.");
+                println!(
+                    "         This identity is NOT protected at rest. Re-init with --pin/--password to secure it."
+                );
             }
 
             println!("Share your Null ID with contacts to receive messages.");
@@ -5732,7 +5799,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // only the presence-subsystem handle).
             if let Some(sk_b64) = &identity.ml_dsa87_signing_key {
                 if let Ok(sk_bytes) = base64::engine::general_purpose::STANDARD.decode(sk_b64) {
-                    use ml_dsa::{KeyInit, Keypair, KeyExport};
+                    use ml_dsa::{KeyExport, KeyInit, Keypair};
                     if let Ok(sk) = add_crypto_pq::MlDsa87SigningKey::new_from_slice(&sk_bytes) {
                         let vk = Keypair::verifying_key(&sk).clone();
                         let pq_fp = add_crypto_pq::fingerprint_from_verifying_key(&vk);
@@ -5750,8 +5817,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let home = home_dir();
             let mak = (|| -> Result<add_crypto::MasterAppKey, Box<dyn std::error::Error>> {
-                let vault: add_crypto::VaultFile =
-                    add_crypto::VaultFile::read_from(&vault_path)?;
+                let vault: add_crypto::VaultFile = add_crypto::VaultFile::read_from(&vault_path)?;
                 #[cfg(feature = "tpm")]
                 {
                     if let Some(ref pin) = pin {
@@ -5760,18 +5826,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())
                             .map_err(|e| e.into())
                     } else {
-                        Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+                        Err(add_crypto::CryptoError::Io(
+                            "Either --pin or --password required for unlock".to_string(),
+                        )
+                        .into())
                     }
                 }
                 #[cfg(not(feature = "tpm"))]
                 if let Some(ref pw) = password {
-                    add_crypto::unseal_with_passphrase(&vault, pw.as_bytes())
-                        .map_err(|e| e.into())
+                    add_crypto::unseal_with_passphrase(&vault, pw.as_bytes()).map_err(|e| e.into())
                 } else {
-                    Err(add_crypto::CryptoError::Io("Either --pin or --password required for unlock".to_string()).into())
+                    Err(add_crypto::CryptoError::Io(
+                        "Either --pin or --password required for unlock".to_string(),
+                    )
+                    .into())
                 }
             })();
-            
+
             match mak {
                 Ok(m) => {
                     add_crypto::reset_failed_attempts(&home)?;
@@ -5868,7 +5939,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if contacts.contains_key(&entry_sender_nid) {
                                     decrypted_messages.push((entry_sender_nid, decrypted));
                                 } else {
-                                    tracing::warn!("Rejected message from unknown sender {} (not in contacts)", entry_sender_nid);
+                                    tracing::warn!(
+                                        "Rejected message from unknown sender {} (not in contacts)",
+                                        entry_sender_nid
+                                    );
                                 }
                             }
                         }
@@ -5904,7 +5978,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let message_id = sha256_hex(msg.as_bytes());
                             let _ = store
                                 .store_message(
-                                    from,  // Use actual sender's Null ID, not "relay"
+                                    from, // Use actual sender's Null ID, not "relay"
                                     &identity.null_id,
                                     msg,
                                     2, // Delivered (✔️)
@@ -6042,7 +6116,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 if !results.is_empty() {
-                    let our_kyber = match load_or_generate_kyber(&identity.null_id, store.db_key()) {
+                    let our_kyber = match load_or_generate_kyber(&identity.null_id, store.db_key())
+                    {
                         Ok(k) => k,
                         Err(e) => {
                             tracing::warn!("kyber load failed: {}", e);
@@ -6241,13 +6316,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // If GPG fingerprint (40 chars) provided, auto-resolve PQ fingerprint from DHT
-            let pq_fingerprint = if fingerprint.len() == 40 && fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
+            let pq_fingerprint = if fingerprint.len() == 40
+                && fingerprint.chars().all(|c| c.is_ascii_hexdigit())
+            {
                 let (_seed_url, bootstraps, _relays) = discover_all_servers().await;
                 let mut found_pq = None;
                 for url in &bootstraps {
-                    if let Ok((_armored, _vk, _kyber)) = dht_fetch_cert_blind(&_relays, url, &fingerprint).await {
+                    if let Ok((_armored, _vk, _kyber)) =
+                        dht_fetch_cert_blind(&_relays, url, &fingerprint).await
+                    {
                         // Extract PQ FP from the cert's VK
-                        let vk_bytes = base64::engine::general_purpose::STANDARD.decode(&_vk)
+                        let vk_bytes = base64::engine::general_purpose::STANDARD
+                            .decode(&_vk)
                             .map_err(|e| format!("decode vk: {}", e))?;
                         let vk_parsed = add_crypto_pq::decode_verifying_key(&vk_bytes)
                             .map_err(|_e| "parse vk: invalid length")?;
@@ -6261,11 +6341,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         pq_fp
                     }
                     None => {
-                        eprintln!("✗ Could not resolve PQ fingerprint for GPG fingerprint {}", fingerprint);
+                        eprintln!(
+                            "✗ Could not resolve PQ fingerprint for GPG fingerprint {}",
+                            fingerprint
+                        );
                         std::process::exit(1);
                     }
                 }
-            } else if fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
+            } else if fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit())
+            {
                 // Already a PQ fingerprint
                 fingerprint.to_uppercase()
             } else {
@@ -6275,11 +6359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut contacts = load_contacts();
             contacts.insert(null_id.clone(), pq_fingerprint.clone());
             save_contacts(&contacts)?;
-            println!(
-                "Added contact: {} -> {} (PQ)",
-                null_id,
-                pq_fingerprint
-            );
+            println!("Added contact: {} -> {} (PQ)", null_id, pq_fingerprint);
         }
         Commands::Listen {
             advertised_url,
@@ -6531,8 +6611,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some((armored, vk, kyber_enc, _source_url)) => {
                     // Verify the fetched cert's fingerprint matches what was requested.
                     // Accept both 40-char GPG fingerprint and 64-char PQ fingerprint.
-                    let is_pq_fp = fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit());
-                    let is_gpg_fp = fingerprint.len() == 40 && fingerprint.chars().all(|c| c.is_ascii_hexdigit());
+                    let is_pq_fp = fingerprint.len() == 64
+                        && fingerprint.chars().all(|c| c.is_ascii_hexdigit());
+                    let is_gpg_fp = fingerprint.len() == 40
+                        && fingerprint.chars().all(|c| c.is_ascii_hexdigit());
 
                     use sequoia_openpgp::parse::Parse;
                     let cert = sequoia_openpgp::Cert::from_bytes(armored.as_bytes())
@@ -6541,7 +6623,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Extract PQ FP from the bundle's VK
                     let got_pq_fp = {
-                        let vk_bytes = base64::engine::general_purpose::STANDARD.decode(&vk)
+                        let vk_bytes = base64::engine::general_purpose::STANDARD
+                            .decode(&vk)
                             .map_err(|e| format!("decode vk: {}", e))?;
                         let vk_parsed = add_crypto_pq::decode_verifying_key(&vk_bytes)
                             .map_err(|_e| "parse vk: invalid length")?;
@@ -6695,12 +6778,16 @@ mod db_key_tests {
         let _guard = HOME_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("add-dbkeytest-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        unsafe { std::env::set_var("HOME", &dir); }
+        unsafe {
+            std::env::set_var("HOME", &dir);
+        }
         let path = dir.join(".add").join("db_key.json");
         let _ = std::fs::remove_file(&path);
 
         let mut raw = [0u8; 32];
-        for (i, b) in raw.iter_mut().enumerate() { *b = (i as u8).wrapping_mul(7); }
+        for (i, b) in raw.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(7);
+        }
         let key = DbEncryptionKey { key: raw };
         key.save(Some("hunter2")).expect("age-wrap test key");
 
@@ -6712,7 +6799,10 @@ mod db_key_tests {
 
         let loaded = DbEncryptionKey::load(Some("hunter2")).expect("load with passphrase");
         assert_eq!(loaded.key(), &raw, "round-trip key mismatch");
-        assert!(DbEncryptionKey::load(Some("wrong")).is_err(), "wrong passphrase must fail");
+        assert!(
+            DbEncryptionKey::load(Some("wrong")).is_err(),
+            "wrong passphrase must fail"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -6723,17 +6813,28 @@ mod db_key_tests {
     #[tokio::test]
     async fn message_metadata_is_encrypted_at_rest() {
         let _guard = HOME_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!("add-metatest-{}-{}", std::process::id(), chrono::Utc::now().timestamp()));
+        let dir = std::env::temp_dir().join(format!(
+            "add-metatest-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp()
+        ));
         let _ = std::fs::create_dir_all(&dir.join(".add"));
-        unsafe { std::env::set_var("HOME", &dir); }
-        unsafe { std::env::set_var("ADD_DB_PASSPHRASE", "hunter2"); }
+        unsafe {
+            std::env::set_var("HOME", &dir);
+        }
+        unsafe {
+            std::env::set_var("ADD_DB_PASSPHRASE", "hunter2");
+        }
 
         let store = MessageStore::open().await.expect("open store");
 
         let from = "NN-aaaa-bbbb-cccc";
         let to = "NN-dddd-eeee-ffff";
         let mid = "msg-0123-unique";
-        store.store_message(from, to, "hello world", 0, mid).await.expect("store");
+        store
+            .store_message(from, to, "hello world", 0, mid)
+            .await
+            .expect("store");
 
         // Round-trip: read back decrypts to the right metadata.
         let msgs = store.get_messages(10).await.expect("get");
@@ -6756,27 +6857,36 @@ mod db_key_tests {
         .await
         .expect("raw read");
         for col in [row.0.clone(), row.1.clone(), row.2.clone(), row.3.clone()] {
-            assert!(!col.contains(from) && !col.contains(to) && !col.contains(mid),
-                "plaintext metadata leaked into encrypted column: {col}");
+            assert!(
+                !col.contains(from) && !col.contains(to) && !col.contains(mid),
+                "plaintext metadata leaked into encrypted column: {col}"
+            );
         }
         // Blind index is a 32-char hex HMAC, distinct from plaintext.
         assert_eq!(row.4.len(), 32, "blind index should be 32 hex chars");
-        assert_ne!(row.4, mid, "blind index must not equal plaintext message_id");
+        assert_ne!(
+            row.4, mid,
+            "blind index must not equal plaintext message_id"
+        );
 
         // Ratchet session: peer_nid must be encrypted + blind-indexed.
-        store.save_session("NN-peer-x", "session-json").await.expect("save session");
+        store
+            .save_session("NN-peer-x", "session-json")
+            .await
+            .expect("save session");
         let loaded = store.load_session("NN-peer-x").await.expect("load session");
         assert_eq!(loaded.as_deref(), Some("session-json"));
-        let srow: (String, String) = sqlx::query_as(
-            "SELECT peer_nid_enc, peer_nid_idx FROM ratchet_sessions LIMIT 1",
-        )
-        .fetch_one(pool)
-        .await
-        .expect("raw session read");
+        let srow: (String, String) =
+            sqlx::query_as("SELECT peer_nid_enc, peer_nid_idx FROM ratchet_sessions LIMIT 1")
+                .fetch_one(pool)
+                .await
+                .expect("raw session read");
         assert!(!srow.0.contains("NN-peer-x"), "peer_nid leaked: {}", srow.0);
         assert_ne!(srow.1, "NN-peer-x");
 
-        unsafe { std::env::remove_var("ADD_DB_PASSPHRASE"); }
+        unsafe {
+            std::env::remove_var("ADD_DB_PASSPHRASE");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -6785,11 +6895,19 @@ mod db_key_tests {
     #[tokio::test]
     async fn legacy_plaintext_db_is_migrated_on_open() {
         let _guard = HOME_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!("add-legacytest-{}-{}", std::process::id(), chrono::Utc::now().timestamp()));
+        let dir = std::env::temp_dir().join(format!(
+            "add-legacytest-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp()
+        ));
         let add_dir = dir.join(".add");
         let _ = std::fs::create_dir_all(&add_dir);
-        unsafe { std::env::set_var("HOME", &dir); }
-        unsafe { std::env::set_var("ADD_DB_PASSPHRASE", "hunter2"); }
+        unsafe {
+            std::env::set_var("HOME", &dir);
+        }
+        unsafe {
+            std::env::set_var("ADD_DB_PASSPHRASE", "hunter2");
+        }
 
         // Bootstrap a DB with the OLD plaintext schema, then drop a row in.
         let db_path = add_dir.join("messages.db");
@@ -6824,13 +6942,15 @@ mod db_key_tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO ratchet_sessions (peer_nid, session_data, updated_at) VALUES (?, ?, ?)")
-            .bind("NN-old-peer")
-            .bind("old-session")
-            .bind("2026-01-01T00:00:00Z")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO ratchet_sessions (peer_nid, session_data, updated_at) VALUES (?, ?, ?)",
+        )
+        .bind("NN-old-peer")
+        .bind("old-session")
+        .bind("2026-01-01T00:00:00Z")
+        .execute(&pool)
+        .await
+        .unwrap();
         pool.close().await;
 
         // Now open via the real store: migration runs, re-encrypting legacy rows.
@@ -6842,21 +6962,29 @@ mod db_key_tests {
         assert_eq!(msgs[0].to_nid, legacy_to);
         assert_eq!(msgs[0].message_id, legacy_mid);
 
-        let loaded = store.load_session("NN-old-peer").await.expect("load migrated session");
+        let loaded = store
+            .load_session("NN-old-peer")
+            .await
+            .expect("load migrated session");
         assert_eq!(loaded.as_deref(), Some("old-session"));
 
         // And the on-disk columns must now be ciphertext, not the legacy plaintext.
         let pool = &store.pool;
-        let row: (String, String) = sqlx::query_as(
-            "SELECT from_nid_enc, to_nid_enc FROM messages LIMIT 1",
-        )
-        .fetch_one(pool)
-        .await
-        .expect("raw read");
-        assert!(!row.0.contains(legacy_from) && !row.1.contains(legacy_to),
-            "legacy plaintext not re-encrypted: {} / {}", row.0, row.1);
+        let row: (String, String) =
+            sqlx::query_as("SELECT from_nid_enc, to_nid_enc FROM messages LIMIT 1")
+                .fetch_one(pool)
+                .await
+                .expect("raw read");
+        assert!(
+            !row.0.contains(legacy_from) && !row.1.contains(legacy_to),
+            "legacy plaintext not re-encrypted: {} / {}",
+            row.0,
+            row.1
+        );
 
-        unsafe { std::env::remove_var("ADD_DB_PASSPHRASE"); }
+        unsafe {
+            std::env::remove_var("ADD_DB_PASSPHRASE");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

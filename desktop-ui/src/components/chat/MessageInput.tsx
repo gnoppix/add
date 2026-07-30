@@ -14,7 +14,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { useChatStore } from '../../store/chatStore'
 import { MAX_ATTACHMENT_BYTES } from '../../types'
-import { fileToBase64, encodeAttachment, formatBytes, MAX_ATTACHMENT_LABEL } from '../../lib/attachment'
+import {
+  fileToBase64,
+  encodeAttachment,
+  formatBytes,
+  MAX_ATTACHMENT_LABEL,
+} from '../../lib/attachment'
 import { StickerImg } from '../common/StickerImg'
 // Sticker pack assets
 import STICKER_PACK from '../../emoji/sticker_pack.json'
@@ -22,7 +27,7 @@ const STICKERS = STICKER_PACK as string[]
 
 const MAX_RECORDING_SECONDS = 30
 
-type RecIntervalReturn = ReturnType<typeof setInterval>;
+type RecIntervalReturn = ReturnType<typeof setInterval>
 
 function MessageInput() {
   const [message, setMessage] = useState('')
@@ -38,42 +43,47 @@ function MessageInput() {
   const [attachError, setAttachError] = useState<string | null>(null)
   const [attachBusy, setAttachBusy] = useState(false)
   // Staged attachment awaiting confirmation (preview before send).
-  const [pending, setPending] = useState<{ name: string; mime: string; size: number; data: string } | null>(null)
-  
+  const [pending, setPending] = useState<{
+    name: string
+    mime: string
+    size: number
+    data: string
+  } | null>(null)
+
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false)
   const [recordingDuration, setRecordingDuration] = useState(0)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   let recordingInterval: RecIntervalReturn | undefined
-  
+
   const { activeConversationId, sendMessage } = useChatStore()
 
   // Start voice note recording with free WebM/Opus format
   const startRecording = async () => {
     if (!activeConversationId) return
-    
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-      
+
       audioChunksRef.current = []
       mediaRecorderRef.current = mediaRecorder
-      
-      mediaRecorder.ondataavailable = (event) => {
+
+      mediaRecorder.ondataavailable = event => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data)
         }
       }
-      
+
       // Stop voice note after MAX_RECORDING_SECONDS
       setTimeout(() => {
         stopRecording()
       }, MAX_RECORDING_SECONDS * 1000)
-      
+
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-        
+
         // Convert to base64 for sending as attachment (max 10MB limit)
         const reader = new FileReader()
         reader.onloadend = () => {
@@ -84,18 +94,18 @@ function MessageInput() {
               console.warn('Voice message exceeds 10MB limit')
               return
             }
-            
+
             const envelope = encodeAttachment({
               name: 'voice-note.webm',
               mime: 'audio/webm',
               size: audioBlob.size,
-              data: base64data
+              data: base64data,
             })
             sendMessage(envelope, selectedTtl && selectedTtl !== 'none' ? selectedTtl : undefined)
           }
         }
         reader.readAsDataURL(audioBlob)
-        
+
         // Stop all tracks
         stream.getTracks().forEach(track => track.stop())
         setIsRecording(false)
@@ -108,12 +118,11 @@ function MessageInput() {
       mediaRecorder.start()
       setIsRecording(true)
       setRecordingDuration(0)
-      
+
       // Start duration counter
       recordingInterval = setInterval(() => {
         setRecordingDuration(prev => prev + 1)
       }, 1000) as unknown as RecIntervalReturn
-      
     } catch (err) {
       console.error('Error starting voice recording:', err)
       setIsRecording(false)
@@ -179,8 +188,7 @@ function MessageInput() {
     })
     setPending(null)
     resetTextareaHeight()
-    sendMessage(envelope,
-      selectedTtl && selectedTtl !== 'none' ? selectedTtl : undefined)
+    sendMessage(envelope, selectedTtl && selectedTtl !== 'none' ? selectedTtl : undefined)
   }
 
   const cancelPending = () => {
@@ -213,10 +221,7 @@ function MessageInput() {
     const msg = message.trim()
     setMessage('') // Clear BEFORE awaiting send to show immediate clearing
     resetTextareaHeight()
-    sendMessage(
-      msg,
-      selectedTtl && selectedTtl !== 'none' ? (selectedTtl as string) : undefined
-    )
+    sendMessage(msg, selectedTtl && selectedTtl !== 'none' ? (selectedTtl as string) : undefined)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -277,7 +282,7 @@ function MessageInput() {
         mediaRecorderRef.current.stop()
       }
       clearInterval(recordingInterval as unknown as number)
-      
+
       // Stop all tracks if available
       // MediaDevices API access should be handled safely on component destroy
     }
@@ -287,10 +292,12 @@ function MessageInput() {
     <div className="border-t border-gray-200 bg-white p-3">
       {/* Voice recording indicator */}
       {isRecording && (
-        <div className={`mb-2 flex items-center gap-3 rounded-lg p-2 ${
-          isRecording ? 'bg-red-50 border border-red-200' : ''
-        }`}>
-          <div className="h-3 w-3 animate-pulse rounded-full bg-red-600"/>
+        <div
+          className={`mb-2 flex items-center gap-3 rounded-lg p-2 ${
+            isRecording ? 'bg-red-50 border border-red-200' : ''
+          }`}
+        >
+          <div className="h-3 w-3 animate-pulse rounded-full bg-red-600" />
           <span className="text-sm font-medium text-red-700">
             Recording voice message: {recordingDuration}/{MAX_RECORDING_SECONDS}s
           </span>
@@ -316,7 +323,12 @@ function MessageInput() {
           ) : (
             <div className="flex h-14 w-14 items-center justify-center rounded bg-gray-200 text-gray-500">
               <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828L17 9.828a4 4 0 10-5.657-5.657L6.586 10.172" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828L17 9.828a4 4 0 10-5.657-5.657L6.586 10.172"
+                />
               </svg>
             </div>
           )}
@@ -331,7 +343,12 @@ function MessageInput() {
             aria-label="Cancel attachment"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -373,7 +390,7 @@ function MessageInput() {
         <textarea
           ref={textareaRef}
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={e => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Type a message..."
           className="flex-1 resize-none rounded-lg border border-gray-200 bg-gray-50 py-2 pl-3 pr-10 text-sm outline-none focus:border-primary-500 max-h-30 min-h-[36px]"
@@ -404,10 +421,14 @@ function MessageInput() {
               : 'text-gray-600 hover:bg-gray-100'
           }`}
           aria-label="Set auto-destruct timer"
-          title={selectedTtl && selectedTtl !== 'none' ? `Auto-destruct: ${selectedTtl}` : 'Set auto-destruct timer'}
+          title={
+            selectedTtl && selectedTtl !== 'none'
+              ? `Auto-destruct: ${selectedTtl}`
+              : 'Set auto-destruct timer'
+          }
         >
           <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z" />
           </svg>
         </button>
 
@@ -416,19 +437,34 @@ function MessageInput() {
           type="button"
           onClick={isRecording ? stopRecording : startRecording}
           className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
-            isRecording 
-              ? 'bg-red-200 text-red-700 hover:bg-red-300' 
+            isRecording
+              ? 'bg-red-200 text-red-700 hover:bg-red-300'
               : 'text-gray-600 hover:bg-gray-100'
           }`}
-          aria-label={isRecording ? "Stop voice note" : "Start voice note"}
+          aria-label={isRecording ? 'Stop voice note' : 'Start voice note'}
         >
-           <svg className="h-5 w-5" fill={isRecording ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className="h-5 w-5"
+            fill={isRecording ? 'currentColor' : 'none'}
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             {isRecording ? (
               // Stop icon
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             ) : (
               // Mic icon for recording
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7.5 14L18 14m2-8v6a3 3 0 01-3 3H15a3 3 0 01-3-3v-6a3 3 0 013-3h3z" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M7.5 14L18 14m2-8v6a3 3 0 01-3 3H15a3 3 0 01-3-3v-6a3 3 0 013-3h3z"
+              />
             )}
           </svg>
         </button>
@@ -445,7 +481,9 @@ function MessageInput() {
                 type="button"
                 onClick={() => setActiveTopTab('stickers')}
                 className={`whitespace-nowrap px-2 py-1 text-xs rounded transition-colors ${
-                  activeTopTab === 'stickers' ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:bg-gray-100'
+                  activeTopTab === 'stickers'
+                    ? 'bg-primary-100 text-primary-700'
+                    : 'text-gray-600 hover:bg-gray-100'
                 }`}
               >
                 Stickers ({STICKERS.length})
@@ -454,7 +492,9 @@ function MessageInput() {
                 type="button"
                 onClick={() => setActiveTopTab('addons')}
                 className={`whitespace-nowrap px-2 py-1 text-xs rounded transition-colors ${
-                  activeTopTab === 'addons' ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:bg-gray-100'
+                  activeTopTab === 'addons'
+                    ? 'bg-primary-100 text-primary-700'
+                    : 'text-gray-600 hover:bg-gray-100'
                 }`}
               >
                 Addons
@@ -464,7 +504,7 @@ function MessageInput() {
             {activeTopTab === 'stickers' ? (
               /* Sticker pack grid */
               <div className="p-2 grid grid-cols-4 gap-1">
-                {STICKERS.map((filename) => (
+                {STICKERS.map(filename => (
                   <button
                     key={filename}
                     type="button"
@@ -478,9 +518,7 @@ function MessageInput() {
               </div>
             ) : (
               /* Addons tab - placeholder for future extensions */
-              <div className="p-4 text-center text-gray-500 text-sm">
-                Addons coming soon
-              </div>
+              <div className="p-4 text-center text-gray-500 text-sm">Addons coming soon</div>
             )}
           </div>
         )}
@@ -492,7 +530,7 @@ function MessageInput() {
             className="absolute bottom-full left-4 mb-2 w-44 rounded-lg border bg-white shadow-lg z-50"
           >
             <div className="p-2">
-              {TTL_OPTIONS.map((option) => (
+              {TTL_OPTIONS.map(option => (
                 <button
                   key={option.value}
                   type="button"
@@ -512,7 +550,6 @@ function MessageInput() {
             </div>
           </div>
         )}
-
       </form>
     </div>
   )
