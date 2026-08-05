@@ -7,13 +7,18 @@ description = "Add post-quantum crypto (ML-KEM, ML-DSA, SPQR braid)"
 [dependencies]
 ml-dsa = { version = "0.1", features = ["rand_core", "alloc", "getrandom", "pkcs8"] }
 ml-kem = { version = "0.3" }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+sha3 = "0.10"
+hkdf = "0.12"
 rand = { version = "0.8", features = ["std"] }
-zeroize = "1.8"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
 thiserror = "1.0"
 base64 = "0.22"
 rand_core = "0.6"
 hex = "0.4"
 sha2 = "0.10"
+aes-gcm = { version = "0.10", features = ["zeroize"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 add-crypto = { path = "../crypto" }
 
 [features]

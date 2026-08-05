@@ -21,13 +21,10 @@ import {
   MAX_ATTACHMENT_LABEL,
 } from '../../lib/attachment'
 import { StickerImg } from '../common/StickerImg'
+import { VoiceRecordingComposer } from './VoiceRecordingComposer'
 // Sticker pack assets
 import STICKER_PACK from '../../emoji/sticker_pack.json'
 const STICKERS = STICKER_PACK as string[]
-
-const MAX_RECORDING_SECONDS = 30
-
-type RecIntervalReturn = ReturnType<typeof setInterval>
 
 function MessageInput() {
   const [message, setMessage] = useState('')
@@ -50,92 +47,41 @@ function MessageInput() {
     data: string
   } | null>(null)
 
-  // Voice recording state
-  const [isRecording, setIsRecording] = useState(false)
-  const [recordingDuration, setRecordingDuration] = useState(0)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
-  let recordingInterval: RecIntervalReturn | undefined
+  // Voice recording state - using new VoiceRecordingComposer
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false)
 
   const { activeConversationId, sendMessage } = useChatStore()
 
-  // Start voice note recording with free WebM/Opus format
-  const startRecording = async () => {
+  // Handle voice recording completion
+  const handleVoiceRecordingComplete = (blob: Blob, _duration: number) => {
     if (!activeConversationId) return
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-
-      audioChunksRef.current = []
-      mediaRecorderRef.current = mediaRecorder
-
-      mediaRecorder.ondataavailable = event => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data)
+    
+    // Convert blob to base64
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const base64data = reader.result?.toString().split(',')[1] || ''
+      if (base64data && activeConversationId) {
+        // Verify size is within limits (10MB for voice messages)
+        if (blob.size > 10 * 1024 * 1024) {
+          console.warn('Voice message exceeds 10MB limit')
+          return
         }
+
+        const envelope = encodeAttachment({
+          name: 'voice-note.webm',
+          mime: 'audio/webm',
+          size: blob.size,
+          data: base64data,
+        })
+        sendMessage(envelope, selectedTtl && selectedTtl !== 'none' ? selectedTtl : undefined)
       }
-
-      // Stop voice note after MAX_RECORDING_SECONDS
-      setTimeout(() => {
-        stopRecording()
-      }, MAX_RECORDING_SECONDS * 1000)
-
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-
-        // Convert to base64 for sending as attachment (max 10MB limit)
-        const reader = new FileReader()
-        reader.onloadend = () => {
-          const base64data = reader.result?.toString().split(',')[1] || ''
-          if (base64data && activeConversationId) {
-            // Verify size is within limits (~10MB for voice messages)
-            if (audioBlob.size > 10 * 1024 * 1024) {
-              console.warn('Voice message exceeds 10MB limit')
-              return
-            }
-
-            const envelope = encodeAttachment({
-              name: 'voice-note.webm',
-              mime: 'audio/webm',
-              size: audioBlob.size,
-              data: base64data,
-            })
-            sendMessage(envelope, selectedTtl && selectedTtl !== 'none' ? selectedTtl : undefined)
-          }
-        }
-        reader.readAsDataURL(audioBlob)
-
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop())
-        setIsRecording(false)
-        setRecordingDuration(0)
-        if (recordingInterval) {
-          clearInterval(recordingInterval)
-        }
-      }
-
-      mediaRecorder.start()
-      setIsRecording(true)
-      setRecordingDuration(0)
-
-      // Start duration counter
-      recordingInterval = setInterval(() => {
-        setRecordingDuration(prev => prev + 1)
-      }, 1000) as unknown as RecIntervalReturn
-    } catch (err) {
-      console.error('Error starting voice recording:', err)
-      setIsRecording(false)
     }
+    reader.readAsDataURL(blob)
+    setShowVoiceRecorder(false)
   }
 
-  // Stop voice note recording
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop()
-      setIsRecording(false)
-      clearInterval(recordingInterval as unknown as number)
-    }
+  const handleVoiceRecordingCancel = () => {
+    setShowVoiceRecorder(false)
   }
 
   // Open the native file picker when the paper-clip is clicked.
@@ -275,40 +221,14 @@ function MessageInput() {
     }
   }, [message])
 
-  // Handle voice recording stop on unmount or state changes to avoid memory leaks.
-  useEffect(() => {
-    return () => {
-      if (mediaRecorderRef.current && isRecording) {
-        mediaRecorderRef.current.stop()
-      }
-      clearInterval(recordingInterval as unknown as number)
-
-      // Stop all tracks if available
-      // MediaDevices API access should be handled safely on component destroy
-    }
-  }, [isRecording])
-
   return (
     <div className="border-t border-gray-200 bg-white p-3">
-      {/* Voice recording indicator */}
-      {isRecording && (
-        <div
-          className={`mb-2 flex items-center gap-3 rounded-lg p-2 ${
-            isRecording ? 'bg-red-50 border border-red-200' : ''
-          }`}
-        >
-          <div className="h-3 w-3 animate-pulse rounded-full bg-red-600" />
-          <span className="text-sm font-medium text-red-700">
-            Recording voice message: {recordingDuration}/{MAX_RECORDING_SECONDS}s
-          </span>
-          <button
-            type="button"
-            onClick={stopRecording}
-            className="ml-auto flex h-6 w-6 items-center justify-center rounded-full bg-red-200 text-xs font-medium text-red-800 hover:bg-red-300 transition-colors"
-          >
-            Stop
-          </button>
-        </div>
+      {/* Voice recording composer */}
+      {showVoiceRecorder && (
+        <VoiceRecordingComposer
+          onCancel={handleVoiceRecordingCancel}
+          onSend={handleVoiceRecordingComplete}
+        />
       )}
 
       {/* Staged attachment preview (shown before send) */}
@@ -435,37 +355,12 @@ function MessageInput() {
         {/* Voice note button */}
         <button
           type="button"
-          onClick={isRecording ? stopRecording : startRecording}
-          className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
-            isRecording
-              ? 'bg-red-200 text-red-700 hover:bg-red-300'
-              : 'text-gray-600 hover:bg-gray-100'
-          }`}
-          aria-label={isRecording ? 'Stop voice note' : 'Start voice note'}
+          onClick={() => setShowVoiceRecorder(true)}
+          className="flex h-10 w-10 items-center justify-center rounded-full transition-colors text-gray-600 hover:bg-gray-100"
+          aria-label="Start voice note"
         >
-          <svg
-            className="h-5 w-5"
-            fill={isRecording ? 'currentColor' : 'none'}
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            {isRecording ? (
-              // Stop icon
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            ) : (
-              // Mic icon for recording
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M7.5 14L18 14m2-8v6a3 3 0 01-3 3H15a3 3 0 01-3-3v-6a3 3 0 013-3h3z"
-              />
-            )}
+          <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14.1 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
           </svg>
         </button>
 

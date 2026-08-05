@@ -168,6 +168,17 @@ impl Igd {
         );
         let body = soap_envelope("AddPortMapping", &args);
         let resp = self.soap_call(&body).await?;
+        // SECURITY FIX (M2): Verify the external port in the response matches
+        // what we requested. A malicious router could return any port number.
+        let returned_ext_port = extract_tag(&resp, "NewExternalPort")
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(ext_port);
+        if returned_ext_port != ext_port {
+            return Err(P2pError::Nat(format!(
+                "AddPortMapping external port mismatch: requested={} got={}",
+                ext_port, returned_ext_port
+            )));
+        }
         if resp.contains("AddPortMappingResponse") && !resp.contains("<errorCode>") {
             Ok(())
         } else {

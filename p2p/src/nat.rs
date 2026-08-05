@@ -174,6 +174,28 @@ impl NatManager {
                         ]);
                         let ip = xip ^ 0x2112A442u32;
                         let ip_bytes = ip.to_be_bytes();
+
+                        // SECURITY FIX (M3): Validate returned IP is not private/reserved.
+                        // RFC 1918: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+                        // Also reject loopback (127.x.x.x) and link-local (169.254.x.x).
+                        let first = ip_bytes[0] as u8;
+                        let second = ip_bytes[1] as u8;
+                        if first == 10
+                            || (first == 172 && (16..=31).contains(&second))
+                            || (first == 192 && second == 168)
+                            || first == 127
+                            || (first == 169 && second == 254)
+                        {
+                            debug!(
+                                "STUN {}: returned private/reserved IP {}.{}.{}.{} — skipping",
+                                server, ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
+                            );
+                            // Continue to next attribute
+                            let padded_len = (attr_len + 3) & !3;
+                            offset += 4 + padded_len;
+                            continue;
+                        }
+
                         let ip_str = format!(
                             "{}.{}.{}.{}",
                             ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]

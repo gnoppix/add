@@ -6,6 +6,7 @@ import ChatPane from './components/chat/ChatPane'
 import { useChatStore, getEvaAPI } from './store/chatStore'
 import { StartupUnlockDialog } from './components/vault/StartupUnlockDialog'
 import { CreateIdentityDialog } from './components/vault/CreateIdentityDialog'
+import { ToastProvider } from './components/common/Toast'
 
 type AppState = 'checking' | 'createIdentity' | 'unlock' | 'ready'
 
@@ -61,7 +62,8 @@ function App() {
   // Initialize on ready
   useEffect(() => {
     if (appState === 'ready') {
-      initialize()
+      // initialize() is now called with passphrase from StartupUnlockDialog.onUnlock
+      // No need to call it here again
     }
   }, [initialize, appState])
 
@@ -106,10 +108,15 @@ function App() {
     const api = getEvaAPI()
     if (!api?.on) return
     const off = api.on('add-incoming-message', (msg: { from: string; text: string }) => {
+      console.log('[App] >>>>>>>>>>>>>>> received add-incoming-message IPC:', msg)
       // Avoid our own messages echoing back via relay
       const state = useChatStore.getState()
       const myId = state.myId
-      if (myId && msg.from === myId) return
+      if (myId && msg.from === myId) {
+        console.log('[App] ignoring own message echo')
+        return
+      }
+      console.log('[App] adding incoming message from:', msg.from)
       if (!state.conversations.some(c => c.id === msg.from)) {
         state.addConversation({
           id: msg.from,
@@ -127,70 +134,73 @@ function App() {
     return off
   }, [appState])
 
-  if (showSkeleton && appState === 'checking') {
-    return (
-      <div
-        className="flex h-screen w-full overflow-hidden"
-        style={{ backgroundColor: 'var(--color-background)' }}
-      >
-        {/* Skeleton Sidebar */}
-        <div className="w-64 bg-gray-100 dark:bg-gray-800 border-r border-gray-300 dark:border-gray-700">
-          <div className="p-4">
-            <div className="h-8 w-2/3 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
-          </div>
-          <div className="px-2 space-y-1 py-2">
-            {[...Array(6)].map((_, i) => (
-              <div
-                key={i}
-                className="h-14 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"
-              ></div>
-            ))}
-          </div>
-        </div>
-        {/* Skeleton ChatPane */}
-        <div className="flex-1 flex flex-col bg-white dark:bg-gray-900">
-          <div className="h-16 border-b border-gray-300 dark:border-gray-700 flex items-center px-4">
-            <div className="h-8 w-48 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
-          </div>
-          <div className="flex-1 p-4 space-y-2">
-            {[...Array(5)].map((_, i) => {
-              const isTall = i % 3 === 0
-              const isLeft = i % 2 === 0
-              return (
+  return (
+    <ToastProvider>
+      {showSkeleton && appState === 'checking' && (
+        <div
+          className="flex h-screen w-full overflow-hidden"
+          style={{ backgroundColor: 'var(--color-background)' }}
+        >
+          {/* Skeleton Sidebar */}
+          <div className="w-64 bg-gray-100 dark:bg-gray-800 border-r border-gray-300 dark:border-gray-700">
+            <div className="p-4">
+              <div className="h-8 w-2/3 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
+            </div>
+            <div className="px-2 space-y-1 py-2">
+              {[...Array(6)].map((_, i) => (
                 <div
                   key={i}
-                  className={`${isTall ? 'h-16' : ''} bg-gray-200 dark:bg-gray-700 rounded animate-pulse ${isLeft ? 'ml-4' : 'mr-4'}`}
+                  className="h-14 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"
                 ></div>
-              )
-            })}
+              ))}
+            </div>
           </div>
-          <div className="h-16 border-t border-gray-300 dark:border-gray-700 p-3">
-            <div className="h-10 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
+          {/* Skeleton ChatPane */}
+          <div className="flex-1 flex flex-col bg-white dark:bg-gray-900">
+            <div className="h-16 border-b border-gray-300 dark:border-gray-700 flex items-center px-4">
+              <div className="h-8 w-48 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
+            </div>
+            <div className="flex-1 p-4 space-y-2">
+              {[...Array(5)].map((_, i) => {
+                const isTall = i % 3 === 0
+                const isLeft = i % 2 === 0
+                return (
+                  <div
+                    key={i}
+                    className={`${isTall ? 'h-16' : ''} bg-gray-200 dark:bg-gray-700 rounded animate-pulse ${isLeft ? 'ml-4' : 'mr-4'}`}
+                  ></div>
+                )
+              })}
+            </div>
+            <div className="h-16 border-t border-gray-300 dark:border-gray-700 p-3">
+              <div className="h-10 bg-gray-300 dark:bg-gray-600 rounded animate-pulse"></div>
+            </div>
           </div>
         </div>
-      </div>
-    )
-  }
+      )}
 
-  if (appState === 'createIdentity') {
-    return <CreateIdentityDialog onCreated={() => setAppState('ready')} />
-  }
+      {appState === 'createIdentity' && (
+        <CreateIdentityDialog onCreated={() => setAppState('ready')} />
+      )}
 
-  if (appState === 'unlock') {
-    return <StartupUnlockDialog onUnlock={async () => {
-      setAppState('ready')
-      await initialize()
-    }} />
-  }
+      {appState === 'unlock' && (
+        <StartupUnlockDialog onUnlock={(passphrase) => {
+          console.log('[App] >>>>>>>>>>>>> onUnlock called with passphrase, length:', passphrase?.length)
+          initialize(passphrase)
+          setAppState('ready')
+        }} />
+      )}
 
-  return (
-    <div
-      className="flex h-screen w-full overflow-hidden"
-      style={{ backgroundColor: 'var(--color-background)' }}
-    >
-      <Sidebar />
-      <ChatPane />
-    </div>
+      {appState === 'ready' && (
+        <div
+          className="flex h-screen w-full overflow-hidden"
+          style={{ backgroundColor: 'var(--color-background)' }}
+        >
+          <Sidebar />
+          <ChatPane />
+        </div>
+      )}
+    </ToastProvider>
   )
 }
 

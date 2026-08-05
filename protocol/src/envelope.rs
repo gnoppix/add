@@ -243,12 +243,12 @@ pub fn build_dht_error(key: &str, message: &str) -> WireEnvelope {
     }
 }
 
-/// Generate a 16-char hex message ID.
+/// Generate a 32-char hex message ID (128 bits of entropy).
 pub fn uuid_hex() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let n: u128 = rng.r#gen();
-    format!("{:032x}", n)[..16].to_string()
+    format!("{:032x}", n)
 }
 
 /// Current Unix timestamp as f64.

@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.3.35 — PQC Ratchet: Pure ML-KEM / Hybrid X25519+ML-KEM KEM Ratchet + Bug Fixes
+
+### crypto-pq — Post-Quantum Double Ratchet Integration
+
+- **HybridKemRatchet trait alignment.** `DecapKey` now wraps `Zeroizing<[u8; 64]>` for strict memory clearing on drop. SHA3-256 seed conversion (`seed_to_decap_key`) hashes `[u8; 1184]` ML-KEM seeds into valid `Seed` arrays.
+- **KEM ping-pong ratchet step.** Replaced continuous ECDH with KEM encapsulation/decapsulation for every ratchet step: Party A generates ephemeral PQC KeyPair → sends PK → Party B encapsulates shared secret → replies with Ciphertext + new ephemeral PK → Party A decapsulates → derives root key via HKDF-SHA256.
+- **async offload.** Heavy key generation and encapsulation operations offloaded to `tokio::task::spawn_blocking` to prevent async executor starvation.
+- **Box/Arc for large PQC keys.** Public keys and ciphertexts (1KB+) use `Box`/`Arc` for stack safety during state transitions.
+- **Replay protection.** Epoch/sequence number cryptographically bound to AEAD nonce and KEM context.
+- **34 passing tests** across hybrid KEM, PQXDH handshake, Double Ratchet, and wire format categories.
+
+### Bugs Fixed
+
+- **`encrypt_message` ciphertext field mismatch.** `mlkem_ct` (1088 bytes) was placed in the wrong `HybridCiphertext` field; fixed to `ct` (32 + 1088 = 1120 bytes total).
+- **`encapsulate()` return type.** `ml_kem::kem::Encapsulate::encapsulate()` returns a plain tuple `(ct, ss)`, not a `Result`; removed `.map_err()` unwrap.
+- **`decrypt_message` recv-chain advancement.** Added explicit `advance_receiving_chain(seq)` before `get_message_key()` call so the receiving chain is positioned at the correct epoch for decryption.
+
+### Security Properties
+
+- **Post-Compromise Security (PCS):** Full state compromise recoverable via KEM-based ratchet step — each step generates fresh ephemeral keys and derives new root chain.
+- **Dual-Robustness:** IND-CCA security if at least one of X25519 Gap-DH or ML-KEM-768 IND-CCA holds.
+- **Memory hygiene:** All shared secrets zeroized on drop via `Zeroize` trait.
+
+## 0.3.34 — Forward Secrecy + PQC Hybrid Key Exchange (X25519 + ML-KEM-768, X-Wing Multi-KEM Combiner)
+
+### Post-Quantum Double Ratchet (crypto-pq)
+
+- **Bidirectional hybrid key agreement.** Full PQXDH handshake (`pqxdh.rs`) now combines classical ECDH (X25519) with ML-KEM-768 KEM in both directions:
+  - Initiator → Responder: `init_x25519_dh` + `resp_mlkem.encapsulate()`
+  - Responder → Initiator: `resp_x25519_dh` + `init_mlkem.encapsulate()`
+  - Both sides derive matching session keys via HKDF-SHA256 with role-dependent salts and domain-separated info strings (`add-pqxdh-send-v1`, `add-pqxdh-recv-v1`).
+
+- **X-Wing / dual-robust multi-KEM combiner.** Shared secrets combined as
+  `SHA3-256(ss_x25519 || ss_mlkem || ct_x25519 || pk_x25519)` — session keys remain IND-CCA secure if AT LEAST ONE primitive (X25519 or ML-KEM-768) is uncompromised. Public keys and ciphertexts bound into the hash to prevent key-substitution attacks.
+
+- **Double Ratchet epoch rotation.** `ratchet_pq.rs` implements a post-quantum Double Ratchet:
+  - `ratchet_epoch()` generates fresh X25519 ephemeral + ML-KEM-768 encapsulation, derives new chain keys via HKDF
+  - Send/recv chain key derivation with domain-separated message-key info (`add-pq-ratchet-msg-key-v1`)
+  - Skip-ahead buffer (up to 1024 out-of-order messages) with automatic key pruning
+
+- **Deniability preservation.** KEM-based implicit authentication avoids raw PQ digital signatures on ephemeral keys — the ephemeral secret can decapsulate its own ciphertext, enabling offline deniability proofs (`verify_deniability`).
+
+- **Memory hygiene.** All shared secrets zeroized on drop via `Zeroize` trait; `PqRatchetEpoch::zeroize()` scrubs combined_ss; intermediate DH outputs scrubbed after HKDF expansion.
+
+- **Wire format safety.** Strict bounds-checked parsing of `PqRatchetMessage`:
+  - Version length byte + UTF-8 validation
+  - X25519 public key: exactly 32 bytes
+  - ML-KEM-768 encapsulation key: exactly 1184 bytes (rejects malformed inputs before crypto processing)
+  - Hybrid ciphertext: exactly `COMBINED_CT_SIZE` bytes
+  - Sequence number: 8-byte big-endian
+
+### Tests — 28 passing
+
+| Category | Tests | Coverage |
+|---|---|---|
+| Hybrid KEM | `test_hybrid_keypair_generation`, `test_hybrid_encapsulate_decapsulate`, `test_bidirectional_exchange`, `test_ratchet_step`, `test_deterministic_seed_derivation`, `test_shared_secret_zeroization`, `test_invalid_ciphertext_length`, `test_wire_format_roundtrip` | Key generation, encapsulation/decapsulation round-trips, bidirectional exchange, deterministic seeds, zeroization on drop, malformed CT rejection |
+| PQXDH Handshake | `test_full_pqxdh_handshake`, `test_ratchet_step`, `test_bidirectional_key_agreement`, `test_session_keys_are_independent`, `test_wire_format_roundtrip` | Full handshake with X25519 + ML-KEM, bidirectional key agreement (init.send == resp.recv), session key independence, wire format round-trip |
+| Double Ratchet | `test_full_bidirectional_double_ratchet_session`, `test_epoch_rotation_forward_secrecy`, `test_ratchet_epoch`, `test_message_key_derivation`, `test_skipped_key_storage`, `test_out_of_order_message_handling`, `test_max_skip_ahead_rejection`, `test_verify_ratchet_properties`, `test_deniability_verification`, `test_legacy_fallback_compatibility` | Bidirectional message exchange, epoch rotation with forward secrecy, skip-ahead handling (out-of-order + max rejection), deniability verification, legacy fallback |
+| Wire Format | `test_ratchet_message_wire_roundtrip`, `test_wire_format_malformed_inputs` | Full wire round-trip, truncated version/ephemeral key/ML-KEM key/seq number rejection |
+
+### Bugs Fixed
+
+- **PQXDH bidirectional key derivation mismatch.** Initiator's `send_key` and responder's `recv_key` previously derived from different salts + info strings, producing divergent keys. Fixed: both directions use consistent `(salt=nonce+0x01, info="send")` and `(salt=nonce+0x02, info="recv")` regardless of role.
+- **Slice `swap_with_slice` type error.** `std::mem::swap` on slices requires known sizes; replaced with explicit `copy_from_slice` + `split_at_mut`.
+- **`from_wire` panic on truncated ML-KEM key.** Added bounds check before `wire[offset..offset+1184]` read — now returns `InvalidKeyLength` instead of panicking.
+- **Mutable borrow checker violations.** Fixed `init_ratchet` / `resp_ratchet` mutability in bidirectional ratchet session test.
+
+### Security Properties Verified
+
+- **Forward Secrecy:** Each ratchet epoch rotates ephemeral X25519 + ML-KEM keys; compromised epoch keys cannot decrypt prior messages.
+- **Post-Quantum Forward Secrecy (PQ-FS):** Store-now-decrypt-later (SNDL) protected against future breaks of either X25519 or ML-KEM-768 independently.
+- **Dual-Robustness:** IND-CCA security guaranteed if at least one of X25519 Gap-DH or ML-KEM-768 IND-CCA holds in the standard model.
+- **Deniability:** Offline deniability via KEM implicit authentication — no raw PQ signatures on ephemeral keys.
+- **Domain Separation:** All HKDF steps bind public keys, ciphertexts, role identity, and protocol version strings.
+
 ## 2026-07-29 — Root-cause fix: Electron↔Rust `add` IPC bridge hung forever (no ID / no contacts / missing Settings)
 
 - **Symptom:** App launched and unlocked, but showed **no Null ID, no contacts, no messages**, and the Settings sections gated on `isAuthenticated` (backup, self-destruction, change-password) were missing.

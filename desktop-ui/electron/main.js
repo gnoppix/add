@@ -86,6 +86,7 @@ process.on('unhandledRejection', (reason) => {
 
 const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron')
 const { spawn } = require('child_process')
+const dbKeyManager = require('./db-key-manager.js')
 
 // Harden Linux against X-session crashes.
 // 1) GL: route GL to software (llvmpipe) so Chromium never probes the X server's
@@ -145,12 +146,12 @@ function getAddCliPath() {
   // Windows binaries carry a .exe suffix; everything else is extensionless.
   const ext = process.platform === 'win32' ? '.exe' : ''
 
-  // 2. Packaged mode: resources/add/add[.exe] or resources/extra/add[.exe]
+  // 2. Packaged mode: resources/add (binary is placed at resources/add by electron-builder extraResources)
   if (app.isPackaged) {
     const candidates = [
-      path.join(process.resourcesPath, 'add', 'add' + ext),
+      path.join(process.resourcesPath, 'add' + ext),  // Primary: extraResources places it directly at resources/add
+      path.join(process.resourcesPath, 'add', 'add' + ext),  // Fallback: nested structure
       path.join(process.resourcesPath, 'extra', 'add' + ext),
-      // Note: resources/add is a directory (containing the binary), not the binary itself
     ]
     for (const packagedPath of candidates) {
       try {
@@ -467,7 +468,7 @@ function killExistingListenProcess() {
 }
 
 // Start the background listen process
-function startListenProcess() {
+function startListenProcess(passphrase) {
   // Idempotent: if a listener is already alive (handle + live PID), do nothing.
   // This guards against the listener being killed-then-not-respawned when
   // startListen is invoked twice in quick succession (React StrictMode double
@@ -484,10 +485,11 @@ function startListenProcess() {
   killExistingListenProcess()
   listenProcess = null
 
-  // Build env with passphrase if stored in memory
+  // Build env with passphrase if stored in memory or passed directly
   const listenEnv = { ...process.env }
-  if (dbPassphrase) {
-    listenEnv.ADD_DB_PASSPHRASE = dbPassphrase
+  const effectivePassphrase = passphrase || dbPassphrase
+  if (effectivePassphrase) {
+    listenEnv.ADD_DB_PASSPHRASE = effectivePassphrase
   }
   listenProcess = spawn(ADD_CLI, ['listen'], {
     shell: false,
@@ -499,15 +501,24 @@ function startListenProcess() {
   // Buffer stdout (data arrives in chunks) and forward inbound P2P messages
   // to the renderer. The client emits one line per received message:
   //   [HH:MM:SS] From: <NULL_ID> (<FP>) | <text>
+  // Null ID format: NN-XXXX-XXXX where X is base64 (A-Z, a-z, 0-9, +, /)
   let listenBuf = ''
-  const INBOUND_RE = /^\[.*?\] From: (NN-[A-Z0-9-]+) \(([A-F0-9]+)\) \| (.*)$/
+  const INBOUND_RE = /^\[.*?\] From: (NN-[A-Za-z0-9+/]{4}-[A-Za-z0-9+/]{4}) \(([A-F0-9]+)\) \| (.*)$/
   const forwardInbound = (line) => {
+    console.log('[main] forwardInbound called with line:', line)
     const m = line.match(INBOUND_RE)
-    if (!m) return
+    if (!m) {
+      console.log('[main] forwardInbound: line did not match regex')
+      return
+    }
     const [, nullId, fp, text] = m
+    console.log('[main] forwardInbound: parsed message from:', nullId, 'fp:', fp, 'text:', text)
     const win = mainWindow
     if (win && !win.isDestroyed()) {
+      console.log('[main] forwardInbound: sending add-incoming-message IPC to renderer')
       win.webContents.send('add-incoming-message', { from: nullId, fingerprint: fp, text })
+    } else {
+      console.log('[main] forwardInbound: window not available')
     }
   }
   listenProcess.stdout?.on('data', (data) => {
@@ -554,7 +565,7 @@ function killListenProcess() {
 function restartListenProcess() {
   killListenProcess()
   // Small delay to ensure port is released
-  setTimeout(startListenProcess, 500)
+  setTimeout(() => startListenProcess(dbPassphrase), 500)
 }
 
 // Apply a defense-in-depth Content-Security-Policy and deny all permission
@@ -649,7 +660,7 @@ ipcMain.handle('add-init', async (_, opts) => {
   if (opts?.pin) args.push('--pin', opts.pin)
   if (opts?.password) args.push('--password', opts.password)
   const output = await queuedCommand(args)
-  const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
+  const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9+\/]{4}-[A-Za-z0-9+\/]{4})/)
   const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
   const result = { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
   // Publish the user's cert bundle to the (now authenticated) cert store so
@@ -671,17 +682,7 @@ ipcMain.handle('add-init', async (_, opts) => {
   return result
 })
 
-ipcMain.handle('add-publish-cert', async () => {
-  try {
-    const output = await queuedCommand(['publish-cert'])
-    return { success: true, output }
-  } catch (e) {
-    return { success: false, error: e.message }
-  }
-})
-
 ipcMain.handle('add-id', async () => {
-  dbgLog('add-id handler START', { pid: process.pid, bus: process.env.ADD_DESKTOP_HAS_BUS || '(unset)' })
   let output
   try {
     output = await queuedCommand(['id'])
@@ -690,24 +691,14 @@ ipcMain.handle('add-id', async () => {
     dbgLog('add-id handler ERROR:', e && e.message ? e.message : String(e))
     throw e
   }
-  const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9-]+)/)
+  const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9+\/]{4}-[A-Za-z0-9+\/]{4})/)
   const fpMatch = output.match(/Fingerprint:\s*([A-Fa-f0-9]+)/)
   const result = { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
   dbgLog('add-id handler RETURNING', JSON.stringify(result))
   return result
 })
 
-ipcMain.handle('add-check-identity-exists', async () => {
-  const homeDir = require('os').homedir()
-  const addDir = require('path').join(homeDir, '.add')
-  const identityFile = require('path').join(addDir, 'identity.json')
-  const dbKeyFile = require('path').join(addDir, 'db_key.json')
-  const exists = require('fs').existsSync(identityFile) && require('fs').existsSync(dbKeyFile)
-  return { exists }
-})
-
 ipcMain.handle('add-register', async () => queuedCommand(['register']))
-ipcMain.handle('add-register-all-bootstraps', async () => queuedCommand(['register-all-bootstraps']))
 ipcMain.handle('add-check-register', async () => queuedCommand(['check-register']))
 ipcMain.handle('add-check-contact-status', async () => {
   const output = await queuedCommand(['contact-status'])
@@ -717,7 +708,7 @@ ipcMain.handle('add-check-contact-status', async () => {
   // Parse into [{ nullId, isOnline }] for the renderer's status store.
   const statuses = []
   for (const line of output.split('\n')) {
-    const m = line.match(/(NN-[A-Za-z0-9-]+)\)\s*-\s*(ONLINE|OFFLINE)/)
+    const m = line.match(/(NN-[A-Za-z0-9+\/]{4}-[A-Za-z0-9+\/]{4})\)\s*-\s*(ONLINE|OFFLINE)/)
     if (m) statuses.push({ nullId: m[1], isOnline: m[2] === 'ONLINE' })
   }
   return statuses
@@ -731,7 +722,7 @@ ipcMain.handle('add-contacts', async () => {
   const contacts = []
   for (const line of output.split('\n')) {
     // CLI format: "  NN-xxxx-xxxx -> FINGERPRINT"
-    const match = line.match(/(NN-[A-Za-z0-9-]+)\s*->\s*([A-Fa-f0-9]+)/)
+    const match = line.match(/(NN-[A-Za-z0-9+\/]{4}-[A-Za-z0-9+\/]{4})\s*->\s*([A-Fa-f0-9]+)/)
     if (match) contacts.push({ nullId: match[1], fingerprint: match[2] })
   }
   return contacts
@@ -745,7 +736,7 @@ ipcMain.handle('add-aliases', async () => {
   const aliases = []
   for (const line of output.split('\n')) {
     // CLI format: "  NAME -> NN-xxxx-xxxx"  (insertion order, oldest first)
-    const match = line.match(/\s*(.+?)\s*->\s*(NN-[A-Za-z0-9-]+)/)
+      const match = line.match(/\s*(.+?)\s*->\s*(NN-[A-Za-z0-9+\/]{4}-[A-Za-z0-9+\/]{4})/)
     if (match) aliases.push({ alias: match[1], nullId: match[2] })
   }
   return aliases
@@ -780,8 +771,8 @@ ipcMain.handle('add-read', async (_, json) => {
 })
 ipcMain.handle('add-listen', async () => queuedCommand(['listen']))
 
-ipcMain.handle('add-start-listen', async () => {
-  startListenProcess()
+ipcMain.handle('add-start-listen', async (_, passphrase) => {
+  startListenProcess(passphrase)
   return { success: true, message: 'Background listen process started' }
 })
 
@@ -843,6 +834,65 @@ ipcMain.handle('add-submit-passphrase', async (_, passphrase) => {
 ipcMain.handle('add-clear-passphrase', async () => {
   dbPassphrase = null
   return { success: true }
+})
+
+// --- Unified Passphrase / DB Key Management ---
+// These handlers use the dbKeyManager to load the encryption key via passphrase,
+// enabling both CLI and Desktop UI to share the same encrypted messages.db
+
+ipcMain.handle('add-load-db-key', async (_, passphrase) => {
+  console.log('[add-load-db-key] Loading DB encryption key...')
+  const result = await dbKeyManager.loadDbKey(passphrase)
+  if (result.success) {
+    dbPassphrase = passphrase // Store for background listener
+    console.log('[add-load-db-key] DB key loaded successfully')
+  }
+  return result
+})
+
+ipcMain.handle('add-init-identity', async (_, passphrase) => {
+  console.log('[add-init-identity] Initializing new identity...')
+  return await dbKeyManager.initIdentity(passphrase)
+})
+
+ipcMain.handle('add-read-messages', async (_, passphrase, json) => {
+  console.log('[add-read-messages] Reading messages with passphrase...')
+  return await dbKeyManager.readMessages(passphrase, json)
+})
+
+ipcMain.handle('add-send-message', async (_, passphrase, nullId, message, ttl) => {
+  console.log(`[add-send-message] Sending to ${nullId}`)
+  return await dbKeyManager.sendMessage(passphrase, nullId, message, ttl)
+})
+
+ipcMain.handle('add-unlock-vault', async (_, passphrase) => {
+  console.log('[add-unlock-vault] Unlocking vault...')
+  return await dbKeyManager.unlockVault(passphrase)
+})
+
+ipcMain.handle('add-start-listener', async (_, passphrase) => {
+  console.log('[add-start-listener] Starting background listener...')
+  return await dbKeyManager.startListener(passphrase)
+})
+
+ipcMain.handle('add-register-all-bootstraps', async (_, passphrase) => {
+  console.log('[add-register-all-bootstraps] Registering on all bootstraps...')
+  return await dbKeyManager.registerAllBootstraps(passphrase)
+})
+
+ipcMain.handle('add-get-contacts', async (_, passphrase) => {
+  console.log('[add-get-contacts] Fetching contacts...')
+  return await dbKeyManager.getContacts(passphrase)
+})
+
+ipcMain.handle('add-get-aliases', async (_, passphrase) => {
+  console.log('[add-get-aliases] Fetching aliases...')
+  return await dbKeyManager.getAliases(passphrase)
+})
+
+ipcMain.handle('add-publish-cert', async (_, passphrase) => {
+  console.log('[add-publish-cert] Publishing certificate...')
+  return await dbKeyManager.publishCert(passphrase)
 })
 
 ipcMain.handle('add-unlock', async (_, opts) => {

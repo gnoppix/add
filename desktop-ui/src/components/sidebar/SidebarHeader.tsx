@@ -91,7 +91,8 @@ function SidebarHeader() {
       return
     }
     try {
-      await api.startListen()
+      // Use store's startListen which handles passphrase
+      await useChatStore.getState().startListen()
       useChatStore.setState({ listenRunning: true })
       setErrorMessage('')
     } catch (err) {

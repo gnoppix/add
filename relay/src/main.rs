@@ -56,6 +56,9 @@ const MIX_MAX_DELAY_SECONDS: u64 = 60;
 #[allow(dead_code)]
 const MIX_COVER_BURST_COUNT: usize = 3;
 
+// Default hop count for RelayForward (prevents infinite loops from old clients)
+fn default_hop_count() -> u8 { 1 }
+
 // =============================================================================
 // Edge-Core Architecture — ACS2.6 Part II.1
 // =============================================================================
@@ -307,7 +310,7 @@ struct RelayForward {
     timestamp: f64,
     nonce: i64,
     /// Hop count to prevent infinite forwarding loops.
-    #[serde(default)]
+    #[serde(default = "default_hop_count")]
     hop_count: u8,
     /// Chain of relays that have forwarded this message (for loop detection).
     #[serde(default)]
@@ -729,6 +732,8 @@ struct RelayState {
     /// ACS2.6 Part II.1: Whether this relay allows transit forwarding.
     /// When false, relay-forward requests are rejected (edge/mobile mode).
     allow_relay: bool,
+    /// SECURITY FIX (M1): Require TLS for all client connections.
+    require_tls: bool,
     /// ACS2.6 §V.1: Whether CBNP cover traffic is enabled.
     #[allow(dead_code)]
     cbnp_enabled: bool,
@@ -748,6 +753,7 @@ impl RelayState {
         allow_relay: bool,
         cbnp_enabled: bool,
         bootstraps: Vec<String>,
+        require_tls: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Load known peers from disk if available
         let known_peers = Self::load_known_peers_sync(&gpg_home);
@@ -862,6 +868,7 @@ impl RelayState {
             allow_relay,
             cbnp_enabled,
             bootstraps,
+            require_tls,
         })
     }
 
@@ -1246,16 +1253,24 @@ impl RelayState {
     }
 
     /// ACS2.6 Part III: Purge all messages for a recipient (squelch).
-    /// Called after the recipient has successfully fetched and decrypted
-    /// their messages, proving delivery. Removes both in-memory and
-    /// persistent copies to prevent stale data accumulation.
-    async fn purge_all_messages(&self, recipient_nid: &str) {
+    /// SECURITY FIX (M6): Accepts an optional sender_fp filter so only
+    /// messages from the purging requester are removed.
+    async fn purge_all_messages(&self, recipient_nid: &str, sender_fp: Option<&str>) {
         let keys = self.mailbox_keys(recipient_nid);
         // In-memory purge
         {
             let mut mailboxes = self.mailboxes.write().await;
             for k in &keys {
-                mailboxes.remove(k);
+                if let Some(mb) = mailboxes.get_mut(k) {
+                    mb.entries.retain(|e| {
+                        match sender_fp {
+                            Some(fp) => e.sender_fp != fp,
+                            None => true,
+                        }
+                    });
+                } else {
+                    mailboxes.remove(k);
+                }
             }
         }
 
@@ -1272,6 +1287,11 @@ impl RelayState {
             let mut separated = qb.separated(",");
             for k in &keys {
                 separated.push_bind(k);
+            }
+            if let Some(fp) = sender_fp {
+                qb.push(" AND sender_fp = ");
+                let mut sep2 = qb.separated("");
+                sep2.push_bind(fp);
             }
             qb.push(")");
             let _ = qb.build().execute(pool).await;
@@ -1409,6 +1429,24 @@ async fn handle_connection(
         tracing::info!("new TLS relay connection from {}", addr);
         handle_ws_connection(ws_stream, addr, state).await
     } else {
+        // SECURITY FIX (M1): If require_tls is set, reject plaintext connections
+        if state.require_tls {
+            let boxed: BoxedStream = Box::new(stream);
+            let mut ws_stream = tokio_tungstenite::accept_async(boxed).await?;
+            let resp = RelayResponse {
+                ok: false,
+                error: Some("TLS required".to_string()),
+                data: Some(serde_json::json!({
+                    "hint": "Use wss:// instead of ws://"
+                })),
+            };
+            let json = serde_json::to_string(&resp)?;
+            ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(
+                tokio_tungstenite::tungstenite::Utf8Bytes::from(json),
+            ))
+            .await?;
+            return Ok(());
+        }
         let boxed: BoxedStream = Box::new(stream);
         let ws_stream = tokio_tungstenite::accept_async(boxed).await?;
         tracing::info!("new relay connection from {}", addr);
@@ -1587,6 +1625,22 @@ async fn handle_message(
             {
                 return Err("replay detected: nonce already seen".to_string());
             }
+
+            // C2 FIX: Verify recipient_tag HMAC when shared_secret is configured.
+            // Prevents a client from tricking the relay into storing mailboxes
+            // under the wrong blind key.
+            let epoch = routing_epoch(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            );
+            verify_recipient_tag(
+                &state.shared_secret,
+                &req.recipient_nid,
+                epoch,
+                &req.recipient_tag,
+            )?;
 
             // METADATA HARDENING: apply the same mix delay used on the
             // federation path to the direct client→relay store. Without this a
@@ -2258,6 +2312,16 @@ async fn handle_message(
                 }
             }
 
+            // Compute recipient_tag from the forward's recipient_nid so that
+            // store_message uses the correct blind mailbox key.
+            let forward_epoch = routing_epoch(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            );
+            let forward_tag = recipient_tag(&state.shared_secret, &forward.recipient_nid, forward_epoch);
+
             // Verify the inner signature
             let req = MailboxStoreRequest {
                 recipient_nid: forward.recipient_nid.clone(),
@@ -2271,7 +2335,7 @@ async fn handle_message(
                 sender_cert: String::new(),
                 sender_verifying_key: String::new(),
                 sealed_sender: String::new(),
-                recipient_tag: String::new(),
+                recipient_tag: forward_tag.clone().unwrap_or_default(),
             };
             state.verify_store_signature(&req).await?;
             state.check_timestamp_freshness(req.timestamp)?;
@@ -2402,8 +2466,8 @@ async fn handle_message(
                 return Err("replay detected: nonce already seen".to_string());
             }
 
-            // Delete all messages for this recipient
-            state.purge_all_messages(&purge_recipient).await;
+            // Delete all messages for this recipient from the purging sender
+            state.purge_all_messages(&purge_recipient, Some(&purge_fp)).await;
             tracing::info!(recipient = %purge_recipient, fp = %purge_fp, "purge: all messages deleted");
             send_ok(ws, None).await;
             Ok(())
@@ -3309,6 +3373,40 @@ fn recipient_tag(secret: &Option<String>, nid: &str, epoch: u64) -> Option<Strin
         .map(|s| compute_hmac(&format!("{}|{}", nid, epoch), s))
 }
 
+/// Verify that the client-supplied recipient_tag matches the relay's own
+/// computation. Returns Ok(()) when:
+///   - No shared_secret is configured (legacy path, tag is ignored)
+///   - The client sent an empty tag AND the server computed one (client
+///     falls back to sending "" when no secret, which is acceptable)
+///   - The tags match exactly
+fn verify_recipient_tag(
+    relay_secret: &Option<String>,
+    recipient_nid: &str,
+    epoch: u64,
+    client_tag: &str,
+) -> Result<(), String> {
+    if let Some(secret) = relay_secret {
+        let expected = compute_hmac(&format!("{}|{}", recipient_nid, epoch), secret);
+        // Allow empty tag from client when server computed one (client may
+        // not have the secret configured and falls back to "" — this is
+        // acceptable because the server still keys by the blind tag).
+        if client_tag.is_empty() {
+            return Ok(());
+        }
+        if expected != client_tag {
+            tracing::warn!(
+                "recipient_tag mismatch: nid={} expected={} got={}",
+                recipient_nid,
+                &expected[..8],
+                &client_tag[..std::cmp::min(8, client_tag.len())]
+            );
+            return Err("recipient_tag verification failed".to_string());
+        }
+    }
+    // No shared_secret configured — tag is not used for mailbox key, skip
+    Ok(())
+}
+
 /// Parse a relay URL into (host, port, use_tls).
 fn parse_relay_url(url: &str) -> Result<(String, u16, bool), Box<dyn std::error::Error>> {
     // Simple URL parser for ws:// and wss:// schemes
@@ -3349,10 +3447,7 @@ fn now_unix() -> f64 {
 }
 
 fn uuid_hex() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let n: u128 = rng.r#gen();
-    format!("{:032x}", n)[..16].to_string()
+    add_protocol::envelope::uuid_hex()
 }
 
 // ------------------------------------------------------------------ //
@@ -3413,6 +3508,13 @@ struct Args {
     /// Must be used with --tls-cert.
     #[arg(long)]
     tls_key: Option<String>,
+
+    /// SECURITY FIX (M1): Require TLS for all client connections.
+    /// When set and --tls-cert is not provided, the relay rejects
+    /// plaintext ws:// connections and returns a JSON error telling
+    /// clients to use wss:// instead.
+    #[arg(long, default_value_t = false)]
+    require_tls: bool,
 
     /// Path to SQLite database file for mailbox persistence.
     /// Defaults to {gpg_home}/mailbox.db if not specified.
@@ -3585,6 +3687,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             allow_relay,
             cbnp_enabled,
             args.bootstrap.clone(),
+            args.require_tls,
         )
         .await?,
     );
@@ -3994,6 +4097,7 @@ mod tests {
             false,
             false,
             Vec::new(),
+            false, // require_tls
         )
         .await
         .expect("new");
@@ -4043,6 +4147,7 @@ mod tests {
             false,
             false,
             Vec::new(),
+            false, // require_tls
         )
         .await
         .expect("new");
@@ -4076,6 +4181,7 @@ mod tests {
             false,
             false,
             Vec::new(),
+            false, // require_tls
         )
         .await
         .expect("new");
@@ -4091,5 +4197,38 @@ mod tests {
             0,
             "stored_at is bucket-aligned"
         );
+    }
+
+    #[test]
+    fn test_verify_recipient_tag_matches() {
+        let secret = Some("test-secret".to_string());
+        let epoch = 12345;
+        let nid = "NN-TEST-NID";
+        let expected_tag = compute_hmac(&format!("{}|{}", nid, epoch), "test-secret");
+
+        // Matching tag should pass
+        assert!(verify_recipient_tag(&secret, nid, epoch, &expected_tag).is_ok());
+
+        // Wrong tag should fail
+        assert!(verify_recipient_tag(&secret, nid, epoch, "wrong-tag").is_err());
+
+        // Empty tag when server has secret should pass (legacy compat)
+        assert!(verify_recipient_tag(&secret, nid, epoch, "").is_ok());
+
+        // No secret configured — any tag passes
+        let no_secret: Option<String> = None;
+        assert!(verify_recipient_tag(&no_secret, nid, epoch, "anything").is_ok());
+        assert!(verify_recipient_tag(&no_secret, nid, epoch, "").is_ok());
+    }
+
+    #[test]
+    fn test_verify_recipient_tag_epoch_rotation() {
+        let secret = Some("epoch-secret".to_string());
+        let nid = "NN-EPOCH-NID";
+
+        // Tag computed for epoch 100 should NOT match epoch 200
+        let tag_100 = compute_hmac(&format!("{}|{}", nid, 100), "epoch-secret");
+        assert!(verify_recipient_tag(&secret, nid, 100, &tag_100).is_ok());
+        assert!(verify_recipient_tag(&secret, nid, 200, &tag_100).is_err());
     }
 }

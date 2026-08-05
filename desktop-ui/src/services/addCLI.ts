@@ -51,7 +51,7 @@ export class AddCLI {
     if (pin) args.push('--pin', pin)
     if (password) args.push('--password', password)
     const output = await this.runCommand(args)
-    const idMatch = output.match(/Null ID:\s*(NN-[A-Z0-9-]+)/)
+    const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9+/]{4}-[A-Za-z0-9+/]{4})/)
     const fpMatch = output.match(/Fingerprint:\s*([A-Z0-9]+)/)
     return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
   }
@@ -65,7 +65,7 @@ export class AddCLI {
 
   async getMyId(): Promise<NullId> {
     const output = await this.runCommand(['id'])
-    const idMatch = output.match(/Null ID:\s*(NN-[A-Z0-9-]+)/)
+    const idMatch = output.match(/Null ID:\s*(NN-[A-Za-z0-9+/]{4}-[A-Za-z0-9+/]{4})/)
     const fpMatch = output.match(/Fingerprint:\s*([A-Z0-9]+)/)
     return { id: idMatch?.[1] || '', fingerprint: fpMatch?.[1] || '' }
   }
@@ -85,7 +85,7 @@ export class AddCLI {
     const lines = output.split('\n')
     for (const line of lines) {
       // CLI format: "  NN-xxxx-xxxx -> FINGERPRINT" (fingerprint is uppercase hex)
-      const match = line.match(/(NN-[A-Z0-9-]+)\s*->\s*([A-Z0-9]+)/i)
+      const match = line.match(/(NN-[A-Za-z0-9+/]{4}-[A-Za-z0-9+/]{4})\s*->\s*([A-Z0-9]+)/i)
       if (match) contacts.push({ nullId: match[1], fingerprint: match[2] })
     }
     return contacts

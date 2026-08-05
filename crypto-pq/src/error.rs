@@ -34,6 +34,9 @@ pub enum PqError {
     #[error("Key generation failed: {0}")]
     KeyGenerationFailed(String),
 
+    #[error("Key derivation failed: {0}")]
+    DerivationFailed(String),
+
     #[error("ML-DSA error: {0}")]
     MlDsaError(#[from] ml_dsa::Error),
 
@@ -45,6 +48,9 @@ pub enum PqError {
 
     #[error("Add crypto error: {0}")]
     CryptoError(#[from] add_crypto::CryptoError),
+
+    #[error("Decoding error: {0}")]
+    DecodingError(String),
 }
 
 impl From<std::array::TryFromSliceError> for PqError {

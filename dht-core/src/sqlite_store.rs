@@ -24,6 +24,12 @@ pub const MAX_VALUE_SIZE: usize = constants::MAX_VALUE_SIZE;
 /// unbounded SQLite growth.
 pub const NONCE_RETENTION_SECS: u64 = 7 * 24 * 3600;
 
+/// SECURITY FIX (H5): Hard cap on the number of entries in the nonce_log table.
+/// Prevents DoS via large nonce table: at 1 PUT/sec over 7 days, this would be
+/// ~605K rows. The cap is set to 1M to allow high-volume DHT nodes without
+/// unbounded growth. When the cap is reached, the oldest entries are deleted.
+pub const NONCE_LOG_MAX_ENTRIES: u64 = 1_000_000;
+
 /// A single DHT key-value record.
 #[derive(Debug, Clone)]
 pub struct KvRecord {
@@ -331,12 +337,33 @@ impl DhtStore {
 
     /// Record a nonce for the given key. Called after successful put.
     /// INSERT OR IGNORE makes this idempotent — re-recording is a no-op.
+    /// SECURITY FIX (H5): Enforces a hard cap on total nonce_log entries.
+    /// When the cap is exceeded, the oldest entries are deleted to make room.
     pub async fn record_nonce(&self, key: &str, nonce: i64) -> DhtResult<()> {
         sqlx::query("INSERT OR IGNORE INTO nonce_log (key, nonce) VALUES (?, ?)")
             .bind(key)
             .bind(nonce)
             .execute(&self.pool)
             .await?;
+
+        // SECURITY FIX (H5): Enforce hard cap on nonce_log size.
+        // If the table exceeds NONCE_LOG_MAX_ENTRIES, delete the oldest entries.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nonce_log")
+            .fetch_one(&self.pool)
+            .await?;
+        if count > crate::sqlite_store::NONCE_LOG_MAX_ENTRIES as i64 {
+            // Delete the oldest entries to bring count back under the cap.
+            let delete_count = (count - crate::sqlite_store::NONCE_LOG_MAX_ENTRIES as i64) as i64;
+            sqlx::query(
+                "DELETE FROM nonce_log WHERE rowid IN (
+                    SELECT rowid FROM nonce_log ORDER BY recorded_at ASC LIMIT ?
+                )",
+            )
+            .bind(delete_count)
+            .execute(&self.pool)
+            .await?;
+        }
+
         Ok(())
     }
 

@@ -102,9 +102,9 @@ pub fn validate_fingerprint(fp: &str) -> Result<(), CryptoError> {
 
 pub fn validate_null_id(nid: &str) -> Result<(), CryptoError> {
     let parts: Vec<&str> = nid.split('-').collect();
-    if parts.len() != 3 || parts[0] != "NN" || parts[1].len() != 4 || parts[2].len() != 4 {
+    if parts.len() != 3 || parts[0] != "NN" || parts[1].len() != 8 || parts[2].len() != 8 {
         return Err(CryptoError::InvalidFingerprint(
-            "null ID must be NN-XXXX-XXXX format".to_string(),
+            "null ID must be NN-{8hex}-{8hex} format".to_string(),
         ));
     }
     Ok(())
@@ -126,14 +126,14 @@ pub fn validate_null_id_strict(nid: &str, fingerprint: &str) -> Result<(), Crypt
 pub fn null_id(fingerprint: &str) -> String {
     use blake2::Blake2bVar;
     use blake2::digest::{Update, VariableOutput};
-    let mut hasher = Blake2bVar::new(8).expect("valid");
+    // SECURITY FIX (H4): Use Blake2b-16 (128-bit entropy) to match
+    // dht_core::compute_null_id() and crypto_utils::null_id_from_fingerprint().
+    let mut hasher = Blake2bVar::new(16).expect("valid");
     Update::update(&mut hasher, fingerprint.as_bytes());
-    let mut result = [0u8; 8];
-    let _ = hasher.finalize_variable(&mut result);
-    let b64 = base64::engine::general_purpose::STANDARD.encode(result);
-    let b64 = b64.trim_end_matches('=');
-    let b64: String = b64.chars().take(8).collect();
-    format!("NN-{}-{}", &b64[..4], &b64[4..8])
+    let mut out = [0u8; 16];
+    hasher.finalize_variable(&mut out).expect("16-byte output is valid");
+    let hex = hex::encode(out);
+    format!("NN-{}-{}", &hex[..8], &hex[8..16])
 }
 
 // ------------------------------------------------------------------ //
@@ -517,11 +517,12 @@ mod tests {
 
     #[test]
     fn test_null_id_known() {
-        // Test that null_id produces base64-encoded NN IDs
+        // Test that null_id produces Blake2b-16 NN IDs (NN-{8hex}-{8hex})
         let fp = "96BC6B202299B0F1B52784FE87238E411A5F5FFA";
         let nid = null_id(fp);
         assert!(nid.starts_with("NN-"));
-        assert_eq!(nid.len(), 12); // NN-XXXX-XXXX
+        // NN- (3) + 8 hex (8) + - (1) + 8 hex (8) = 20
+        assert_eq!(nid.len(), 20);
     }
 
     #[test]
@@ -532,8 +533,8 @@ mod tests {
 
     #[test]
     fn test_validate_null_id_valid() {
-        assert!(validate_null_id("NN-ABCD-EFGH").is_ok());
-        assert!(validate_null_id("NN-X1Y2-Z3W4").is_ok());
+        assert!(validate_null_id("NN-ABCD1234-EFGH5678").is_ok());
+        assert!(validate_null_id("NN-X1Y2Z3W4-A5B6C7D8").is_ok());
     }
 
     #[test]

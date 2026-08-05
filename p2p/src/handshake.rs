@@ -91,9 +91,13 @@ pub async fn handshake_initiator(
 
     // SECURITY FIX (G10): Validate PoW fields before processing
     // Reject obviously invalid nonces and difficulty values to prevent DoS
-    if peer_nonce > 1_000_000_000 || peer_pow_bits == 0 || peer_pow_bits > 32 {
+    // SECURITY FIX (H1): Enforce MIN_POW_DIFFICULTY so difficulty=1-7 is rejected.
+    if peer_nonce > 1_000_000_000
+        || peer_pow_bits < constants::MIN_POW_DIFFICULTY
+        || peer_pow_bits > 32
+    {
         return Err(P2pError::Handshake(
-            "invalid PoW parameters: nonce out of range or invalid difficulty".to_string(),
+            "invalid PoW parameters: nonce out of range or difficulty below minimum".to_string(),
         ));
     }
 
@@ -154,9 +158,13 @@ pub async fn handshake_responder(
 
     // SECURITY FIX (G10): Validate PoW fields before processing
     // Reject obviously invalid nonces and difficulty values to prevent DoS
-    if peer_nonce > 1_000_000_000 || peer_pow_bits == 0 || peer_pow_bits > 32 {
+    // SECURITY FIX (H1): Enforce MIN_POW_DIFFICULTY so difficulty=1-7 is rejected.
+    if peer_nonce > 1_000_000_000
+        || peer_pow_bits < constants::MIN_POW_DIFFICULTY
+        || peer_pow_bits > 32
+    {
         return Err(P2pError::Handshake(
-            "invalid PoW parameters: nonce out of range or invalid difficulty".to_string(),
+            "invalid PoW parameters: nonce out of range or difficulty below minimum".to_string(),
         ));
     }
 

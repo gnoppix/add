@@ -259,15 +259,17 @@ pub fn set_key_trust(fingerprint: &str, trust_level: &str) -> CryptoUtilsResult<
 
 /// Derive a Null ID (NN-XXXX-XXXX) from a GPG fingerprint.
 ///
-/// SECURITY FIX (M1): Uses BLAKE2b-8 (via add-protocol) for consistency
-/// with crypto::null_id() and dht-core::compute_null_id(). Previously used
-/// SHA-256, which produced a different Null ID for the same fingerprint.
+/// SECURITY FIX (H4): Now uses Blake2b-16 (128-bit entropy) to match
+/// crypto::null_id() and dht-core::compute_null_id(). Previously used
+/// blake2b_8_hex which produced 64-bit hashes.
 pub fn null_id_from_fingerprint(fp: &str) -> String {
     let cleaned = fp.replace(' ', "").to_lowercase();
-    let hex = add_protocol::pow::blake2b_8_hex(&cleaned);
-    let part1 = &hex[..4];
-    let part2 = &hex[4..8];
-    format!("NN-{}-{}", part1.to_uppercase(), part2.to_uppercase())
+    let hex = add_protocol::pow::blake2b_16_hex(&cleaned);
+    format!(
+        "NN-{}-{}",
+        &hex[..8].to_uppercase(),
+        &hex[8..16].to_uppercase()
+    )
 }
 
 #[cfg(test)]
@@ -296,7 +298,8 @@ mod tests {
     fn test_null_id_from_fingerprint() {
         let nid = null_id_from_fingerprint("AABBCCDDEEFF00112233445566778899AABBCCDD");
         assert!(nid.starts_with("NN-"));
-        assert_eq!(nid.len(), 12); // NN-XXXX-XXXX
+        // NN- (3) + 8 hex (8) + - (1) + 8 hex (8) = 20
+        assert_eq!(nid.len(), 20);
     }
 
     #[test]

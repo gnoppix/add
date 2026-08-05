@@ -9,35 +9,39 @@ import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../store/chatStore'
 
 interface StartupUnlockDialogProps {
-  onUnlock: () => void
+  onUnlock: (passphrase: string) => void
 }
 
 export function StartupUnlockDialog({ onUnlock }: StartupUnlockDialogProps) {
-  const [passphrase, setPassphrase] = useState('')
+  const [passphrase, setPassphraseValue] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isUnlocking, setIsUnlocking] = useState(false)
-  const { submitPassphrase } = useChatStore()
+  const { submitPassphrase, setPassphrase } = useChatStore()
   const { t } = useTranslation()
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError(null)
-    setIsUnlocking(true)
-    console.log('[StartupUnlockDialog] Submitting passphrase...')
+      e.preventDefault()
+      setError(null)
+      setIsUnlocking(true)
+      console.log('[StartupUnlockDialog] >>>>>>>>>>>>>>> Submitting passphrase, length:', passphrase.length)
 
-    try {
-      const result = await submitPassphrase(passphrase)
-      console.log('[StartupUnlockDialog] submitPassphrase result:', result)
-      setPassphrase('')
-      onUnlock()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error('[StartupUnlockDialog] submitPassphrase error:', msg)
-      setError(msg)
-    } finally {
-      setIsUnlocking(false)
+      try {
+        const result = await submitPassphrase(passphrase)
+        console.log('[StartupUnlockDialog] >>>>>>>>>>>>>>> submitPassphrase result:', result)
+        // Store the passphrase in chatStore for DB key loading
+        setPassphrase(passphrase)
+        console.log('[StartupUnlockDialog] >>>>>>>>>>>>>>> chatStore passphrase set to:', passphrase.substring(0, 3) + '...')
+        console.log('[StartupUnlockDialog] >>>>>>>>>>>>>>> calling onUnlock with passphrase, length:', passphrase.length)
+        setPassphraseValue('')
+        onUnlock(passphrase)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[StartupUnlockDialog] >>>>>>>>>>>>>>> submitPassphrase error:', msg)
+        setError(msg)
+      } finally {
+        setIsUnlocking(false)
+      }
     }
-  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -53,7 +57,7 @@ export function StartupUnlockDialog({ onUnlock }: StartupUnlockDialogProps) {
           <input
             type="password"
             value={passphrase}
-            onChange={e => setPassphrase(e.target.value)}
+            onChange={e => setPassphraseValue(e.target.value)}
             placeholder={t('ui.unlock.yourPassphrase')}
             className="mb-4 w-full rounded border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
             autoFocus

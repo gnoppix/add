@@ -3,7 +3,7 @@ members = ["protocol", "crypto", "crypto-pq", "crypto-utils", "dht-core", "relay
 resolver = "2"
 
 [workspace.package]
-version = "0.3.31"
+version = "0.3.33"
 edition = "2024"
 description = "Add P2P messenger (Rust)"
 license = "BUSL-1.1"
@@ -33,6 +33,9 @@ sequoia-openpgp = { version = "2", default-features = false, features = ["crypto
 ml-dsa = "0.1"
 pem = "3"
 ml-kem = "0.1"
+x25519-dalek = { version = "2", features = ["static_secrets", "seal"] }
+sha3 = "0.10"
+curve25519-dalek = "2"
 futures = "0.3"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 subtle = "2"

@@ -163,3 +163,19 @@
 .dark ::-webkit-scrollbar-thumb:hover {
   background: #505050;
 }
+
+/* Animation for slide-in effect */
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.2s ease-out;
+}

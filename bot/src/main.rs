@@ -312,12 +312,15 @@ async fn publish_service_bundle(bootstrap_url: &str, listen_address: &str) -> Re
     let sign_data = format!("{}|{}|{}", key, value_b64, REFLECTOR_FINGERPRINT);
     let sig = {
         use add_crypto_pq::{MlDsa87KeyPair, sign_ml_dsa87};
+        use base64::Engine;
         let seed_arr: [u8; 32] = sk_seed
             .as_slice()
             .try_into()
             .map_err(|_| anyhow!("Invalid seed length"))?;
         let kp = MlDsa87KeyPair::from_seed(&seed_arr)?;
-        sign_ml_dsa87(sign_data.as_bytes(), &kp.signing_key())?
+        let raw_sig = sign_ml_dsa87(sign_data.as_bytes(), &kp.signing_key())
+            .map_err(|e| anyhow!("ML-DSA-87 sign: {}", e))?;
+        base64::engine::general_purpose::STANDARD.encode(raw_sig.encode())
     };
 
     // PoW: solve to seq==0 difficulty (8) — the server uses ADDR_POW_DIFFICULTY
@@ -549,7 +552,7 @@ fn sha256_hex(data: &str) -> String {
 }
 
 fn uuid_hex() -> String {
-    format!("{}", uuid::Uuid::new_v4().hyphenated())
+    add_protocol::envelope::uuid_hex()
 }
 
 #[cfg(test)]

@@ -67,21 +67,31 @@ contextBridge.exposeInMainWorld('addAPI', {
 
   // P2P Listen (background process)
   listen: () => ipcRenderer.invoke('add-listen'),
-  startListen: () => ipcRenderer.invoke('add-start-listen'),
+  startListen: (passphrase) => ipcRenderer.invoke('add-start-listen', passphrase),
   stopListen: () => ipcRenderer.invoke('add-stop-listen'),
   restartListen: () => ipcRenderer.invoke('add-restart-listen'),
   listenStatus: () => ipcRenderer.invoke('add-listen-status'),
 
   // Passphrase management (stored in memory, never persisted to disk)
-  setPassphrase: (passphrase) => ipcRenderer.invoke('add-set-passphrase', passphrase),
-  clearPassphrase: () => ipcRenderer.invoke('add-clear-passphrase'),
-  submitPassphrase: (passphrase) => ipcRenderer.invoke('add-submit-passphrase', passphrase),
+    setPassphrase: (passphrase) => ipcRenderer.invoke('add-set-passphrase', passphrase),
+    clearPassphrase: () => ipcRenderer.invoke('add-clear-passphrase'),
+    submitPassphrase: (passphrase) => ipcRenderer.invoke('add-submit-passphrase', passphrase),
 
-  // Security - Change GPG key passphrase
-  passwd: (current, newPass) => ipcRenderer.invoke('add-passwd', current, newPass),
+    // Unified Passphrase / DB Key Management
+    loadDbKey: (passphrase) => ipcRenderer.invoke('add-load-db-key', passphrase),
+    initIdentity: (passphrase) => ipcRenderer.invoke('add-init-identity', passphrase),
+    readMessages: (passphrase, json) => ipcRenderer.invoke('add-read-messages', passphrase, json),
+    sendMessage: (passphrase, nullId, message, ttl) => ipcRenderer.invoke('add-send-message', passphrase, nullId, message, ttl),
+    unlockVault: (passphrase) => ipcRenderer.invoke('add-unlock-vault', passphrase),
+    startListener: (passphrase) => ipcRenderer.invoke('add-start-listener', passphrase),
+    registerAllBootstraps: (passphrase) => ipcRenderer.invoke('add-register-all-bootstraps', passphrase),
+    getContacts: (passphrase) => ipcRenderer.invoke('add-get-contacts', passphrase),
+    getAliases: (passphrase) => ipcRenderer.invoke('add-get-aliases', passphrase),
+    publishCert: (passphrase) => ipcRenderer.invoke('add-publish-cert', passphrase),
+    checkIdentityExists: () => ipcRenderer.invoke('add-check-identity-exists'),
 
-  // Vault unlock (TPM PIN or passphrase)
-  unlock: (opts) => ipcRenderer.invoke('add-unlock', opts),
+    // Vault unlock (TPM PIN or passphrase)
+    unlock: (opts) => ipcRenderer.invoke('add-unlock', opts),
 
   // Self-destruct: wipe all identity data (messages, keys, vault)
   selfDestruct: (homeDir) => ipcRenderer.invoke('add-self-destruct', homeDir),

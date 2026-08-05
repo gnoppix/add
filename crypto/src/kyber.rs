@@ -23,6 +23,7 @@ use ml_kem::MlKem768;
 use ml_kem::MlKem1024;
 use ml_kem::TryKeyInit;
 use ml_kem::kem::{Decapsulate, Encapsulate, Kem};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use zeroize::ZeroizeOnDrop;
 
@@ -109,8 +110,12 @@ impl MlKem1024Keypair {
         let enc_bytes = self.enc.to_bytes();
         let dec_bytes = self.dec.to_bytes();
 
-        // Derive AES-256-GCM key from encryption_key using HKDF-SHA256
-        let hk = Hkdf::<Sha256>::new(None, encryption_key);
+        // Generate per-keypair random salt (32 bytes) for HKDF
+        let mut salt = [0u8; 32];
+        OsRng.try_fill(&mut salt).map_err(|e| CryptoError::KeyPersistence(format!("salt gen: {}", e)))?;
+
+        // Derive AES-256-GCM key from encryption_key using HKDF-SHA256 with per-keypair salt
+        let hk = Hkdf::<Sha256>::new(Some(&salt), encryption_key);
         let mut aes_key = [0u8; 32];
         hk.expand(b"add-kyber-key-enc-v1", &mut aes_key)
             .map_err(|_| CryptoError::KeyPersistence("HKDF expand failed".into()))?;
@@ -124,8 +129,9 @@ impl MlKem1024Keypair {
             .encrypt(&nonce, dec_bytes.as_slice())
             .map_err(|e| CryptoError::KeyPersistence(format!("AES-GCM encrypt: {}", e)))?;
 
-        // Assemble: enc_public (plaintext) + nonce + encrypted_dec
+        // Assemble: salt (32 bytes) + enc_public (plaintext) + nonce + encrypted_dec
         let data = serde_json::json!({
+            "salt": hex::encode(salt),
             "enc": hex::encode(enc_bytes),
             "nonce": hex::encode(nonce.as_slice()),
             "dec_encrypted": hex::encode(ciphertext),
@@ -163,6 +169,15 @@ impl MlKem1024Keypair {
             .as_str()
             .ok_or_else(|| CryptoError::KeyPersistence("missing dec_encrypted field".into()))?;
 
+        // Read per-keypair salt (optional for backward compat with old files)
+        let salt = if let Some(salt_hex) = data["salt"].as_str() {
+            hex::decode(salt_hex)
+                .map_err(|e| CryptoError::KeyPersistence(format!("salt hex decode: {}", e)))?
+        } else {
+            // Old file without salt: derive key using empty-salt HKDF (backward compat)
+            vec![0u8; 32]
+        };
+
         let enc_bytes = hex::decode(enc_hex)
             .map_err(|e| CryptoError::KeyPersistence(format!("enc hex decode: {}", e)))?;
         let nonce_bytes = hex::decode(nonce_hex)
@@ -170,8 +185,8 @@ impl MlKem1024Keypair {
         let dec_ciphertext = hex::decode(dec_encrypted_hex)
             .map_err(|e| CryptoError::KeyPersistence(format!("dec_encrypted hex decode: {}", e)))?;
 
-        // Derive AES-256-GCM key from encryption_key using HKDF-SHA256
-        let hk = Hkdf::<Sha256>::new(None, encryption_key);
+        // Derive AES-256-GCM key from encryption_key using HKDF-SHA256 with per-keypair salt
+        let hk = Hkdf::<Sha256>::new(Some(&salt), encryption_key);
         let mut aes_key = [0u8; 32];
         hk.expand(b"add-kyber-key-enc-v1", &mut aes_key)
             .map_err(|_| CryptoError::KeyPersistence("HKDF expand failed".into()))?;

@@ -17,6 +17,7 @@ import { formatBytes } from '../../lib/attachment'
 import { attachmentDataUrl, isKnownSticker } from '../../lib/attachment'
 import { EmojiImg, stickerEmojis } from '../common/EmojiImg'
 import { StickerImg } from '../common/StickerImg'
+import { VoiceMessageBubble } from './VoiceMessageBubble'
 
 interface MessageBubbleProps {
   message: Message
@@ -151,8 +152,17 @@ function MessageBubble({ message, isOutgoing }: MessageBubbleProps) {
             </button>
           )}
 
+          {/* Voice messages: playback controls with waveform */}
+          {att && att.mime.startsWith('audio/') && (
+            <VoiceMessageBubble
+              data={att.data}
+              mime={att.mime}
+              isOutgoing={isOutgoing}
+            />
+          )}
+
           {/* Non-image attachments: download button */}
-          {att && !isImage && !isKnownStickerAttachment && (
+          {att && !isImage && !isKnownStickerAttachment && !att.mime.startsWith('audio/') && (
             <button
               type="button"
               onClick={() => downloadAttachment(att!.name, att!.mime, att!.data)}

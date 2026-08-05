@@ -28,11 +28,17 @@ use crate::pin_cache::bootstrap_pin_check;
 //  Trusted domains                                                   //
 // ------------------------------------------------------------------ //
 
-/// SECURITY FIX (L5): Removed fake TRUSTED_CA_FINGERPRINTS placeholder
-/// that contained a non-existent fingerprint with a sequential hex pattern.
-/// CA pinning is handled via the TOFU bootstrap_pin_cache.json mechanism,
-/// not a hardcoded list of CA fingerprints.
-const TRUSTED_DOMAINS: &[&str] = &["*.gnoppix.org", "*.gnoppix.com"];
+/// SECURITY FIX (L2): Replace broad wildcard with specific hostnames.
+/// Prevents a cert for any subdomain (e.g., `random.gnoppix.org`) from
+/// being accepted when only specific bootstrap/relay hosts are expected.
+const TRUSTED_DOMAINS: &[&str] = &[
+    "bootstrap-eu.gnoppix.org",
+    "bootstrap-us.gnoppix.org",
+    "bootstrap-asia.gnoppix.org",
+    "relay-eu.gnoppix.org",
+    "relay-us.gnoppix.org",
+    "relay-asia.gnoppix.org",
+];
 
 // ------------------------------------------------------------------ //
 //  Domain matching                                                   //
@@ -291,7 +297,7 @@ mod tests {
     #[test]
     fn test_cert_has_trusted_domain_logic() {
         let info = CertInfo {
-            subject_alt_names: vec!["bootstrap.gnoppix.org".to_string()],
+            subject_alt_names: vec!["bootstrap-eu.gnoppix.org".to_string()],
             subject_cn: None,
             issuer_cn: None,
             issuer_org: None,

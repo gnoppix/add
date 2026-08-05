@@ -13,6 +13,7 @@
 /** Active chat header with contact info and action menu */
 import React, { useState } from 'react'
 import { useChatStore } from '../../store/chatStore'
+import { CallButton } from './CallButton'
 
 interface SafetyNumberModalProps {
   nullId: string
@@ -106,6 +107,7 @@ function ChatHeader() {
         </div>
 
         <div className="relative z-50">
+          <CallButton peerId={activeConversation.id} />
           <button
             onClick={() => setShowMenu(!showMenu)}
             className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 dark:text-gray-400 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800"

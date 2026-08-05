@@ -20,12 +20,10 @@ pub fn now_unix() -> f64 {
         .as_secs_f64()
 }
 
-/// Generate a random 16-char hex string for message IDs.
+/// Generate a random 32-char hex string for message IDs (128 bits of entropy).
+/// Re-exported from add_protocol::envelope to avoid duplicate implementations.
 pub fn uuid_hex() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let n: u128 = rng.r#gen();
-    format!("{:032x}", n)[..16].to_string()
+    add_protocol::envelope::uuid_hex()
 }
 
 /// Generate a random hex string of the given byte length.

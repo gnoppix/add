@@ -71,6 +71,9 @@ pub struct DhtNodeRuntime {
     pub store: DhtStore,
     pub config: NodeConfig,
     pub conn_limiter: RateLimiter,
+    /// SECURITY FIX (M5): Per-publisher rate limiter for DHT PUT operations.
+    /// Prevents a single bot from flooding the DHT store with log entries.
+    pub put_limiter: RateLimiter,
     /// SECURITY FIX (M7): Per-IP rate limiter for GET operations.
     /// Prevents key enumeration / scanning attacks.
     pub get_limiter: RateLimiter,
@@ -110,12 +113,17 @@ impl DhtNodeRuntime {
         let get_limiter = RateLimiter::new(30, 60.0);
         let bot_logger = BotLogger::new(None);
 
+        // SECURITY FIX (M5): Per-publisher rate limiter for DHT PUT operations.
+        // Prevents a single bot from flooding the DHT store with log entries.
+        let put_limiter = RateLimiter::new(100, 60.0);
+
         Ok(Self {
             node,
             store,
             config,
             conn_limiter,
             get_limiter,
+            put_limiter,
             pir_registry: Arc::new(RwLock::new(PirRegistry::new())),
             stealth_mode: false,
             seen_nonces: Arc::new(RwLock::new(HashMap::new())),
@@ -242,8 +250,10 @@ impl DhtNodeRuntime {
             let store_clone = store.clone();
             let bot_clone = bot.clone();
             let nonces_clone = seen_nonces.clone();
+            let stealth = self.config.stealth_mode;
             let tls = tls_acceptor.clone();
             let get_lim = get_limiter.clone();
+            let put_lim = self.put_limiter.clone();
             let pir_reg = pir_registry.clone();
             let node_fingerprint = self.node.fingerprint.clone();
 
@@ -257,6 +267,7 @@ impl DhtNodeRuntime {
                     bot_clone,
                     tls,
                     get_lim,
+                    put_lim,
                     pir_reg,
                     &node_fingerprint,
                 )
@@ -278,6 +289,7 @@ impl DhtNodeRuntime {
         bot_logger: BotLogger,
         tls_acceptor: Option<DhtTlsAcceptor>,
         get_limiter: RateLimiter,
+        put_limiter: RateLimiter,
         pir_registry: Arc<RwLock<PirRegistry>>,
         node_fingerprint: &str,
     ) -> DhtResult<()> {
@@ -381,6 +393,7 @@ impl DhtNodeRuntime {
                         &bot_logger,
                         &peer_addr,
                         node_fingerprint,
+                        put_limiter.clone(),
                     )
                     .await;
                 }
@@ -460,9 +473,10 @@ impl DhtNodeRuntime {
         store: &DhtStore,
         _stealth_mode: bool,
         seen_nonces: &RwLock<HashMap<String, HashSet<i64>>>,
-        _bot_logger: &BotLogger,
-        _peer_addr: &SocketAddr,
-        _node_fingerprint: &str,
+        bot_logger: &BotLogger,
+        peer_addr: &SocketAddr,
+        node_fingerprint: &str,
+        put_limiter: RateLimiter,
     ) {
         let key = env.payload_str("key").unwrap_or("").to_string();
         let value_b64 = env.payload_str("value").unwrap_or("").to_string();
@@ -474,6 +488,24 @@ impl DhtNodeRuntime {
             .min(constants::STORE_TTL);
         let nonce = env.payload_i64("nonce").unwrap_or(0);
         let sig = env.sig.clone();
+
+        // SECURITY FIX (M5): Per-publisher rate limiting for PUT operations.
+        // Limits each publisher_fp to 100 PUTs per 60-second window, preventing
+        // a single bot from flooding the DHT store with log entries.
+        let publisher_fp = env.payload_str("publisher_fp").unwrap_or("").to_string();
+        if !put_limiter.allow(&publisher_fp).await {
+            let resp = build_dht_error(&key, "PUT rate limited (per-publisher)");
+            let _ = ws_tx
+                .send(Message::Text(resp.to_json().unwrap_or_default().into()))
+                .await;
+            bot_logger.log(
+                &peer_addr.ip().to_string(),
+                peer_addr.port(),
+                "PUT_RATE_LIMITED",
+                Some(&format!("publisher={}", publisher_fp)),
+            );
+            return;
+        }
 
         if !validate_null_id(&key) {
             let resp = build_dht_error(&key, "invalid key format");
@@ -549,13 +581,9 @@ impl DhtNodeRuntime {
         // Verify proof-of-work
         // SECURITY FIX (M11): Use the record publisher's fingerprint as the
         // per-node secret so client and server compute an identical salt.
-        // The client (which cannot know the server's fingerprint) salts with
-        // its own `publisher_fp`; the server must therefore validate with the
-        // same `publisher_fp` carried in the envelope, NOT its own fingerprint.
         // Identity registration (seq==0) uses difficulty 8 (fast, one-time).
         // Updates/re-registration (seq>0) use full DHT_POW_DIFFICULTY (16).
         // addr-record keys use ADDR_POW_DIFFICULTY (8).
-        let publisher_fp = env.payload_str("publisher_fp").unwrap_or("").to_string();
         let is_addr_record = key.starts_with("addr:");
         let pow_difficulty = if is_addr_record {
             constants::ADDR_POW_DIFFICULTY

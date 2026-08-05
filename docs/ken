@@ -1,0 +1,60 @@
+To understand **Hybrid KEM + KCI binding**, it helps to break it down into two distinct cryptographic concepts that, when combined, create a highly secure, quantum-resistant communication channel.
+
+Here is the breakdown of what these terms mean and why they are critical for modern secure messengers.
+
+---
+
+## 1. What is a Hybrid KEM?
+
+A **KEM** (Key Encapsulation Mechanism) is a cryptographic technique used to securely transfer a symmetric encryption key across a public channel using asymmetric (public/private) keys.
+
+A **Hybrid KEM** combines two different mathematical approaches to generate that shared key:
+
+1. **Classical Cryptography:** Usually an Elliptic Curve Diffie-Hellman (ECDH), like X25519. We know this is secure against traditional computers, having withstood decades of cryptanalysis.
+2. **Post-Quantum Cryptography (PQC):** A newer algorithm, like ML-KEM (formerly Kyber), designed to withstand attacks from future quantum computers.
+
+**Why use a hybrid?** It is the ultimate "belt and suspenders" approach to security.
+
+* If a flaw is discovered in the new, relatively untested PQC mathematics, the classical ECDH layer still protects the data.
+* If a quantum computer comes online tomorrow and shatters ECDH, the PQC layer protects the data.
+
+To read the message, an attacker must simultaneously break *both* cryptographic schemes.
+
+---
+
+## 2. The Threat: Key Compromise Impersonation (KCI)
+
+To understand KCI binding, you first have to understand the attack it prevents.
+
+In a standard security compromise, if an attacker (Eve) steals Alice's long-term private key, Eve can obviously impersonate Alice and send messages to Bob. That is expected.
+
+However, **Key Compromise Impersonation (KCI)** is a much more insidious attack. If Eve steals Alice's private key, in many standard protocols, Eve can use that key to impersonate *Bob* when talking to *Alice*.
+
+* Alice thinks she is receiving a secure, authenticated message from Bob.
+* In reality, Eve is using Alice's own compromised key material to forge a message that looks like it came from Bob.
+
+Many of the new Post-Quantum KEMs do not inherently protect against this out of the box, which is why explicit binding is required.
+
+---
+
+## 3. The Solution: KCI Binding
+
+**KCI Binding** is a cryptographic method of explicitly tying the identities of the sender and receiver into the key exchange so that an attacker cannot swap out who is supposedly talking to whom.
+
+Looking at the formula you included in your draft:
+
+$$\text{ciphertext} = \text{KEM.encaps}(pk) \parallel \text{MAC}(k, \text{"KCI"} \parallel identity_A \parallel identity_B)$$
+
+Here is exactly what this does:
+
+* **`KEM.encaps(pk)`**: This is the standard payload containing the encapsulated key sent to the public key (`pk`).
+* **`MAC(k, ...)`**: A Message Authentication Code. This acts like a cryptographic wax seal. It uses the newly derived symmetric key (`k`) to sign a specific payload.
+* **`"KCI" || identity_A || identity_B`**: The payload being signed explicitly includes a label ("KCI") and the exact digital identities of both Alice and Bob.
+
+> **Key insight:** By forcing both parties to verify a MAC that explicitly lists "Alice" and "Bob," the protocol proves that the derived key `k` is exclusively meant for communication between those two exact identities.
+
+If Eve has stolen Alice's key and tries to impersonate Bob, she will fail. To generate a valid MAC that Alice will accept as coming from Bob, Eve would also need *Bob's* private key material to properly negotiate the underlying math of the key exchange. Because the identities are mathematically bound to the ciphertext, Eve cannot trick Alice into talking to a phantom.
+
+### Putting it Together
+
+A **Hybrid KEM + KCI Binding** means you are establishing a session key using both classical and post-quantum math to future-proof the encryption, and you are explicitly stamping that key exchange with the identities of the sender and receiver so that stolen keys cannot be used to spoof incoming messages.

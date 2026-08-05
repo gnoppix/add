@@ -34,10 +34,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::CryptoError;
 
-/// Cover traffic packet size (padded to match real message size).
-/// Real messages: ephemeral_enc_key (1568) + kyber_ct (1568) + nonce (12) + aes_ct (~64-512)
-/// We pad cover traffic to the median real message size: 3200 bytes
-pub const COVER_PACKET_SIZE: usize = 3200;
+/// Cover traffic packet size range for variable padding.
+/// Real messages vary in size (ephemeral_enc_key 1568 + kyber_ct 1568 + nonce 12 + aes_ct ~64-512).
+/// We pad cover traffic to a random size in [MIN_COVER_PACKET_SIZE, MAX_COVER_PACKET_SIZE]
+/// with a distribution matching real message sizes.
+pub const MIN_COVER_PACKET_SIZE: usize = 2048;
+pub const MAX_COVER_PACKET_SIZE: usize = 4096;
 
 /// Cover traffic session tag prefix (first byte of all cover packets)
 pub const COVER_TAG_PREFIX: u8 = 0xC0;
@@ -122,7 +124,12 @@ impl CbnpSession {
     /// exists, transmission is gated/off, and the metadata-resistance claim is
     /// qualified rather than overstated.
     pub fn generate_cover_packet(&self) -> Result<Vec<u8>, CryptoError> {
-        let mut packet = vec![0u8; COVER_PACKET_SIZE];
+        // SECURITY FIX (M4): Variable packet size to prevent traffic analysis
+        // fingerprinting. Real messages vary in size, so cover packets now
+        // randomly pick a size between MIN and MAX to match the distribution.
+        let mut rng = rand::thread_rng();
+        let packet_size = rng.gen_range(MIN_COVER_PACKET_SIZE..=MAX_COVER_PACKET_SIZE);
+        let mut packet = vec![0u8; packet_size];
 
         // First byte is the tag prefix (recipient uses this to detect cover)
         packet[0] = COVER_TAG_PREFIX;
@@ -237,7 +244,10 @@ impl CbnpSession {
 
     /// Generate a coordinated cover packet with timing metadata
     pub fn generate_coordinated_packet(&self, slot: u64) -> Result<Vec<u8>, CryptoError> {
-        let mut packet = vec![0u8; COVER_PACKET_SIZE];
+        // SECURITY FIX (M4): Variable packet size for coordinated packets too.
+        let mut rng = rand::thread_rng();
+        let packet_size = rng.gen_range(MIN_COVER_PACKET_SIZE..=MAX_COVER_PACKET_SIZE);
+        let mut packet = vec![0u8; packet_size];
 
         // First byte: tag prefix (cover traffic indicator)
         packet[0] = COVER_TAG_PREFIX;
@@ -290,7 +300,9 @@ mod tests {
         let config = CbnpConfig::default();
         let session = CbnpSession::new(config);
         let packet = session.generate_cover_packet().unwrap();
-        assert_eq!(packet.len(), COVER_PACKET_SIZE);
+        // Variable size: should be within [MIN, MAX]
+        assert!(packet.len() >= MIN_COVER_PACKET_SIZE);
+        assert!(packet.len() <= MAX_COVER_PACKET_SIZE);
         assert_eq!(packet[0], COVER_TAG_PREFIX);
     }
 
@@ -350,7 +362,9 @@ mod tests {
         let packets = generate_cover_burst(&session, 3).unwrap();
         assert_eq!(packets.len(), 3);
         for p in &packets {
-            assert_eq!(p.len(), COVER_PACKET_SIZE);
+            // Variable size: each packet should be within bounds
+            assert!(p.len() >= MIN_COVER_PACKET_SIZE);
+            assert!(p.len() <= MAX_COVER_PACKET_SIZE);
             assert_eq!(p[0], COVER_TAG_PREFIX);
         }
     }
@@ -390,7 +404,9 @@ mod tests {
         let config = CbnpConfig::default();
         let session = CbnpSession::new(config);
         let packet = session.generate_coordinated_packet(42).unwrap();
-        assert_eq!(packet.len(), COVER_PACKET_SIZE);
+        // Variable size: should be within [MIN, MAX]
+        assert!(packet.len() >= MIN_COVER_PACKET_SIZE);
+        assert!(packet.len() <= MAX_COVER_PACKET_SIZE);
         assert_eq!(packet[0], COVER_TAG_PREFIX);
         // Check slot number is embedded
         let slot_bytes = &packet[1..9];

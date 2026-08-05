@@ -191,6 +191,18 @@ pub fn blake2b_8_hex(data: &str) -> String {
     hex::encode(result)
 }
 
+/// Compute BLAKE2b-16 hex digest (128-bit entropy).
+pub fn blake2b_16_hex(data: &str) -> String {
+    use blake2::Blake2bVar;
+    use blake2::digest::{Update, VariableOutput};
+
+    let mut hasher = Blake2bVar::new(16).expect("blake2b with 16 bytes is valid");
+    Update::update(&mut hasher, data.as_bytes());
+    let mut result = [0u8; 16];
+    let _ = hasher.finalize_variable(&mut result);
+    hex::encode(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

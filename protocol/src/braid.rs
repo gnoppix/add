@@ -223,11 +223,7 @@ pub fn build_braid_chunk_msg(chunk: &BraidChunk) -> WireEnvelope {
 
 /// Wire-format helper functions.
 fn uuid_hex() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let mut bytes = [0u8; 16];
-    rng.fill(&mut bytes);
-    hex::encode(bytes)
+    crate::envelope::uuid_hex()
 }
 
 fn now_unix() -> f64 {

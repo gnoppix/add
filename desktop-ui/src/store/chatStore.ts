@@ -40,6 +40,7 @@ interface ChatStore {
   myFingerprint: string | null
   isAuthenticated: boolean
   _initializing: boolean
+  passphrase: string | null  // Unified passphrase for DB key + GPG unlock
 
   setActiveConversation: (id: string | null) => void
   addConversation: (conversation: Conversation) => void
@@ -59,7 +60,7 @@ interface ChatStore {
   // Presence / listener control (shared so the avatar LED and sidebar agree)
   listenRunning: boolean
   checkListenStatus: () => Promise<void>
-  startListen: () => Promise<void>
+  startListen: (passphrase?: string) => Promise<void>
   stopListen: () => Promise<void>
   toggleListen: () => Promise<void>
   _lastToggleAt?: number
@@ -70,7 +71,10 @@ interface ChatStore {
   submitPassphrase: (passphrase: string) => void
   clearPassphrase: () => void
 
-  initialize: () => Promise<void>
+  // Unified passphrase flow
+  loadDbKey: (passphrase: string) => Promise<{ success: boolean; error?: string; identity?: { id: string; fingerprint: string } }>
+
+  initialize: (passphrase?: string) => Promise<void>
   loadContacts: () => Promise<void>
   sendMessage: (content: string, ttl?: string) => Promise<void>
 
@@ -97,6 +101,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   myFingerprint: null,
   isAuthenticated: false,
   _initializing: false,
+  passphrase: null,  // Unified passphrase for DB key + GPG unlock
   listenRunning: false,
   _lastToggleAt: 0,
 
@@ -167,7 +172,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   getFilteredConversations: () => {
     const { conversations, searchQuery } = get()
     if (!searchQuery) return conversations
-    return conversations.filter(conv => conv.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    return conversations.filter(conv =>
+      conv.name.toLowerCase().includes(searchQuery.toLowerCase())
+    )
   },
 
   updateContactOnlineStatus: (nullId: string, isOnline: boolean) =>
@@ -185,49 +192,54 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })),
 
   addIncomingMessage: (conversationId: string, content: string) => {
-    // An incoming message may carry a file-attachment envelope.
-    const parsed = parseAttachment(content)
-    const attachment = parsed?.meta
-    const body = attachment ? '' : content
-    // Dedupe key: for attachments, fold in the name+size so two different
-    // files from the same sender are not treated as one repeat.
-    const dedupeContent = attachment ? `\u0000${attachment.name}\u0000${attachment.size}` : body
-    const key = incomingKey(conversationId, dedupeContent)
-    if (seenIncoming.has(key)) return
-    seenIncoming.add(key)
+      console.log('[chatStore] >>>>>>>>>>>>>>> addIncomingMessage called:', { conversationId, content })
+      // An incoming message may carry a file-attachment envelope.
+      const parsed = parseAttachment(content)
+      const attachment = parsed?.meta
+      const body = attachment ? '' : content
+      // Dedupe key: for attachments, fold in the name+size so two different
+      // files from the same sender are not treated as one repeat.
+      const dedupeContent = attachment ? `\u0000${attachment.name}\u0000${attachment.size}` : body
+      const key = incomingKey(conversationId, dedupeContent)
+      if (seenIncoming.has(key)) {
+        console.log('[chatStore] >>>>>>>>>>>>>>> addIncomingMessage: duplicate, ignoring')
+        return
+      }
+      seenIncoming.add(key)
 
-    set(state => {
-      const existingMessages = state.messages[conversationId] || []
-      const message: Message = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        content: body,
-        timestamp: new Date(),
-        senderId: conversationId, // received: sender is the contact's Null ID
-        status: 'read',
-        attachment,
-      }
-      const isActive = state.activeConversationId === conversationId
-      return {
-        messages: {
-          ...state.messages,
-          [conversationId]: [...existingMessages, message],
-        },
-        conversations: state.conversations.map(conv =>
-          conv.id === conversationId
-            ? {
-                ...conv,
-                lastMessage: attachment
-                  ? `${attachment.mime.startsWith('image/') ? '📷' : '📎'} ${attachment.name}`
-                  : body,
-                lastMessageTimestamp: message.timestamp,
-                unreadCount: isActive ? 0 : conv.unreadCount + 1,
-              }
-            : conv
-        ),
-      }
-    })
-    get().persist()
-  },
+      set(state => {
+        const existingMessages = state.messages[conversationId] || []
+        const message: Message = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          content: body,
+          timestamp: new Date(),
+          senderId: conversationId, // received: sender is the contact's Null ID
+          status: 'read',
+          attachment,
+        }
+        const isActive = state.activeConversationId === conversationId
+        return {
+          messages: {
+            ...state.messages,
+            [conversationId]: [...existingMessages, message],
+          },
+          conversations: state.conversations.map(conv =>
+            conv.id === conversationId
+              ? {
+                  ...conv,
+                  lastMessage: attachment
+                    ? `${attachment.mime.startsWith('image/') ? '📷' : '📎'} ${attachment.name}`
+                    : body,
+                  lastMessageTimestamp: message.timestamp,
+                  unreadCount: isActive ? 0 : conv.unreadCount + 1,
+                }
+              : conv
+          ),
+        }
+      })
+      get().persist()
+      console.log('[chatStore] >>>>>>>>>>>>>>> addIncomingMessage: message added to store')
+    },
 
   checkContactsOnlineStatus: async () => {
     const api = getEvaAPI()
@@ -357,47 +369,68 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  initialize: async () => {
-    console.log('[chatStore] initialize() called')
-    // Guard against re-entrant / concurrent calls (App.tsx triggers it both
-    // from onUnlock and the 'ready' useEffect, producing a double-invoke).
-    if (get()._initializing) {
-      console.log('[chatStore] initialize() already in progress — skipping duplicate')
-      return
-    }
-    set({ _initializing: true })
+  // Unified passphrase: load DB key and store passphrase for GPG operations
+  loadDbKey: async (passphrase: string) => {
     const api = getEvaAPI()
     if (!api) {
-      console.warn('[chatStore] Add API not available (running in browser?)')
-      return
+      return { success: false, error: 'Add API not available' }
     }
-    // `getMyId()` can transiently throw "Another add instance is already
-    // running" if a stale CLI process still holds the singleton pid lock
-    // (e.g. an orphaned listener from a crashed run, or a concurrent command).
-    // Retry a few times with a short backoff before giving up — a lock error
-    // must NEVER be confused with "no identity" (which would wrongly offer to
-    // wipe and recreate the vault via createIdentity).
-    const readIdentity = async (): Promise<{ id: string; fingerprint: string } | null> => {
-      for (let attempt = 1; attempt <= 5; attempt++) {
-        try {
-          console.log(`[chatStore] readIdentity attempt ${attempt}`)
-          return await api.getMyId()
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          if (msg.includes('already running') && attempt < 5) {
-            console.warn(`[chatStore] getMyId blocked by lock (attempt ${attempt}/5), retrying...`)
-            await new Promise(r => setTimeout(r, 600))
-            continue
-          }
-          throw err
+
+    try {
+      // Load the DB encryption key with the passphrase
+      const result = await api.loadDbKey(passphrase)
+      if (result.success) {
+        // Store passphrase for GPG operations (send, etc.)
+        set({ passphrase })
+        // Also store in main process for background listener
+        await api.setPassphrase(passphrase)
+        return { 
+          success: true, 
+          identity: result.identity 
         }
       }
-      throw new Error('getMyId: exceeded retry attempts')
+      return { success: false, error: result.error }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { success: false, error: msg }
+    }
+  },
+
+  initialize: async (passphrase?: string) => {
+      console.log('[chatStore] >>> initialize() called, passphrase provided:', passphrase ? 'YES' : 'NO')
+      // Guard against re-entrant / concurrent calls (App.tsx triggers it both
+      // from onUnlock and the 'ready' useEffect, producing a double-invoke).
+      if (get()._initializing) {
+        console.log('[chatStore] initialize() already in progress — skipping duplicate')
+        return
+      }
+      set({ _initializing: true })
+      const api = getEvaAPI()
+      if (!api) {
+        console.warn('[chatStore] Add API not available (running in browser?)')
+        return
+      }
+
+      // Use provided passphrase or fall back to stored state
+      const storedPassphrase = passphrase || get().passphrase
+      console.log('[chatStore] >>> initialize: storedPassphrase =', storedPassphrase ? 'SET (len=' + storedPassphrase.length + ')' : 'NULL')
+      if (!storedPassphrase) {
+        console.error('[chatStore] >>> No passphrase stored — cannot initialize')
+        set({ isAuthenticated: false, _initializing: false })
+        return
+      }
+
+    // First, load the DB encryption key with the passphrase
+    const dbKeyResult = await get().loadDbKey(storedPassphrase)
+    if (!dbKeyResult.success) {
+      console.error('[chatStore] Failed to load DB key:', dbKeyResult.error)
+      set({ isAuthenticated: false, _initializing: false })
+      return
     }
 
     try {
       console.log('[chatStore] reading identity...')
-      const identity = await readIdentity()
+      const identity = dbKeyResult.identity || await api.getMyId()
       if (!identity?.id) {
         // Genuinely no identity — let the UI prompt to create one.
         console.log('[chatStore] no identity found')
@@ -407,7 +440,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       console.log('[chatStore] identity found:', identity.id)
       set({ myId: identity.id, myFingerprint: identity.fingerprint, isAuthenticated: true })
 
-      get().hydrate()
+      console.log('[chatStore] calling hydrate...')
+      try {
+        get().hydrate()
+        console.log('[chatStore] hydrate completed')
+      } catch (hydrateErr) {
+        console.error('[chatStore] hydrate failed:', hydrateErr)
+        throw hydrateErr
+      }
 
       // Register with all known bootstrap nodes in the background (fire-and-forget).
       // This refreshes our presence/cert + our freshly-advertised listener
@@ -434,8 +474,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // inbound messages arrive without requiring a manual toggle. The listener
       // is started LAST so it can never wedge the identity/history load above.
       try {
-        await api.startListen()
-        set({ listenRunning: true })
+        // Pass the stored passphrase for background listener decryption
+        const storedPassphrase = get().passphrase
+        await get().startListen(storedPassphrase || undefined)
         console.log('[chatStore] Auto-started P2P listener on unlock')
       } catch (err) {
         console.error('[chatStore] Failed to auto-start listener:', err)
@@ -452,7 +493,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } finally {
       set({ _initializing: false })
     }
-    },
+  },
 
   loadContacts: async () => {
     const api = getEvaAPI()
@@ -486,7 +527,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   sendMessage: async (content: string, ttl?: string) => {
-    const { activeConversationId, addMessage } = get()
+    const { activeConversationId, addMessage, passphrase, updateMessageStatus } = get()
     const api = getEvaAPI()
     if (!activeConversationId || !api) return
 
@@ -498,8 +539,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const body = parsed?.meta ? '' : content
 
     // Add message immediately to chat display (will show as sending)
+    const messageId = Date.now().toString()
     const message: Message = {
-      id: Date.now().toString(),
+      id: messageId,
       content: body,
       timestamp: new Date(),
       senderId: 'me',
@@ -510,9 +552,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     addMessage(activeConversationId, message)
 
     try {
-      await api.send(activeConversationId, content, ttl)
+      // Pass the passphrase for sending (GPG signing/encryption)
+      if (passphrase) {
+        await api.sendMessage(passphrase, activeConversationId, content, ttl)
+      } else {
+        await api.send(activeConversationId, content, ttl)
+      }
+      // Update status to sent on success
+      updateMessageStatus(activeConversationId, messageId, 'sent')
     } catch (error) {
       console.error('Failed to send message:', error)
+      updateMessageStatus(activeConversationId, messageId, 'error')
     }
   },
 
@@ -539,11 +589,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  startListen: async () => {
+  startListen: async (passphrase?: string) => {
     const api = getEvaAPI()
     if (!api) return
     try {
-      await api.startListen()
+      // Pass passphrase for background listener decryption
+      if (passphrase) {
+        await api.startListen(passphrase)
+      } else {
+        await api.startListen()
+      }
       set({ listenRunning: true })
     } catch (err) {
       console.error('Start listen failed:', err)
@@ -578,28 +633,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   // Passphrase is stored in memory via main process (never persisted to disk)
   setPassphrase: (passphrase: string) => {
+    console.log('[chatStore] >>> setPassphrase called, length:', passphrase?.length)
     const api = getEvaAPI()
     if (api) {
       void api.setPassphrase(passphrase)
     }
+    set({ passphrase })
   },
   storeSetPassphrase: (passphrase: string) => {
+    console.log('[chatStore] >>> storeSetPassphrase called, length:', passphrase?.length)
     const api = getEvaAPI()
     if (api) {
       void api.setPassphrase(passphrase)
     }
+    set({ passphrase })
   },
   submitPassphrase: (passphrase: string) => {
     const api = getEvaAPI()
-    if (api) {
-      return api.submitPassphrase(passphrase)
-    }
-    return Promise.reject(new Error('IPC API not available'))
+    if (!api) return Promise.reject(new Error('IPC API not available'))
+    return api.submitPassphrase(passphrase)
   },
   clearPassphrase: () => {
     const api = getEvaAPI()
     if (api) {
       void api.clearPassphrase()
     }
+    set({ passphrase: null })
   },
 }))

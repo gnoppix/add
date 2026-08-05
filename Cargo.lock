@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "add-bootstrap"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-crypto",
  "add-dht-core",
@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "add-bot"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-crypto",
  "add-crypto-pq",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "add-client"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-crypto",
  "add-crypto-pq",
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "add-crypto"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-protocol",
  "aes-gcm",
@@ -137,23 +137,28 @@ dependencies = [
 
 [[package]]
 name = "add-crypto-pq"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-crypto",
+ "aes-gcm",
  "base64 0.22.1",
  "hex",
+ "hkdf 0.12.4",
  "ml-dsa",
  "ml-kem",
  "rand 0.8.7",
  "rand_core 0.6.4",
  "sha2 0.10.9",
+ "sha3 0.10.9",
  "thiserror 1.0.69",
+ "tokio",
+ "x25519-dalek",
  "zeroize",
 ]
 
 [[package]]
 name = "add-crypto-utils"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-protocol",
  "dirs 5.0.1",
@@ -166,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "add-dht-core"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-crypto",
  "add-crypto-pq",
@@ -200,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "add-p2p"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-crypto",
  "add-protocol",
@@ -220,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "add-protocol"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "argon2",
  "blake2",
@@ -236,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "add-relay"
-version = "0.3.31"
+version = "0.3.33"
 dependencies = [
  "add-crypto",
  "add-crypto-pq",

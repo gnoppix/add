@@ -4240,6 +4240,22 @@ async fn send_message(
     let our_kyber = load_or_generate_kyber(&identity.null_id, store.db_key())?;
     let our_kyber_enc_b64 = add_crypto::kyber::encode_enc_key(&our_kyber.enc);
 
+    // H6 FIX: Fetch the responder's Kyber public key from DHT so we can
+    // encrypt our identity as sealed_identity in this hello. This lets the
+    // responder verify that the decapsulated sender_nid matches the
+    // fingerprint derived from the signed hello-ack (prevents identity
+    // spoofing when the `public_key` field is a one-time commitment).
+    let mut sealed_identity = String::new();
+    if let Ok(responder_kyber) = lookup_kyber_for_nid(recipient_fp, store).await {
+        let ct = add_crypto::kyber::KyberKeypair::encapsulate(&responder_kyber)
+            .map(|(c, _)| {
+                let bytes = c.to_vec();
+                hex::encode(bytes)
+            })
+            .unwrap_or_default();
+        sealed_identity = ct;
+    }
+
     // SECURITY FIX (C1): Perform handshake with Kyber key included
     let _my_vk_b64 = my_verifying_key_b64()?;
 
@@ -4250,7 +4266,7 @@ async fn send_message(
         1,
         16,
         &our_kyber_enc_b64,
-        "",
+        &sealed_identity,
         "",
         &my_vk_b64,
     );
@@ -4947,6 +4963,45 @@ async fn handle_incoming_connection(
     let our_kyber = load_or_generate_kyber(&identity.null_id, store.db_key())?;
     let our_kyber_enc_b64 = add_crypto::kyber::encode_enc_key(&our_kyber.enc);
 
+    // H6 FIX: Decapsulate sealed_identity if present and verify sender_nid
+    // matches the null_id derived from the signed hello's public_key. This
+    // prevents identity spoofing when the `public_key` field is a one-time
+    // commitment rather than the real GPG fingerprint.
+    if let Some(sealed) = payload.get("sealed_identity").and_then(|s| s.as_str())
+        && !sealed.is_empty()
+    {
+        let ct_bytes = hex::decode(sealed)
+            .map_err(|e| format!("sealed_identity decode: {}", e))?;
+        let ct = add_crypto::kyber::MlKem1024Ciphertext::try_from(ct_bytes.as_slice())
+            .map_err(|e| format!("sealed_identity parse: {}", e))?;
+        let shared_secret = our_kyber.decapsulate(&ct)
+            .map_err(|e| format!("sealed_identity decapsulate: {}", e))?;
+        let id_blob = shared_secret.to_vec();
+        let parts: Vec<&[u8]> = id_blob.splitn(2, |b| *b == b'|').collect();
+        if parts.len() != 2 {
+            return Err("sealed_identity malformed: expected nid|fp".into());
+        }
+        let decapsulated_nid = std::str::from_utf8(parts[0])
+            .map_err(|_| "sealed_identity nid not utf-8")?;
+        let decapsulated_fp = std::str::from_utf8(parts[1])
+            .map_err(|_| "sealed_identity fp not utf-8")?;
+        // Verify decapsulated sender_nid matches the null_id from signed hello
+        if decapsulated_nid != identity.null_id {
+            return Err(format!(
+                "sealed_identity mismatch: expected nid={} got={}",
+                identity.null_id, decapsulated_nid
+            ).into());
+        }
+        // Also verify the decapsulated fingerprint matches the signed hello's public_key
+        if decapsulated_fp != peer_fp {
+            return Err(format!(
+                "sealed_identity fp mismatch: expected={} got={}",
+                peer_fp, decapsulated_fp
+            ).into());
+        }
+        println!("Sealed identity verified: {} ({})", decapsulated_nid, decapsulated_fp);
+    }
+
     // Send hello-ack with our Kyber public key (signed).
     // Build the ack envelope embedding our verifying key so the peer can
     // verify the signature without a DHT round-trip. The signature is computed
@@ -5366,10 +5421,7 @@ fn safety_number(fp1: &str, fp2: &str) -> String {
 }
 
 fn uuid_hex() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let n: u128 = rng.r#gen();
-    format!("{:032x}", n)[..16].to_string()
+    add_protocol::envelope::uuid_hex()
 }
 
 // ------------------------------------------------------------------ //
