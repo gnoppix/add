@@ -1,5 +1,18 @@
 # Add
 
+Be sure to use the latest binary, >= 0.4.4, which is currently available only to Gnoppix Linux members. Definitely, any versions older than 0.4 do not work, nor does the desktop UI. I'm waiting until someone contributes to the codebase, in whatever form.
+
+See also : https://forum.gnoppix.org/t/gnoppix-26-8-member-and-gnoppix-add-messenger/6950
+
+Check the CHANGELOG.md for current status.
+
+## Do not use it in production. 
+
+## Do not use it in production.
+
+## Do not use it in production.
+
+## Do not use it in production.
 
 **Post Quantum Encryption, decentralized modern free opensource messaging that needs no phone, no email, and no personal information, no company in between.**
 

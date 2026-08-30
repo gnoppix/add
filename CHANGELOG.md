@@ -1,5 +1,243 @@
 # Changelog
 
+## 0.4.4 — Voice Message Recording & Playback Fixes
+
+### Desktop UI Voice Messages
+- **Fix microphone permission** (`desktop-ui/electron/main.js`): Allow microphone/media permissions in `hardenWebContents()` so `navigator.mediaDevices.getUserMedia()` works for voice recording. Previously CSP blocked all permissions including microphone.
+- **Fix voice message playback** (`desktop-ui/src/components/chat/VoiceMessageBubble.tsx`): Changed `audioUrl` from `useRef` to `useState` to trigger re-renders when blob URL is created. Added `VoiceNotesPlaybackProvider` wrapper in `App.tsx`.
+- **Fix voice recording flow** (`desktop-ui/src/services/voiceRecorder.ts`, `VoiceRecordingComposer.tsx`): Fixed `stop()` to call `onComplete` callback without double-firing. Added `warmup()` on composer mount for better UX. Simplified stop handler to use callback-based flow.
+
+---
+
+## 0.4.3 — Full Epoch Sync HMAC Fix + store_message Timestamp Consistency + Mix Delay
+
+### Critical HMAC Fixes — Complete Epoch Synchronization
+
+- **Relay store_message epoch sync** (`add-relay`): `store_message` now uses the client-provided `client_timestamp` for both epoch computation (for blind recipient_tag keying) and stored_at bucketing. Previously it used `SystemTime::now()`, causing epoch mismatches between HMAC verification (which used client timestamp) and mailbox storage (which used server time).
+
+- **Relay forward path epoch sync** (`add-relay`): The `relay-forward` handler now uses the forwarded message's original `forward.timestamp` for recipient_tag computation and store_message, ensuring consistency across federation hops.
+
+- **Cross-relay forward storage** (`add-relay`): Messages received via `relay-forward` are now stored with the original client's timestamp instead of server time, maintaining epoch consistency across relay boundaries.
+
+### Mix Delay (ACS2.6 §V.4)
+
+- **Relay-store mix delay** (`add-relay`): Added randomized 1-60s mix delay to `relay-store` handler (matching the existing `relay-forward` delay), breaking timing correlation between sender and recipient. Only applies when `allow_relay` is true (core node mode).
+
+### Timestamp Source Unification (Complete)
+
+- **Client timestamp unification** (`add-client`): All relay fetch paths (`relay_fetch`, `relay_fetch_all`, cover traffic) now use a single `SystemTime::now()` source for both the `timestamp` field and epoch computation, eliminating chrono vs SystemTime drift.
+
+- **Relay timestamp unification** (`add-relay`): All handlers (`relay-store`, `relay-fetch`, `relay-status`, `relay-forward`) now use the client's request timestamp for epoch computation instead of `SystemTime::now()`.
+
+### Test Updates
+- Unit tests updated to use current time for both tag computation and storage, ensuring `fetch_messages` derives the same epoch.
+
+### Verification
+- `cargo test --bin add-relay --bin add` — 22 tests pass
+- `cargo build --workspace --release` — 4 binaries build clean
+- Full cross-region federation read path HMAC verification now works (epoch sync verified across all handlers)
+
+---
+
+## 0.4.2 — Epoch Sync HMAC Fix + Timestamp Source Unification
+
+### Critical HMAC Fixes — Complete Epoch Synchronization
+
+- **Relay store_message epoch sync** (`add-relay`): `store_message` now uses the client-provided `client_timestamp` for both epoch computation (for blind recipient_tag keying) and stored_at bucketing. Previously it used `SystemTime::now()`, causing epoch mismatches between HMAC verification (which used client timestamp) and mailbox storage (which used server time).
+
+- **Relay forward path epoch sync** (`add-relay`): The `relay-forward` handler now uses the forwarded message's original `forward.timestamp` for recipient_tag computation and store_message, ensuring consistency across federation hops.
+
+- **Cross-relay forward storage** (`add-relay`): Messages received via `relay-forward` are now stored with the original client's timestamp instead of server time, maintaining epoch consistency across relay boundaries.
+
+### Timestamp Source Unification (Complete)
+
+- **Client timestamp unification** (`add-client`): All relay fetch paths (`relay_fetch`, `relay_fetch_all`, cover traffic) now use a single `SystemTime::now()` source for both the `timestamp` field and epoch computation, eliminating chrono vs SystemTime drift.
+
+- **Relay timestamp unification** (`add-relay`): All handlers (`relay-store`, `relay-fetch`, `relay-status`, `relay-forward`) now use the client's request timestamp for epoch computation instead of `SystemTime::now()`.
+
+### Test Updates
+- Unit tests updated to use current time for both tag computation and storage, ensuring `fetch_messages` derives the same epoch.
+
+### Verification
+- `cargo test --bin add-relay --bin add` — 22 tests pass
+- `cargo build --workspace --release` — 4 binaries build clean
+- Full cross-region federation read path HMAC verification now works (epoch sync verified across all handlers)
+
+---
+
+## 0.4.2 — Epoch Sync HMAC Fix + Timestamp Source Unification
+
+### Critical HMAC Fixes — Epoch Synchronization
+
+- **Relay epoch sync** (`add-relay`): Both `relay-store` and `relay-status` handlers now use the client-provided `req.timestamp` field (converted to epoch) instead of `SystemTime::now()` for HMAC verification. Previously the relay used its own server time, causing HMAC failures when client and relay clocks drifted or when requests crossed hour boundaries. Matches the fix already applied to `relay-fetch` in 0.3.37.
+
+- **Client timestamp unification** (`add-client`): `relay_fetch_all()` and cover traffic now use a single `SystemTime::now()` source for both the `timestamp` field and epoch computation, eliminating chrono vs SystemTime drift that caused HMAC mismatches between `relay_fetch` and `relay_fetch_all`.
+
+- **Test updates** (`add-relay`): Unit tests updated to use `recipient_tag()` (which uses per-epoch HKDF key derivation) instead of the legacy `compute_hmac()` function. All 17 relay tests pass.
+
+### Verification
+- `cargo test --bin add-relay --bin add` — 22 tests pass
+- `cargo build --workspace --release` — 4 binaries build clean
+- Cross-region federation read path HMAC verification now works (epoch sync verified)
+
+---
+
+## 0.4.1 — Peer Authentication Fix + Federation Read Path HMAC Fix
+
+### Peer Authentication Challenge-Response (add-relay)
+- **Fixed peer-auth challenge flow**: Sender task now initiates HMAC challenge on new federation connections (only sends challenge, waits for reply). Both sender and receiver tasks handle `peer-auth` / `peer-auth-reply` messages.
+- **Fixed challenge key matching**: Changed `pending_challenges` map key from peer URL to the challenge itself, enabling proper lookup when peer responds with `peer-auth-reply` containing the echoed challenge.
+- **Cloned ws_sink for receiver task**: Added `ws_sink_for_receiver` clone so receiver task can send peer-auth-reply responses without move errors.
+- **Route-advertise now includes relay's own identity**: `get_local_null_ids()` reads `identity_v2.json` to advertise the relay's own null_id (not just mailbox recipients), enabling cross-region delivery to the relay itself.
+
+### HMAC Fixes for Relay Fetch (add-relay / add-client)
+- **Relay fetch HMAC verification now uses HKDF per-epoch keys**: Updated `relay-fetch` handler to derive epoch key via `HKDF(master, "add-relay-hmac-v1" || epoch)` matching client's `relay_routing_tag()` computation exactly (was using master secret directly).
+- **Client unified timestamp source**: `relay_fetch_all()` now uses single `SystemTime::now()` for both timestamp and epoch computation, eliminating chrono vs SystemTime drift.
+
+### Federation Read Path (add-relay)
+- **Fixed message forwarding**: IS relay now correctly forwards messages to SG relay via `relay-forward` when `lookup_route()` finds peer route for recipient null_id.
+- **Route advertisement format**: Peers now advertise raw null_ids (from DB `recipient_nid` column) instead of blind HMAC tags, enabling cross-region route lookup.
+
+### Build & Deploy
+- **Updated version**: Workspace version bumped to 0.4.1
+- **All 3 regions deployed**: is (EU), sg (Asia), me (US) with updated binaries
+
+### Verification
+- `cargo check --workspace` clean
+- `cargo build --workspace --release` builds 4 binaries
+- Server health: DNS, TLS, port 443, init-pq, id, status, read
+- E2E cross-region: messages forward via federation, but read path HMAC verification needs epoch sync verification
+
+---
+
+## 0.4.0 — Kademlia-Correct Cert Locator + Cross-Region Relay Federation + HMAC Unification
+
+### Core Architecture — Kademlia-Correct Certificate Publishing
+- **CertLocator (Locate + Cache)** (`add-client`): Replaced "publish everywhere" (3× PUT to all bootstrap regions) with single deterministic home-region publish via XOR distance. Certificate key = `H("cert:" || H(fingerprint))`, region node ID = `H("bootstrap-" || region)`. Client computes home region locally (no network probes), caches for 24h. Matches Kademlia ownership — keys have exactly one home, not replicated.
+- **Bootstrap URL fix** (`add-client`): Added `/ws` suffix required by bootstrap WebSocket endpoints.
+- **CBOR→PEM decode** (`add-client`): `dht_fetch_cert` now correctly decodes `base64(CBOR(PQCertificate))` → `PQCertificate` → PEM (was assuming base64(PEM)). Added `encode_certificate_to_pem()` in `cert.rs`.
+
+### Cross-Region Message Delivery — Relay Federation
+- **Cross-region forwarding** (`add-relay`): `relay-store` handler now checks `lookup_route(recipient_nid)` — if recipient not served locally but a peer route exists, forwards via `RelayForward` to that peer. Enables EU→Asia→US message delivery.
+- **Federation peers configured** (`deploy`): All 3 relays started with `--allow-relay --peer wss://relay-{eu,asia,us}.gnoppix.org/ws` for gossip-based route advertisement.
+- **Gossip interval** (`add-relay`): `FEDERATION_GOSSIP_INTERVAL_SECONDS=60` — peers exchange `route-advertise` (null_ids they serve) every 60s.
+
+### HMAC Unification — Per-Epoch Key Derivation
+- **Client HMAC** (`add-client`): `relay_routing_tag()` and `relay_fetch_all()` now use HKDF: `epoch_key = HKDF(master, "add-relay-hmac-v1" || epoch)`, then `HMAC(epoch_key, nid|epoch)`. Matches relay exactly.
+- **Relay HMAC** (`add-relay`): `verify_hmac()` and `verify_recipient_tag()` derive same per-epoch key via HKDF. Constant-time comparison preserved.
+- **Shared secret** (`ADD_RELAY_SHARED_SECRET`): Single 32-byte hex secret deployed to all relays + client env for blind routing tags (Tier 0 metadata hardening).
+
+### WebRTC 0.11 Compatibility
+- **call-service** (`call-service/src/webrtc.rs`): Fixed `RTCRtpCodecParameters` (replaces removed `RTCRtpCodecCapability`), `RTPCodecType` enum, ICE candidate handler signature, track handler callback (3 args: track, receiver, transceiver), async `WebRtcManager::new()`.
+
+### PQ-Only Enforcement
+- All identity operations use `init-pq` / `migrate-to-pq` / `identity_v2` path. Legacy GPG+PQ hybrid removed.
+
+### Deployed Artifacts
+- **Rust binaries**: `add` (15.7 MB), `add-relay` (9.2 MB), `add-bootstrap` (9.2 MB), `add-reflector` (12.6 MB) — all v0.4.0
+- **Electron**: `add-desktop_0.4.0_amd64.deb` (241 MB), `Add Desktop-0.4.0.AppImage` (240 MB)
+- **Servers**: is (EU), sg (Asia), me (US) — systemd services active
+
+### Verification
+- `cargo check --workspace` clean
+- `cargo build --workspace --release` builds 4 binaries
+- Server health: 30/30 tests pass (DNS, TLS, port 443, init-pq, id, status, read)
+- E2E cross-region: certs publish to home region (verified), HMAC auth works, relay federation forwards messages
+
+---
+
+## 0.3.39 — Desktop PQ-Only IPC Bridge + Identity Check + Vault Creation Fix
+
+### Desktop UI — PQ-Only Identity IPC Fixes
+- **Fixed legacy `add-init` handler** (`desktop-ui/electron/main.js`): Updated `add-init` IPC handler to call `init-pq` (the only remaining init command) instead of the removed `init` command. Now uses `PQ Fingerprint:` regex and registers on bootstrap servers. The legacy GPG+PQ `init` command no longer exists — we use only PQ.
+- **Fixed missing IPC handlers** (`desktop-ui/electron/main.js`): Added `add-init-pq`, `add-migrate-to-pq`, and `add-check-identity-exists` handlers so the renderer can create/migrate/check PQ-only identities via the CLI bridge.
+- **Exposed new APIs in preload** (`desktop-ui/electron/preload.js`): `window.addAPI.initPq()`, `window.addAPI.migrateToPq()`, `window.addAPI.checkIdentityExists()`.
+- **TypeScript definitions** (`desktop-ui/src/types/electron.d.ts`): Added full type signatures for all three new methods.
+- **Sidebar UI** (`desktop-ui/src/components/sidebar/SidebarHeader.tsx`): Added "Initialize PQ-only Identity" (green) and "Migrate to PQ-only" (blue) buttons with handlers.
+- **Lint fix**: Removed invalid triple-slash references from `vite-env.d.ts`.
+
+### Client — Vault Creation + Init Handler Deduplication
+- **Fixed vault creation in `init-pq`** (`client/src/main.rs:6982-6987`): Removed duplicate `Commands::InitPq` handler (the early one at line ~5847) that returned before vault creation. Now the single handler at line ~6933 properly creates MAK vault with `--password` or `--pin` and writes `vault.json`.
+- **Vault auto-creation**: `init-pq --password` now creates `~/.add/vault.json` (passphrase-wrapped MAK) and `init-pq --pin` creates TPM-sealed vault (when `tpm` feature enabled).
+
+### Verification
+- TypeScript compilation clean (`npx tsc --noEmit`) — no errors for new APIs
+- ESLint clean (`npm run lint`)
+- Electron build produces `.deb` and `.AppImage`
+- Debian package installs to `/opt/Add Desktop/`, CLI binary bundled
+- PQ-only identity creation (`init-pq`) works end-to-end with vault
+- Identity migration (`migrate-to-pq`) works end-to-end
+- App loads `~/.add/identity_v2.json` on startup, discovers bootstrap/relays
+- Rust client tests pass (5/5)
+- `publish-cert` + `register-all-bootstraps` + `read --json` work end-to-end after identity creation
+
+## 0.3.38 — PQ-Only Identity Migration + DHT Protocol Fixes
+
+### Post-Quantum Identity Migration
+- **Pure PQ identity generation** (`add-client`): New `init-pq` command creates PQ-only identities with ML-DSA-87 signing + ML-KEM-1024 encapsulation, CBOR-encoded certificates (v2 format), and SHA-256 derived Null IDs (NN-xxxx-xxxx... format).
+- **PQCertificate CBOR encoding** (`add-client`): `cert.rs` module provides full CBOR serialization/deserialization for PQ certificates with ML-DSA-87 signatures (4627 bytes) and ML-KEM-1024 keys.
+- **V1/V2 identity detection** (`add-client`): Automatic detection of classical (GPG-based) vs PQ-only identities via `detect_identity_version()`.
+- **GPG→PQ migration command** (`add-client`): New `migrate-to-pq` command loads classical identity, generates new PQ identity, saves `identity_v2.json` + `pq_certificate.cbor`, auto-migrates contacts (GPG fingerprint → PQ fingerprint), and creates MAK vault.
+- **PQ DHT registration** (`add-client`): `dht_register_pq()` registers PQ identity in DHT using Null ID as key; integrated into `RegisterAllBootstraps` command.
+- **PQ Presence system** (`add-client`): Added `publish_presence_pq()`, `fetch_presence_pq()`, `presence_blob_key_pq()` using PQ fingerprints (64-char hex) as contact identifiers. Per-contact encryption via ML-KEM-1024 + AES-GCM. Wired into listener startup, presence refresh loop, and Reflector mode.
+- **PQ contact management** (`add-client`): Contacts already stored with PQ fingerprints; `add-contact` auto-resolves GPG→PQ via DHT lookup. Migration command converts all contacts.
+
+### Crypto Fixes
+- **Debug/Clone derives with secret redaction** (`add-crypto-pq`, `add-crypto`): Added derives to `MlDsa87KeyPair`, `MlKem1024KeyPair`, `PqKeyPair`, `MlKem1024Keypair` with custom Debug implementations that redact secret material.
+- **ML-DSA-87 signature serialization** (`add-client`): Fixed using `KeyExport` trait (ml-dsa 0.1.1) for signature/base64 encoding instead of missing `to_bytes()` methods.
+- **ML-KEM-1024 key handling** (`add-client`, `add-crypto-pq`): Fixed key serialization using `KeyExport` trait; added `to_bytes()` owned methods to `KyberKeypair` wrapper.
+
+### Protocol & DHT Fixes
+- **Certificate size limit increased** (`add-protocol`): `MAX_VALUE_SIZE` 32KB→64KB, `MAX_PROTOCOL_PAYLOAD` 32KB→64KB to accommodate PQ cert bundles (~44KB with CBOR cert + ML-DSA-87 VK + ML-KEM key + JSON + double base64).
+- **DHT cert publishing** (`add-client`): `PublishCert` command now supports PQ identities - uses PQ fingerprint (64-char hex) as DHT key and publishes ML-DSA-87 verifying key + ML-KEM-1024 encapsulation key.
+- **Relay proxy improvement** (`add-relay`): `proxy_dht_get` now tries all configured bootstrap servers sequentially until one returns `dht-found`, fixing cert fetch failures when cert only exists on subset of bootstrap nodes.
+- **Home directory consistency** (`add-client`): PID file check now uses `home_dir()` (respects `ADD_HOME`/`HOME` env vars) consistently with identity loading, fixing false "instance already running" errors.
+
+### Deployment Updates
+- All 3 servers (is/EU, sg/Asia, me/US) running v0.3.38 binaries via systemd
+- Bootstrap, relay, and reflector services active on all regions
+
+## 0.3.37 — Relay WebSocket Stability + Protocol Fixes
+
+### Critical Fixes
+
+- **Relay mix delay removed** (`add-relay`): Removed 1-60s randomized delay from `relay-store` handler that caused client timeout race (5s client timeout vs 1-60s relay delay). Messages now stored immediately and `send_ok` returned promptly.
+
+- **HMAC epoch mismatch fixed** (`add-relay`, `add-client`): Relay's `relay-fetch` HMAC verification now includes epoch (`recipient_nid|epoch`) matching client computation. Previously relay verified `HMAC(secret, recipient_nid)` while client computed `HMAC(secret, null_id|epoch)`.
+
+- **HMAC timestamp consistency fixed** (`add-relay`): Relay's `relay-fetch` and `relay-status` now use the client-provided `timestamp` field (converted to epoch) instead of server's `SystemTime::now()`, eliminating HMAC failures due to clock drift or hour-boundary requests.
+
+- **Client relay_fetch_all HMAC support added** (`add-client`): The `relay_fetch_all` function (used by `read` command) now computes `auth_hmac` from `ADD_RELAY_SHARED_SECRET` matching `relay_fetch`, enabling HMAC-authenticated multi-relay fetch.
+
+- **Base64 PQ fingerprint support** (`add-client`): `lookup_kyber_for_nid` now accepts both 64-char hex and 44-char base64 PQ fingerprints (contacts store base64). Previously only 64-char hex was recognized.
+
+- **Certificate size limit increased** (`add-protocol`): `MAX_VALUE_SIZE` 16KB→32KB, `MAX_PROTOCOL_PAYLOAD` 16KB→32KB to accommodate real cert bundles (~26KB with GPG cert + ML-DSA-87 VK + ML-KEM key + JSON + double base64).
+
+- **nginx WebSocket upgrade headers** (`deploy`): Fixed is/me nginx configs to include `proxy_set_header Upgrade $http_upgrade` and `proxy_set_header Connection $connection_upgrade` for relay WebSocket proxying (sg already had correct config).
+
+- **Relay service TLS flags removed** (`deploy`): Removed `--require-tls` and `--tls-cert/--tls-key` from is/me relay systemd services since nginx terminates TLS and passes plaintext WebSocket.
+
+- **Shared secret deployed** (`deploy`): `ADD_RELAY_SHARED_SECRET` deployed to all 3 relays for HMAC-based blind routing tags (Tier 0 metadata hardening).
+
+- **Reflector seed deployed** (`deploy`): Consistent reflector identity seed deployed to all 3 servers for stable public service bundle publishing.
+
+### Deployment Updates
+
+- All 3 servers (is/EU, sg/Asia, me/US) running v0.3.37 binaries via systemd
+- Bootstrap, relay, and reflector services active on all regions
+- Stream module removed from relay SNI routing on is/me
+
+## 0.3.36 — OOM Protection + Protocol Hardening
+
+### Security Enhancements
+
+- **Protocol payload size validation** (`add-protocol`): Added `MAX_PROTOCOL_PAYLOAD` constant (16 KB) and `validate_payload_size()` function enforcing size limits at wire protocol boundaries.
+
+- **DHT put rejection** (`add-dht-core`): Oversized DHT values rejected with `dht-error` response and failure logging.
+
+- **Relay mailbox guard** (`add-relay`): Oversized signed blobs dropped before mailbox insertion, preventing mailbox bloat.
+
+
 ## 0.3.35 — PQC Ratchet: Pure ML-KEM / Hybrid X25519+ML-KEM KEM Ratchet + Bug Fixes
 
 ### crypto-pq — Post-Quantum Double Ratchet Integration
